@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <title>青坊食品行 帳單處理工具</title>
+    <script>
+      // GitHub Pages SPA fallback：將任何 404 路徑導回 base 並保留 hash/query。
+      // hash router 已能還原分頁狀態，這裡只負責把瀏覽器拉回根頁面。
+      (function () {
+        var parts = location.pathname.split('/').filter(Boolean);
+        var base = parts.length > 0 ? '/' + parts[0] + '/' : '/';
+        location.replace(base + location.search + location.hash);
+      })();
+    </script>
+  </head>
+  <body>
+    <p>Redirecting to <a href="./">home</a>…</p>
+  </body>
+</html>

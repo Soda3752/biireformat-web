@@ -33,6 +33,7 @@ function bootstrap(): void {
           <span class="topbar-version">v${APP_VERSION}</span>
         </div>
         <div class="topbar-actions">
+          <span class="topbar-privacy" title="本工具不會將檔案上傳至任何伺服器">所有處理皆於本機進行，不會上傳資料</span>
           <button type="button" class="icon-btn" id="theme-toggle"></button>
         </div>
       </header>
