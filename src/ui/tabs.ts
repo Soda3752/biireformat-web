@@ -1,0 +1,55 @@
+import { icon, type IconName } from './icons';
+
+export interface TabDefinition {
+  id: string;
+  label: string;
+  icon: IconName;
+  hash: string;
+}
+
+export const TABS: readonly TabDefinition[] = [
+  { id: 'bill', label: '帳單', icon: 'receipt', hash: '#bill' },
+  { id: 'overview', label: '明細', icon: 'list', hash: '#overview' },
+  { id: 'delivery', label: '代送費', icon: 'truck', hash: '#delivery' },
+  { id: 'bank', label: '對帳', icon: 'bank', hash: '#bank' },
+  { id: 'daily', label: '單日數量', icon: 'calendar', hash: '#daily' },
+] as const;
+
+const DEFAULT_TAB_ID = 'bill';
+
+export function renderSideNav(host: HTMLElement, onSelect: (tabId: string) => void): void {
+  host.innerHTML = '';
+  for (const tab of TABS) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'sidenav-item';
+    item.setAttribute('role', 'tab');
+    item.setAttribute('aria-selected', 'false');
+    item.dataset.tabId = tab.id;
+    item.innerHTML = `
+      <span class="sidenav-item-icon">${icon(tab.icon, 18)}</span>
+      <span>${tab.label}</span>
+    `;
+    item.addEventListener('click', () => onSelect(tab.id));
+    host.appendChild(item);
+  }
+}
+
+export function setActiveTab(navHost: HTMLElement, panelHost: HTMLElement, tabId: string): void {
+  navHost.querySelectorAll<HTMLElement>('.sidenav-item').forEach((el) => {
+    el.setAttribute('aria-selected', el.dataset.tabId === tabId ? 'true' : 'false');
+  });
+  panelHost.querySelectorAll<HTMLElement>('.tab-panel').forEach((el) => {
+    el.classList.toggle('is-active', el.dataset.tabId === tabId);
+  });
+}
+
+export function resolveInitialTab(): string {
+  const hash = window.location.hash;
+  const found = TABS.find((t) => t.hash === hash);
+  return found?.id ?? DEFAULT_TAB_ID;
+}
+
+export function tabHash(tabId: string): string {
+  return TABS.find((t) => t.id === tabId)?.hash ?? `#${DEFAULT_TAB_ID}`;
+}
