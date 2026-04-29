@@ -1,22 +1,17 @@
 import './ui/theme.css';
 
-import { icon } from '@/ui/icons';
-import { bindThemeToggle } from '@/ui/theme';
-import { showToast } from '@/ui/toast';
-import {
-  TABS,
-  renderSideNav,
-  resolveInitialTab,
-  setActiveTab,
-  tabHash,
-} from '@/ui/tabs';
-import { renderPlaceholderPanel } from '@/tabs/placeholder';
-import { renderBillReformatPanel } from '@/tabs/bill-reformat';
-import { renderBillOverviewPanel } from '@/tabs/bill-overview';
-import { renderDeliveryFeePanel } from '@/tabs/delivery-fee';
-import { renderBankNameFormatPanel } from '@/tabs/bank-name-format';
-import { renderDailyCountPanel } from '@/tabs/daily-count';
-import { loadSortingList } from '@/domain/sorting-list';
+import {icon} from '@/ui/icons';
+import {bindThemeToggle} from '@/ui/theme';
+import {showToast} from '@/ui/toast';
+import {renderSideNav, resolveInitialTab, setActiveTab, tabHash, TABS,} from '@/ui/tabs';
+import {renderPlaceholderPanel} from '@/tabs/placeholder';
+import {renderBillReformatPanel} from '@/tabs/bill-reformat';
+import {renderBillOverviewPanel} from '@/tabs/bill-overview';
+import {renderDeliveryFeePanel} from '@/tabs/delivery-fee';
+import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
+import {renderDailyCountPanel} from '@/tabs/daily-count';
+import {renderSettingsPanel} from '@/tabs/settings';
+import {loadSortingList} from '@/domain/sorting-list';
 
 const APP_VERSION = __APP_VERSION__;
 
@@ -33,7 +28,6 @@ function bootstrap(): void {
           <span class="topbar-version">v${APP_VERSION}</span>
         </div>
         <div class="topbar-actions">
-          <span class="topbar-privacy" title="本工具不會將檔案上傳至任何伺服器">所有處理皆於本機進行，不會上傳資料</span>
           <button type="button" class="icon-btn" id="theme-toggle"></button>
         </div>
       </header>
@@ -51,15 +45,17 @@ function bootstrap(): void {
 
   for (const tab of TABS) {
     if (tab.id === 'bill') {
-      mainHost.appendChild(renderBillReformatPanel());
+        mainHost.appendChild(renderBillReformatPanel(tab));
     } else if (tab.id === 'overview') {
-      mainHost.appendChild(renderBillOverviewPanel());
+        mainHost.appendChild(renderBillOverviewPanel(tab));
     } else if (tab.id === 'delivery') {
       mainHost.appendChild(renderDeliveryFeePanel());
     } else if (tab.id === 'bank') {
       mainHost.appendChild(renderBankNameFormatPanel(tab));
     } else if (tab.id === 'daily') {
       mainHost.appendChild(renderDailyCountPanel(tab));
+    } else if (tab.id === 'settings') {
+        mainHost.appendChild(renderSettingsPanel(tab));
     } else {
       mainHost.appendChild(renderPlaceholderPanel(tab));
     }

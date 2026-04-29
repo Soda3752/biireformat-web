@@ -1,4 +1,4 @@
-import { icon, type IconName } from './icons';
+import {icon, type IconName} from './icons';
 
 export interface TabDefinition {
   id: string;
@@ -13,6 +13,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: 'delivery', label: '代送費', icon: 'truck', hash: '#delivery' },
   { id: 'bank', label: '對帳', icon: 'bank', hash: '#bank' },
   { id: 'daily', label: '單日數量', icon: 'calendar', hash: '#daily' },
+    {id: 'settings', label: '設定', icon: 'settings', hash: '#settings'},
 ] as const;
 
 const DEFAULT_TAB_ID = 'bill';

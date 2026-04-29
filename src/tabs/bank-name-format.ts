@@ -1,17 +1,12 @@
-import { saveAs } from 'file-saver';
+import {saveAs} from 'file-saver';
 
-import type { BankInfo } from '@/domain/models/bank-info';
-import { parseBankInfo } from '@/readers/bank-info-reader';
-import { parseTransRecord } from '@/readers/trans-record-reader';
-import { buildBankResultFilename, writeBankNameMerged } from '@/writers/bank-name-writer';
-import { createDropZone, type DropZoneController } from '@/ui/drop-zone';
-import { showToast } from '@/ui/toast';
-import type { TabDefinition } from '@/ui/tabs';
-
-interface BankState {
-  bankInfos: BankInfo[] | null;
-  transRecord: string[][] | null;
-}
+import {getBankInfos, loadBankInfos} from '@/domain/bank-info-loader';
+import {localSettings} from '@/infra/local-settings-store';
+import {parseTransRecord} from '@/readers/trans-record-reader';
+import {buildBankResultFilename, writeBankNameMerged} from '@/writers/bank-name-writer';
+import {createDropZone} from '@/ui/drop-zone';
+import {showToast} from '@/ui/toast';
+import type {TabDefinition} from '@/ui/tabs';
 
 export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
   const panel = document.createElement('section');
@@ -24,14 +19,16 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">銀行對帳格式化</h1>
         <p class="card-subtitle">
-          上傳「末五碼對照表 (.xlsx)」與「銀行對帳單 (.csv)」，系統會自動將每筆交易末五碼配對到對應的客戶名稱與線別，產出合併後的對帳結果。
+          上傳「銀行對帳單 (.csv)」，系統會自動依設定頁的「末五碼對照表」將每筆交易配對到對應的客戶名稱與線別，產出合併後的對帳結果。
         </p>
       </header>
 
-      <div class="dual-dropzone" data-role="zones"></div>
+      <div class="notice-banner" data-role="notice-banner" hidden></div>
+
+      <div data-role="zone-host"></div>
 
       <footer class="action-bar">
-        <div class="action-bar-status" data-role="overall-status">請先選擇兩個必要檔案</div>
+        <div class="action-bar-status" data-role="overall-status">請上傳銀行對帳單 .csv</div>
         <div class="action-bar-actions">
           <button type="button" class="btn btn-secondary" data-role="reset">重設</button>
           <button type="button" class="btn btn-primary btn-lg" data-role="export" disabled>輸出對帳結果</button>
@@ -40,35 +37,13 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
     </div>
   `;
 
-  const state: BankState = {
-    bankInfos: null,
-    transRecord: null,
-  };
+    let transRecord: string[][] | null = null;
 
-  const zonesHost = panel.querySelector<HTMLElement>('[data-role="zones"]')!;
+    const banner = panel.querySelector<HTMLElement>('[data-role="notice-banner"]')!;
+    const zoneHost = panel.querySelector<HTMLElement>('[data-role="zone-host"]')!;
   const overallStatus = panel.querySelector<HTMLElement>('[data-role="overall-status"]')!;
   const exportBtn = panel.querySelector<HTMLButtonElement>('[data-role="export"]')!;
   const resetBtn = panel.querySelector<HTMLButtonElement>('[data-role="reset"]')!;
-
-  const bankZone = createDropZone({
-    title: '末五碼對照表',
-    hint: '拖曳或點擊上傳 .xlsx',
-    accept: '.xlsx,.xls',
-    onFile: async (file) => {
-      try {
-        const parsed = await parseBankInfo(file);
-        state.bankInfos = parsed;
-        bankZone.setStatus('loaded', `${file.name}　共 ${parsed.length} 筆`);
-        refreshOverall();
-      } catch (err) {
-        state.bankInfos = null;
-        const message = err instanceof Error ? err.message : '讀取失敗';
-        bankZone.setStatus('error', message);
-        refreshOverall();
-        throw err;
-      }
-    },
-  });
 
   const transZone = createDropZone({
     title: '銀行對帳單',
@@ -77,11 +52,11 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
     onFile: async (file) => {
       try {
         const parsed = await parseTransRecord(file);
-        state.transRecord = parsed;
+          transRecord = parsed;
         transZone.setStatus('loaded', `${file.name}　共 ${parsed.length} 筆`);
         refreshOverall();
       } catch (err) {
-        state.transRecord = null;
+          transRecord = null;
         const message = err instanceof Error ? err.message : '讀取失敗';
         transZone.setStatus('error', message);
         refreshOverall();
@@ -90,27 +65,47 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
     },
   });
 
-  zonesHost.appendChild(wrapZone('末五碼對照表 (.xlsx)', bankZone));
-  zonesHost.appendChild(wrapZone('銀行對帳單 (.csv)', transZone));
+    zoneHost.appendChild(transZone.element);
+
+    // 確保 cache 已載入（同步函式但保險起見呼叫一次）
+    loadBankInfos();
+
+    const refreshBanner = () => {
+        const has = localSettings.hasLastFiveDigit();
+        const count = getBankInfos().length;
+        if (has && count > 0) {
+            banner.hidden = true;
+            banner.innerHTML = '';
+            return;
+        }
+        banner.hidden = false;
+        if (!has) {
+            banner.innerHTML =
+                '尚未建立末五碼對照表。請先到 <a href="#settings" class="notice-banner-link">設定 → 末五碼</a> 匯入或新增資料。';
+        } else {
+            banner.innerHTML =
+                '末五碼對照表為空。請到 <a href="#settings" class="notice-banner-link">設定 → 末五碼</a> 至少新增一筆資料。';
+        }
+    };
 
   const refreshOverall = () => {
-    const ready = state.bankInfos !== null && state.transRecord !== null;
+      refreshBanner();
+      const infos = getBankInfos();
+      const ready = transRecord !== null && infos.length > 0;
     exportBtn.disabled = !ready;
     if (ready) {
-      overallStatus.textContent = `已就緒　末五碼 ${state.bankInfos!.length} 筆 ／ 對帳單 ${state.transRecord!.length} 筆`;
-    } else if (state.bankInfos === null && state.transRecord === null) {
-      overallStatus.textContent = '請先選擇兩個必要檔案';
-    } else if (state.bankInfos === null) {
-      overallStatus.textContent = '尚缺末五碼對照表';
+        overallStatus.textContent = `已就緒　末五碼 ${infos.length} 筆 ／ 對帳單 ${transRecord!.length} 筆`;
+    } else if (infos.length === 0 && transRecord === null) {
+        overallStatus.textContent = '請建立末五碼對照表並上傳對帳單';
+    } else if (infos.length === 0) {
+        overallStatus.textContent = '尚缺末五碼對照表（請至設定頁建立）';
     } else {
       overallStatus.textContent = '尚缺銀行對帳單';
     }
   };
 
   const reset = () => {
-    state.bankInfos = null;
-    state.transRecord = null;
-    bankZone.reset();
+      transRecord = null;
     transZone.reset();
     refreshOverall();
   };
@@ -118,12 +113,13 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
   resetBtn.addEventListener('click', reset);
 
   exportBtn.addEventListener('click', async () => {
-    if (state.bankInfos === null || state.transRecord === null) return;
+      const infos = getBankInfos();
+      if (transRecord === null || infos.length === 0) return;
     exportBtn.disabled = true;
     const original = exportBtn.textContent;
     exportBtn.textContent = '處理中...';
     try {
-      const blob = await writeBankNameMerged(state.bankInfos, state.transRecord);
+        const blob = await writeBankNameMerged(infos, transRecord);
       const filename = buildBankResultFilename();
       saveAs(blob, filename);
       showToast({
@@ -144,16 +140,12 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
     }
   });
 
+    // hashchange 時若回到對帳分頁，重新確認末五碼狀態（使用者可能剛在設定頁編輯）
+    window.addEventListener('hashchange', () => {
+        if (window.location.hash === tab.hash) refreshOverall();
+    });
+
+    refreshOverall();
+
   return panel;
 }
-
-const wrapZone = (label: string, ctrl: DropZoneController): HTMLElement => {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'dual-dropzone-item';
-  const labelEl = document.createElement('div');
-  labelEl.className = 'card-section-label';
-  labelEl.textContent = label;
-  wrapper.appendChild(labelEl);
-  wrapper.appendChild(ctrl.element);
-  return wrapper;
-};

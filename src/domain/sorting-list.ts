@@ -4,9 +4,17 @@
  * 桌面版用 lazy + classpath resource 同步載入；網頁版改為模組層級 async loader：
  * 啟動時 `loadSortingList()` 一次抓取 `/assets/cargo_sort.csv` 並快取，
  * 後續同步使用 `getSortingList()` / `getItemIndex(name)` 等便利函式。
+ *
+ * 來源優先順序：
+ * 1. localStorage（設定頁覆寫）
+ * 2. public/assets/cargo_sort.csv（內建預設）
+ *
+ * 設定頁編輯後呼叫 `invalidateSortingList()` 清快取，再次 `loadSortingList()` 會重新讀。
  */
 
 import Papa from 'papaparse';
+
+import {localSettings} from '@/infra/local-settings-store';
 
 export interface CargoItem {
   id: string;
@@ -29,39 +37,59 @@ export function loadSortingList(): Promise<SortingList> {
   if (inflight) return inflight;
 
   inflight = (async () => {
+      const text = await readCargoSortCsvText();
+      const sortingList = parseCargoSortCsv(text);
+      cache = sortingList;
+      inflight = null;
+      return sortingList;
+  })().catch((err) => {
+      inflight = null;
+      throw err;
+  });
+
+    return inflight;
+}
+
+export function invalidateSortingList(): void {
+    cache = null;
+    inflight = null;
+}
+
+async function readCargoSortCsvText(): Promise<string> {
+    const overridden = localSettings.getCargoSort();
+    if (overridden !== null) return overridden;
+
     const res = await fetch(ASSET_URL);
     if (!res.ok) {
-      throw new Error(`無法讀取 cargo_sort.csv（HTTP ${res.status}）`);
+        throw new Error(`無法讀取 cargo_sort.csv（HTTP ${res.status}）`);
     }
-    const text = await res.text();
+    return res.text();
+}
+
+export function parseCargoSortCsv(text: string): SortingList {
     const parsed = Papa.parse<string[]>(text, {
-      header: false,
-      skipEmptyLines: true,
+        header: false,
+        skipEmptyLines: true,
     });
 
     const items: CargoItem[] = [];
     // 跳過第一列標題
     for (let i = 1; i < parsed.data.length; i++) {
-      const row = parsed.data[i];
-      if (!row || row.length < 3) continue;
-      const fee = Number(String(row[2]).trim());
-      if (Number.isNaN(fee)) continue;
-      items.push({
-        id: String(row[0]).trim(),
-        name: String(row[1]).trim(),
-        deliveryFee: fee,
-      });
+        const row = parsed.data[i];
+        if (!row || row.length < 3) continue;
+        const fee = Number(String(row[2]).trim());
+        if (Number.isNaN(fee)) continue;
+        items.push({
+            id: String(row[0]).trim(),
+            name: String(row[1]).trim(),
+            deliveryFee: fee,
+        });
     }
 
-    const sortingList: SortingList = {
-      cargoItems: items,
-      breadItems: items.map((it) => it.name),
+    return {
+        cargoItems: items,
+        breadItems: items.map((it) => it.name),
     };
-    cache = sortingList;
-    return sortingList;
-  })();
-
-  return inflight;
 }
 
 export function getSortingList(): SortingList {

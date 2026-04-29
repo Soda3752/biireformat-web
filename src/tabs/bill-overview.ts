@@ -2,32 +2,33 @@
  * 明細分頁（P3.1.2）。
  *
  * 對應桌面版 `billOverView/BillOverViewTab.kt`：
- *  1) 兩個 DropZone：帳單 .xlsx + 排序 .xlsx
- *  2) 統計區：依線別、月結、現金各列計
- *  3) 開始處理按鈕：呼叫 OverViewWriter，輸出單一 .xlsx 並下載
+ *  1) DropZone：帳單 .xlsx
+ *  2) 客戶排序：改由「設定 → 客戶排序」管理（不再每次上傳 .xlsx）
+ *  3) 統計區：依線別、月結、現金各列計
+ *  4) 開始處理按鈕：呼叫 OverViewWriter，輸出單一 .xlsx 並下載
  */
 
-import { saveAs } from 'file-saver';
+import {saveAs} from 'file-saver';
 
-import { createDropZone, type DropZoneController } from '@/ui/drop-zone';
-import { showToast } from '@/ui/toast';
+import {createDropZone, type DropZoneController} from '@/ui/drop-zone';
+import {showToast} from '@/ui/toast';
 
-import { processBillFile } from '@/domain/process-bill';
-import { parseOrderList } from '@/readers/order-reader';
-import { OverViewWriter } from '@/writers/overview-writer';
-import { getCashCustomer, getMonthlyCustomer } from '@/writers/sheet-extension';
+import {processBillFile} from '@/domain/process-bill';
+import {getCustomerOrderOverview} from '@/domain/customer-order-loader';
+import {localSettings} from '@/infra/local-settings-store';
+import {OverViewWriter} from '@/writers/overview-writer';
+import {getCashCustomer, getMonthlyCustomer} from '@/writers/sheet-extension';
 
-import type { Bill } from '@/domain/models/bill';
+import type {Bill} from '@/domain/models/bill';
+import type {TabDefinition} from '@/ui/tabs';
 
 interface State {
   bill: Bill | null;
   billFileName: string | null;
-  orderList: string[];
-  orderFileName: string | null;
   isProcessing: boolean;
 }
 
-export function renderBillOverviewPanel(): HTMLElement {
+export function renderBillOverviewPanel(tab: TabDefinition): HTMLElement {
   const panel = document.createElement('section');
   panel.className = 'tab-panel';
   panel.dataset.tabId = 'overview';
@@ -37,12 +38,14 @@ export function renderBillOverviewPanel(): HTMLElement {
     <div class="card">
       <header class="card-header">
         <h1 class="card-title">帳單明細總覽產生工具</h1>
-        <p class="card-subtitle">上傳帳單與排序檔，輸出依線別分頁的明細總覽</p>
+        <p class="card-subtitle">上傳帳單 .xlsx，依設定頁的「客戶排序」輸出依線別分頁的明細總覽</p>
       </header>
+
+      <div class="notice-banner" data-role="customer-order-banner" hidden></div>
 
       <div class="card-section">
         <div class="card-section-label">檔案上傳</div>
-        <div class="dual-dropzone" id="overview-dropzones"></div>
+        <div id="overview-dropzones"></div>
       </div>
 
       <div class="card-section" id="overview-stats-section" hidden>
@@ -63,18 +66,16 @@ export function renderBillOverviewPanel(): HTMLElement {
   const state: State = {
     bill: null,
     billFileName: null,
-    orderList: [],
-    orderFileName: null,
     isProcessing: false,
   };
 
+    const banner = panel.querySelector<HTMLElement>('[data-role="customer-order-banner"]')!;
   const dropzonesHost = panel.querySelector<HTMLElement>('#overview-dropzones')!;
   const statsSection = panel.querySelector<HTMLElement>('#overview-stats-section')!;
   const statsHost = panel.querySelector<HTMLElement>('#overview-stats')!;
   const processBtn = panel.querySelector<HTMLButtonElement>('#overview-process')!;
 
   let billDz: DropZoneController;
-  let orderDz: DropZoneController;
 
   billDz = createDropZone({
     title: '選擇帳單 Excel 檔案',
@@ -99,29 +100,7 @@ export function renderBillOverviewPanel(): HTMLElement {
     },
   });
 
-  orderDz = createDropZone({
-    title: '選擇排序 Excel 檔案',
-    hint: '第一欄為客戶代碼',
-    accept: '.xlsx',
-    onFile: async (file) => {
-      try {
-        const list = await parseOrderList(file);
-        state.orderList = list;
-        state.orderFileName = file.name;
-        orderDz.setStatus('loaded', `${file.name}（${list.length} 筆）`);
-        refreshButton();
-      } catch (err) {
-        state.orderList = [];
-        state.orderFileName = null;
-        orderDz.setStatus('error', err instanceof Error ? err.message : '讀取排序檔失敗');
-        refreshButton();
-        throw err;
-      }
-    },
-  });
-
   dropzonesHost.appendChild(billDz.element);
-  dropzonesHost.appendChild(orderDz.element);
 
   processBtn.addEventListener('click', async () => {
     if (!state.bill || state.isProcessing) return;
@@ -129,7 +108,8 @@ export function renderBillOverviewPanel(): HTMLElement {
     refreshButton();
 
     try {
-      const writer = new OverViewWriter(state.bill, state.orderList);
+        const orderList = getCustomerOrderOverview().map((e) => e.code);
+        const writer = new OverViewWriter(state.bill, orderList);
       const file = await writer.write();
       saveAs(file.blob, file.filename);
       showToast({
@@ -149,6 +129,20 @@ export function renderBillOverviewPanel(): HTMLElement {
       refreshButton();
     }
   });
+
+    function refreshBanner(): void {
+        const has = localSettings.hasCustomerOrderOverview();
+        const count = getCustomerOrderOverview().length;
+        if (has && count > 0) {
+            banner.hidden = true;
+            banner.innerHTML = '';
+            return;
+        }
+        banner.hidden = false;
+        banner.innerHTML = has
+            ? '明細客戶排序為空。請到 <a href="#settings" class="notice-banner-link">設定 → 明細客戶</a> 至少新增一筆，否則輸出將以「找不到排在最後」順序產生。'
+            : '尚未建立明細客戶排序。請到 <a href="#settings" class="notice-banner-link">設定 → 明細客戶</a> 匯入或新增資料；目前仍可處理，但客戶順序會缺乏依據。';
+    }
 
   function renderStats(): void {
     if (!state.bill) {
@@ -186,6 +180,12 @@ export function renderBillOverviewPanel(): HTMLElement {
     processBtn.disabled = !ready;
     processBtn.textContent = state.isProcessing ? '處理中…' : '開始處理';
   }
+
+    window.addEventListener('hashchange', () => {
+        if (window.location.hash === tab.hash) refreshBanner();
+    });
+
+    refreshBanner();
 
   return panel;
 }

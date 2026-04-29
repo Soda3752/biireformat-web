@@ -1,97 +1,119 @@
-import ExcelJS from 'exceljs';
+import {loadDailyReportTemplate} from '@/domain/daily-report-loader';
+import {ExcelRowType} from '@/domain/excel-row-data';
+import {cloneProductMap, type DailyProduct, type DailyProductMap,} from '@/domain/models/daily-product';
+import {DEFAULT_PRODUCT_SETTING, parseProductSetting, type ProductSetting,} from '@/domain/models/product-setting';
+import {parseBillFile} from '@/readers/bill-reader';
 
-import { loadDailyReportTemplate } from '@/domain/daily-report-loader';
-import {
-  cloneProductMap,
-  type DailyProduct,
-  type DailyProductMap,
-} from '@/domain/models/daily-product';
+/**
+ * 多日 xlsx 解析結果。每個日期 key 對應該日商品名 → 加總數量。
+ * dates 為遞增排序的 YYYY-MM-DD 列表，供月曆顯示「有資料」的日期。
+ */
+export interface DailyCountParseResult {
+    readonly byDate: ReadonlyMap<string, ReadonlyMap<string, number>>;
+    readonly availableDates: ReadonlyArray<string>;
+}
 
+/** 對應 UI 端單日的 metric 資料；維持與舊介面相容。 */
 export interface DailyCountResult {
   readonly map: DailyProductMap;
   readonly matched: number;
   readonly otherCount: number;
 }
 
+const DATE_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})/;
+
 /**
- * 對應桌面版 DailyCountViewModel.setDataByInputFile()
- * 讀取單日銷售 .xlsx：
- * - 第 0 列為 header 略過
- * - 每列：code(欄1)、name(欄2)、count(欄3)
- * - 若 code 在模板中存在 → 更新 count
- * - 否則丟入「其他」分組（建立新 Product）
+ * 讀取「應收帳款對帳單明細表」格式 xlsx，依日期分桶累積商品數量。
+ * 每位客戶各有自己的欄位設定（ProductRowSetting）；遇到新客戶（CustomerData）時重置為 default。
  */
-export const parseDailyCount = async (file: File): Promise<DailyCountResult> => {
+export const parseDailyCount = async (
+    file: File | Blob | ArrayBuffer
+): Promise<DailyCountParseResult> => {
+    const byDate = new Map<string, Map<string, number>>();
+    let setting: ProductSetting = DEFAULT_PRODUCT_SETTING;
+
+    await parseBillFile(file, ({type, values}) => {
+        switch (type) {
+            case ExcelRowType.CustomerData:
+                setting = DEFAULT_PRODUCT_SETTING;
+                return;
+            case ExcelRowType.ProductRowSetting:
+                setting = parseProductSetting(values);
+                return;
+            case ExcelRowType.ProductSellData: {
+                const dateRaw = values[setting.orderDateIndex] ?? '';
+                const dateStr = dateRaw.replace('銷', '').trim();
+                const m = DATE_RE.exec(dateStr);
+                if (!m) return;
+                const key = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+
+                const productName = (values[setting.productNameIndex] ?? '').trim();
+                if (!productName) return;
+
+                const count = Number(values[setting.productCountIndex]);
+                if (!Number.isFinite(count) || count === 0) return;
+
+                let day = byDate.get(key);
+                if (!day) {
+                    day = new Map();
+                    byDate.set(key, day);
+                }
+                day.set(productName, (day.get(productName) ?? 0) + count);
+                return;
+            }
+            default:
+                return;
+        }
+    });
+
+    const availableDates = [...byDate.keys()].sort();
+    return {byDate, availableDates};
+};
+
+/**
+ * 依所選日期，從 byDate 取出該日商品數量，再對應 daily_report_list.csv 模板分組；
+ * 對不到的商品歸入「其他」。回傳的 map 已是該日獨立資料（不會汙染 cache）。
+ */
+export const buildDailyResultForDate = async (
+    byDate: ReadonlyMap<string, ReadonlyMap<string, number>>,
+    dateKey: string
+): Promise<DailyCountResult> => {
   const template = await loadDailyReportTemplate();
   const productMap = cloneProductMap(template);
 
-  const buffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error('找不到工作表');
-
-  // 建立 code → product 索引以加速查找
-  const codeIndex = new Map<string, DailyProduct>();
+    const nameIndex = new Map<string, DailyProduct>();
   for (const products of productMap.values()) {
-    for (const p of products) codeIndex.set(p.code, p);
+      for (const p of products) nameIndex.set(p.name, p);
   }
 
+    const dayMap = byDate.get(dateKey);
   let matched = 0;
   let otherCount = 0;
 
-  // POI lastRowNum 從 0 起，ExcelJS 從 1 起；rowIndex=0 (header) 略過 → 從第 2 列開始
-  const lastRow = sheet.actualRowCount > 0 ? sheet.rowCount : 0;
-  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
-    const row = sheet.getRow(rowIndex);
-    if (!row) continue;
-
-    const code = readCell(row.getCell(1).value);
-    const name = readCell(row.getCell(2).value);
-    const countStr = readCell(row.getCell(3).value);
-
-    if (code.length === 0 || name.length === 0) continue;
-
-    const count = parseCount(countStr);
-    const existing = codeIndex.get(code);
-    if (existing) {
-      existing.count = count;
-      matched++;
-    } else {
-      const newProduct: DailyProduct = { code, name, groupName: '其他', count };
-      let otherGroup = productMap.get('其他');
-      if (!otherGroup) {
-        otherGroup = [];
-        productMap.set('其他', otherGroup);
-      }
-      otherGroup.push(newProduct);
-      codeIndex.set(code, newProduct);
-      otherCount++;
+    if (dayMap) {
+        for (const [productName, count] of dayMap) {
+            const existing = nameIndex.get(productName);
+            if (existing) {
+                existing.count = count;
+                matched++;
+            } else {
+                const fallback: DailyProduct = {
+                    code: '',
+                    name: productName,
+                    groupName: '其他',
+                    count,
+                };
+                let other = productMap.get('其他');
+                if (!other) {
+                    other = [];
+                    productMap.set('其他', other);
+                }
+                other.push(fallback);
+                nameIndex.set(productName, fallback);
+                otherCount++;
+            }
     }
   }
 
   return { map: productMap, matched, otherCount };
-};
-
-const readCell = (value: ExcelJS.CellValue): string => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return value.toString();
-  if (typeof value === 'boolean') return value.toString();
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object') {
-    if ('text' in value && typeof value.text === 'string') return value.text;
-    if ('richText' in value && Array.isArray(value.richText)) {
-      return value.richText.map((rt) => rt.text).join('');
-    }
-    if ('result' in value) return readCell(value.result as ExcelJS.CellValue);
-  }
-  return String(value);
-};
-
-/** 對應 countStr.toDoubleOrNull()?.toInt() ?: 0 */
-const parseCount = (s: string): number => {
-  const n = Number.parseFloat(s);
-  if (!Number.isFinite(n)) return 0;
-  return Math.trunc(n);
 };
