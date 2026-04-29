@@ -11,7 +11,15 @@ import ExcelJS from 'exceljs';
 import Papa from 'papaparse';
 import {saveAs} from 'file-saver';
 
-import {localSettings} from '@/infra/local-settings-store';
+import {
+    exportAllSettings,
+    importAllSettings,
+    localSettings,
+    parseSettingsExportPayload,
+    type SettingsExportPayload,
+    SettingsImportError,
+    summarizeImportPayload,
+} from '@/infra/local-settings-store';
 import {invalidateSortingList, loadSortingList,} from '@/domain/sorting-list';
 import {invalidateDailyReportTemplate, onDailyReportChanged} from '@/domain/daily-report-loader';
 import {
@@ -72,11 +80,22 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
 
     panel.innerHTML = `
     <div class="card">
-      <header class="card-header">
-        <h1 class="card-title">設定</h1>
-        <p class="card-subtitle">
-          管理「帳單排序（cargo_sort）」與「品項分類（daily_report_list）」兩份資料。
-        </p>
+      <header class="card-header settings-card-header">
+        <div class="settings-card-header-titles">
+          <h1 class="card-title">設定</h1>
+          <p class="card-subtitle">
+            管理「帳單排序（cargo_sort）」與「品項分類（daily_report_list）」兩份資料。
+          </p>
+        </div>
+        <div class="settings-global-actions">
+          <button type="button" class="btn btn-secondary" data-role="settings-export-all">
+            <span class="btn-icon">${icon('download', 16)}</span>匯出全部設定
+          </button>
+          <button type="button" class="btn btn-secondary" data-role="settings-import-all">
+            <span class="btn-icon">${icon('upload', 16)}</span>匯入全部設定
+          </button>
+          <input type="file" accept="application/json,.json" data-role="settings-import-all-file" hidden />
+        </div>
       </header>
 
       <nav class="settings-subnav" role="tablist" aria-label="設定子分頁">
@@ -159,6 +178,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
   `;
 
     bindSubnav(panel);
+    bindGlobalIO(panel);
     bindCargoPane(panel);
     bindDailyPane(panel);
     bindCustomerOrderPane(panel, 'bill');
@@ -166,6 +186,186 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
     bindLastFivePane(panel);
 
     return panel;
+}
+
+// ============================================================================
+// 全部設定匯出 / 匯入（卡片標題列右側按鈕）
+// ============================================================================
+
+function bindGlobalIO(panel: HTMLElement): void {
+    const exportBtn = panel.querySelector<HTMLButtonElement>('[data-role="settings-export-all"]')!;
+    const importBtn = panel.querySelector<HTMLButtonElement>('[data-role="settings-import-all"]')!;
+    const fileInput = panel.querySelector<HTMLInputElement>('[data-role="settings-import-all-file"]')!;
+
+    exportBtn.addEventListener('click', () => {
+        try {
+            const payload = exportAllSettings();
+            const json = JSON.stringify(payload, null, 2);
+            const blob = new Blob([json], {type: 'application/json;charset=utf-8'});
+            saveAs(blob, `bii-settings-${todayStamp()}.json`);
+        } catch (err) {
+            console.error(err);
+            showToast({
+                variant: 'error',
+                title: '匯出失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+        }
+    });
+
+    importBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        try {
+            const text = stripBom(await file.text());
+            const payload = parseSettingsExportPayload(JSON.parse(text));
+            openSettingsImportConfirmDialog(file.name, payload);
+        } catch (err) {
+            console.error(err);
+            const message =
+                err instanceof SettingsImportError
+                    ? err.message
+                    : err instanceof SyntaxError
+                        ? '檔案不是合法的 JSON 格式'
+                        : err instanceof Error
+                            ? err.message
+                            : String(err);
+            showToast({variant: 'error', title: '匯入失敗', message});
+        } finally {
+            fileInput.value = '';
+        }
+    });
+}
+
+function openSettingsImportConfirmDialog(filename: string, payload: SettingsExportPayload): void {
+    const summary = summarizeImportPayload(payload);
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'app-modal-backdrop';
+    backdrop.setAttribute('role', 'presentation');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'app-modal';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'settings-import-confirm-title');
+
+    const summaryHtml = summary
+        .map((item) => {
+            const valueHtml =
+                item.rowCount === null
+                    ? '<span class="settings-import-row-empty">—（不覆寫，保留現況）</span>'
+                    : `<span class="settings-import-row-count">共 ${item.rowCount} 筆</span>`;
+            return `
+              <li class="settings-import-row">
+                <span class="settings-import-row-label">${escapeHtml(item.label)}</span>
+                ${valueHtml}
+              </li>`;
+        })
+        .join('');
+
+    dialog.innerHTML = `
+      <header class="app-modal-header">
+        <h2 id="settings-import-confirm-title" class="app-modal-title">匯入全部設定</h2>
+        <button type="button" class="app-modal-close" aria-label="關閉" data-role="close">${icon('close', 16)}</button>
+      </header>
+      <div class="app-modal-body">
+        <div class="settings-import-meta">
+          <div><span class="settings-import-meta-label">檔案</span>${escapeHtml(filename)}</div>
+          <div><span class="settings-import-meta-label">匯出時間</span>${escapeHtml(formatExportedAt(payload.exportedAt))}</div>
+        </div>
+        <p class="settings-import-warning">
+          匯入後將以此檔案內容<strong>整包覆寫</strong>目前所有 5 份設定，操作不可復原。<br>
+          標示為「不覆寫」的項目會清除現有覆寫並回到內建預設值。
+        </p>
+        <ul class="settings-import-list">
+          ${summaryHtml}
+        </ul>
+        <p class="settings-import-hint">確認後將自動重新整理頁面以套用設定。</p>
+      </div>
+      <footer class="app-modal-footer">
+        <button type="button" class="btn btn-secondary" data-role="cancel">取消</button>
+        <button type="button" class="btn btn-primary" data-role="confirm">確認匯入並重整</button>
+      </footer>
+    `;
+
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    const closeBtn = dialog.querySelector<HTMLButtonElement>('[data-role="close"]')!;
+    const cancelBtn = dialog.querySelector<HTMLButtonElement>('[data-role="cancel"]')!;
+    const confirmBtn = dialog.querySelector<HTMLButtonElement>('[data-role="confirm"]')!;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    const close = () => {
+        backdrop.remove();
+        document.removeEventListener('keydown', onKey);
+        previouslyFocused?.focus?.();
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+        }
+    };
+    document.addEventListener('keydown', onKey);
+
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) close();
+    });
+    closeBtn.addEventListener('click', close);
+    cancelBtn.addEventListener('click', close);
+
+    confirmBtn.addEventListener('click', () => {
+        try {
+            confirmBtn.disabled = true;
+            cancelBtn.disabled = true;
+            importAllSettings(payload);
+            window.location.reload();
+        } catch (err) {
+            console.error('[settings] import failed', err);
+            confirmBtn.disabled = false;
+            cancelBtn.disabled = false;
+            showToast({
+                variant: 'error',
+                title: '匯入失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+        }
+    });
+
+    queueMicrotask(() => confirmBtn.focus());
+}
+
+function todayStamp(): string {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatExportedAt(iso: string): string {
+    if (!iso) return '（未提供）';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return iso;
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mi = String(date.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function escapeHtml(value: string): string {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 
 // ============================================================================
