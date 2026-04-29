@@ -1970,3 +1970,172 @@ p {
     justify-content: flex-end;
     margin-top: var(--space-2);
 }
+
+/* ============================================================
+   銀行對帳 — 預覽表格 + 配對 chip + 補建按鈕
+   ============================================================ */
+
+.bank-preview {
+  margin-top: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bank-preview[hidden] {
+  display: none;
+}
+
+.bank-preview-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.bank-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.bank-summary-chip strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.bank-summary-chip.is-ok {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.bank-summary-chip.is-ok strong {
+  color: var(--color-success);
+}
+
+.bank-summary-chip.is-warn {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.bank-summary-chip.is-warn strong {
+  color: var(--color-danger);
+}
+
+.bank-preview-scroll {
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.bank-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.bank-preview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.bank-preview-table tbody td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+  color: var(--color-text-primary);
+}
+
+.bank-preview-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.bank-preview-table tbody tr.is-unmatched {
+  background: var(--color-danger-soft);
+}
+
+.bank-preview-table .col-date {
+  width: 110px;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+.bank-preview-table .col-summary {
+  width: 80px;
+  white-space: nowrap;
+}
+
+.bank-preview-table .col-deposit {
+  width: 100px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bank-preview-table .col-account {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--font-size-xs);
+}
+
+.bank-preview-table .col-match {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: center;
+}
+
+.bank-match-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+}
+
+.bank-match-chip strong {
+  font-weight: 600;
+}
+
+.bank-match-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+}
+
+.bank-match-add {
+  padding: 2px var(--space-2);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  height: auto;
+  min-height: 0;
+}
+
+.bank-preview-empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: var(--space-6);
+}
