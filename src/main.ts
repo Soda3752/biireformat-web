@@ -3,7 +3,7 @@ import './ui/theme.css';
 import {icon} from '@/ui/icons';
 import {bindThemeToggle} from '@/ui/theme';
 import {showToast} from '@/ui/toast';
-import {renderSideNav, resolveInitialTab, setActiveTab, tabHash, TABS,} from '@/ui/tabs';
+import {renderSideNav, resolveInitialTab, revealHiddenTab, setActiveTab, tabHash, TABS,} from '@/ui/tabs';
 import {renderPlaceholderPanel} from '@/tabs/placeholder';
 import {renderBillReformatPanel} from '@/tabs/bill-reformat';
 import {renderBillOverviewPanel} from '@/tabs/bill-overview';
@@ -24,7 +24,7 @@ function bootstrap(): void {
     <div class="app-shell">
       <header class="topbar">
         <div class="topbar-brand">
-          <span class="topbar-brand-icon">${icon('receipt', 18)}</span>
+          <span class="topbar-brand-icon" id="brand-icon" role="button" tabindex="-1" aria-hidden="true">${icon('receipt', 18)}</span>
           <span>青坊食品行 帳單處理工具</span>
           <span class="topbar-version">v${APP_VERSION}</span>
         </div>
@@ -88,6 +88,40 @@ function bootstrap(): void {
   window.addEventListener('hashchange', () => {
     switchTab(resolveInitialTab());
   });
+
+    bindHiddenTabUnlock(app, navHost, switchTab);
+}
+
+function bindHiddenTabUnlock(
+    app: HTMLElement,
+    navHost: HTMLElement,
+    switchTab: (tabId: string) => void,
+): void {
+    const brandIcon = app.querySelector<HTMLElement>('#brand-icon');
+    if (!brandIcon) return;
+    brandIcon.style.cursor = 'default';
+
+    const REQUIRED_CLICKS = 10;
+    const WINDOW_MS = 5000;
+    let count = 0;
+    let firstClickAt = 0;
+
+    brandIcon.addEventListener('click', () => {
+        const now = Date.now();
+        if (count === 0 || now - firstClickAt > WINDOW_MS) {
+            count = 1;
+            firstClickAt = now;
+            return;
+        }
+        count += 1;
+        if (count < REQUIRED_CLICKS) return;
+        count = 0;
+        firstClickAt = 0;
+        if (revealHiddenTab('analytics')) {
+            renderSideNav(navHost, switchTab);
+            switchTab('analytics');
+        }
+    });
 }
 
 bootstrap();
