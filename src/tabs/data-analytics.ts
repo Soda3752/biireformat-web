@@ -103,13 +103,13 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         </div>
       </div>
 
-      <section class="analytics-filters-section" data-role="filters-section" hidden>
-        <div data-role="filters-host"></div>
-      </section>
-
       <section class="analytics-content" data-role="content" hidden>
         <div class="analytics-section-label">總覽 KPI</div>
         <div class="analytics-kpi-grid" data-role="kpi-grid"></div>
+
+        <section class="analytics-filters-section" data-role="filters-section" hidden>
+          <div data-role="filters-host"></div>
+        </section>
 
         <div class="analytics-section-label">趨勢與分佈</div>
         <div class="analytics-chart-grid" data-role="chart-grid"></div>
