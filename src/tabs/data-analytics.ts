@@ -17,6 +17,7 @@ import {parseBillFile} from '@/readers/bill-reader';
 import {Bill} from '@/domain/models/bill';
 import {ExcelRowType} from '@/domain/excel-row-data';
 import {loadCategoryMap} from '@/analytics/category-loader';
+import {loadCostMap} from '@/analytics/cost-loader';
 import {
     type AnalyticsDataset,
     type AnalyticsRow,
@@ -27,6 +28,7 @@ import {applyFilter, EMPTY_FILTER, type FilterState} from '@/analytics/filter-en
 import {createFilterUi} from '@/analytics/filter-ui';
 import {createDetailTable, rowsToCsv} from '@/analytics/detail-table';
 import {openUncategorizedDialog} from '@/analytics/uncategorized-dialog';
+import {openUnsetCostDialog} from '@/analytics/unset-cost-dialog';
 import {type ChartHandle, createChart, observeChartsResize} from '@/analytics/chart-manager';
 import {computeKpi, renderKpiCards} from '@/analytics/kpi';
 import {
@@ -35,6 +37,7 @@ import {
     customerTopOption,
     dailyTrendOption,
     linePieOption,
+    type MetricKind,
     monthOverMonthOption,
     productTopOption,
     weekdayOption,
@@ -47,7 +50,7 @@ interface LoadedBillRecord {
     bill: Bill;
 }
 
-/** 金額/數量切換按鈕 handle：暴露 element 與一個由外部觸發的 refresh */
+/** 金額/數量/利潤切換按鈕 handle：暴露 element 與一個由外部觸發的 refresh */
 interface MetricSwitchHandle {
     element: HTMLElement;
     refresh: () => void;
@@ -123,6 +126,11 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
           <summary><span data-role="unmatched-summary"></span></summary>
           <ul class="analytics-unmatched-list" data-role="unmatched-list"></ul>
         </details>
+
+        <details class="analytics-unmatched" data-role="unset-cost" hidden>
+          <summary><span data-role="unset-cost-summary"></span></summary>
+          <ul class="analytics-unmatched-list" data-role="unset-cost-list"></ul>
+        </details>
       </section>
 
       <footer class="action-bar">
@@ -147,6 +155,9 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     const unmatchedHost = panel.querySelector<HTMLDetailsElement>('[data-role="unmatched"]')!;
     const unmatchedSummary = panel.querySelector<HTMLElement>('[data-role="unmatched-summary"]')!;
     const unmatchedList = panel.querySelector<HTMLElement>('[data-role="unmatched-list"]')!;
+    const unsetCostHost = panel.querySelector<HTMLDetailsElement>('[data-role="unset-cost"]')!;
+    const unsetCostSummary = panel.querySelector<HTMLElement>('[data-role="unset-cost-summary"]')!;
+    const unsetCostList = panel.querySelector<HTMLElement>('[data-role="unset-cost-list"]')!;
     const statusEl = panel.querySelector<HTMLElement>('[data-role="status"]')!;
 
     // ===== 狀態 =====
@@ -156,13 +167,13 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     let resizeCleanup: (() => void) | null = null;
 
     // ===== 圖表切換按鈕的當下狀態（每張圖獨立） =====
-    let dailyMetric: 'amount' | 'count' = 'amount';
-    let productMetric: 'amount' | 'count' = 'amount';
-    let weekdayMetric: 'amount' | 'count' = 'amount';
-    let linePieMetric: 'amount' | 'count' = 'amount';
-    let customerTopMetric: 'amount' | 'count' = 'amount';
-    let categoryMetric: 'amount' | 'count' = 'amount';
-    let paretoMetric: 'amount' | 'count' = 'amount';
+    let dailyMetric: MetricKind = 'amount';
+    let productMetric: MetricKind = 'amount';
+    let weekdayMetric: MetricKind = 'amount';
+    let linePieMetric: MetricKind = 'amount';
+    let customerTopMetric: MetricKind = 'amount';
+    let categoryMetric: MetricKind = 'amount';
+    let paretoMetric: MetricKind = 'amount';
 
     // ===== 子元件 =====
     const detailTable = createDetailTable();
@@ -191,8 +202,8 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         // metric switch 共用 helper：onChange 由呼叫端決定如何更新狀態
         const metricSwitchFor = (
             slot: ChartSlot,
-            getter: () => 'amount' | 'count',
-            setter: (v: 'amount' | 'count') => void
+            getter: () => MetricKind,
+            setter: (v: MetricKind) => void
         ): MetricSwitchHandle =>
             makeMetricSwitch((v) => {
                 setter(v);
@@ -554,28 +565,31 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             filtersSection.hidden = true;
             contentSection.hidden = true;
             unmatchedHost.hidden = true;
+            unsetCostHost.hidden = true;
             statusEl.textContent = '請拖入或選擇 .xlsx 帳單檔';
             return;
         }
         statusEl.textContent = '聚合資料中…';
         try {
-            const categoryMap = await loadCategoryMap();
+            const [categoryMap, costMap] = await Promise.all([loadCategoryMap(), loadCostMap()]);
             const fileMetas: LoadedFileMeta[] = loaded.map((rec) => ({
                 id: rec.fileId,
                 name: rec.fileName,
                 bill: rec.bill,
             }));
-            dataset = buildDataset(fileMetas, categoryMap);
+            dataset = buildDataset(fileMetas, categoryMap, costMap);
 
             filtersSection.hidden = false;
             contentSection.hidden = false;
             filterUi.setDataset(dataset);
             renderUnmatched(dataset);
+            renderUnsetCost(dataset);
 
             console.info('[analytics] dataset built:', {
                 files: dataset.files.length,
                 rows: dataset.rows.length,
                 unmatchedProducts: dataset.unmatchedProducts.length,
+                unsetCostProducts: dataset.unsetCostProducts.length,
                 sample: dataset.rows.slice(0, 5),
             });
 
@@ -610,6 +624,33 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 const name = btn.dataset.name ?? '';
                 if (!name) return;
                 void openUncategorizedDialog({
+                    productName: name,
+                    onSaved: async () => {
+                        await rebuildDataset();
+                    },
+                });
+            });
+        });
+    };
+
+    const renderUnsetCost = (ds: AnalyticsDataset) => {
+        if (ds.unsetCostProducts.length === 0) {
+            unsetCostHost.hidden = true;
+            return;
+        }
+        unsetCostHost.hidden = false;
+        unsetCostSummary.textContent = `未填成本商品（${ds.unsetCostProducts.length}）— 點擊任一項即可填入成本`;
+        unsetCostList.innerHTML = ds.unsetCostProducts
+            .map(
+                (name) =>
+                    `<li><button type="button" class="analytics-unmatched-chip" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button></li>`
+            )
+            .join('');
+        unsetCostList.querySelectorAll<HTMLButtonElement>('.analytics-unmatched-chip').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const name = btn.dataset.name ?? '';
+                if (!name) return;
+                void openUnsetCostDialog({
                     productName: name,
                     onSaved: async () => {
                         await rebuildDataset();
@@ -730,8 +771,8 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
 /* ================ helpers ================ */
 
 function makeMetricSwitch(
-    onChange: (v: 'amount' | 'count') => void,
-    getCurrent: () => 'amount' | 'count'
+    onChange: (v: MetricKind) => void,
+    getCurrent: () => MetricKind
 ): MetricSwitchHandle {
     const wrap = document.createElement('div');
     wrap.className = 'analytics-metric-switch';
@@ -740,10 +781,11 @@ function makeMetricSwitch(
         wrap.innerHTML = `
       <button type="button" class="${cur === 'amount' ? 'is-active' : ''}" data-v="amount">金額</button>
       <button type="button" class="${cur === 'count' ? 'is-active' : ''}" data-v="count">數量</button>
+      <button type="button" class="${cur === 'profit' ? 'is-active' : ''}" data-v="profit">利潤</button>
     `;
         wrap.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
             b.addEventListener('click', () => {
-                const v = b.dataset.v as 'amount' | 'count';
+                const v = b.dataset.v as MetricKind;
                 if (v !== getCurrent()) {
                     // onChange 由呼叫端串接 metricRefreshers，會自動重繪本元件
                     onChange(v);

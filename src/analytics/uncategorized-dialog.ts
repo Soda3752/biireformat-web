@@ -15,7 +15,7 @@ import {localSettings} from '@/infra/local-settings-store';
 import {notifyDailyReportChanged} from '@/domain/daily-report-loader';
 import {invalidateCategoryMap} from '@/analytics/category-loader';
 
-const DAILY_HEADER = ['分類', '編號', '品名'] as const;
+const DAILY_HEADER = ['分類', '編號', '品名', '成本'] as const;
 const DAILY_ASSET_URL = `${import.meta.env.BASE_URL}assets/daily_report_list.csv`;
 const NEW_GROUP_TOKEN = '__new__';
 
@@ -23,6 +23,7 @@ interface DailyRow {
     group: string;
     code: string;
     name: string;
+    cost: string;
 }
 
 export interface UncategorizedDialogOptions {
@@ -145,7 +146,7 @@ export async function openUncategorizedDialog(options: UncategorizedDialogOption
 
         try {
             saveBtn.disabled = true;
-            await persistNewMapping(rows, {group: groupName, code, name: productName});
+            await persistNewMapping(rows, {group: groupName, code, name: productName, cost: ''});
             showToast({variant: 'success', title: '已加入分類', message: `「${productName}」→ ${groupName}`});
             close();
             await options.onSaved?.();
@@ -168,7 +169,7 @@ async function persistNewMapping(existing: DailyRow[], entry: DailyRow): Promise
     const csv = serializeDailyCsv(next);
     localSettings.setDailyReportList(csv);
     invalidateCategoryMap();
-    // 同時清 daily-report 快取並通知訂閱者（例：設定頁明細排序分頁即時同步）
+    // 同時清 daily-report 快取並通知訂閱者（例：設定頁品項分類分頁即時同步）
     notifyDailyReportChanged();
 }
 
@@ -209,8 +210,9 @@ function parseDailyCsv(text: string): DailyRow[] {
         const groupRaw = String(row[0] ?? '').trim();
         const code = String(row[1] ?? '').trim();
         const name = String(row[2] ?? '').trim();
+        const cost = String(row[3] ?? '').trim();
         if (groupRaw.length > 0) currentGroup = groupRaw;
-        out.push({group: currentGroup, code, name});
+        out.push({group: currentGroup, code, name, cost});
     }
     return out;
 }
@@ -220,7 +222,7 @@ function serializeDailyCsv(rows: DailyRow[]): string {
     let prevGroup = '';
     for (const r of rows) {
         const groupCol = r.group !== prevGroup ? r.group : '';
-        out.push([groupCol, r.code, r.name]);
+        out.push([groupCol, r.code, r.name, r.cost]);
         prevGroup = r.group;
     }
     return Papa.unparse([DAILY_HEADER.slice(), ...out], {newline: '\n'});

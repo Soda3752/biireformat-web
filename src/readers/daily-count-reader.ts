@@ -101,6 +101,7 @@ export const buildDailyResultForDate = async (
                     code: '',
                     name: productName,
                     groupName: '其他',
+                    costRaw: '',
                     count,
                 };
                 let other = productMap.get('其他');

@@ -5,50 +5,170 @@
  * 統一規約：
  * - 不引用 echarts 模組（型別來自 EChartsOption），讓本檔可單元測試
  * - tooltip 走 axis trigger 為主，符合中文閱讀習慣
- * - 顏色走預設 palette，後續可注入 theme
+ * - 顏色集中於 chart-colors.ts，避免 hex 散落
+ * - 所有圖 tooltip 共用 formatProfitFooter() 輸出成本／毛利／毛利率
  */
 
 import type {EChartsOption} from 'echarts';
 import type {AnalyticsDataset, AnalyticsRow} from './dataset-builder';
-import {dailySeries, groupBy, groupByCustomer, topN, weekdaySeries,} from './aggregators';
+import type {GroupSum} from './aggregators';
+import {dailySeries, groupBy, groupByCustomer, marginPct, topN, weekdaySeries} from './aggregators';
 import {WEEKDAY_NAMES} from '@/domain/date-utility';
+import {CATEGORY_PALETTE, lightenHex, PALETTE} from './chart-colors';
 
 const fmtMoney = (v: number) => v.toLocaleString('zh-TW');
+const fmtPct = (v: number) => `${v.toFixed(1)}%`;
+
+export type MetricKind = 'amount' | 'count' | 'profit';
+
+/** 取得指定 metric 對應的數值 */
+function metricValueFromGroup(g: GroupSum, metric: MetricKind): number {
+    if (metric === 'count') return g.count;
+    if (metric === 'profit') return Math.round(g.profit);
+    return g.amount;
+}
+
+function metricValueFromDaily(p: { amount: number; count: number; profit: number }, metric: MetricKind): number {
+    if (metric === 'count') return p.count;
+    if (metric === 'profit') return Math.round(p.profit);
+    return p.amount;
+}
+
+function metricSeriesName(metric: MetricKind): string {
+    if (metric === 'count') return '銷售數量';
+    if (metric === 'profit') return '毛利';
+    return '營收';
+}
+
+function metricColor(metric: MetricKind): string {
+    if (metric === 'profit') return PALETTE.profit;
+    return PALETTE.revenue;
+}
+
+function metricValueFmt(metric: MetricKind): (v: number) => string {
+    return metric === 'count' ? (v: number) => String(v) : fmtMoney;
+}
+
+interface ProfitMeta {
+    amount: number;
+    costAmount: number;
+    profit: number;
+    allCostUnset: boolean;
+}
+
+function formatProfitFooter(meta: ProfitMeta | undefined | null): string {
+    if (!meta) return '';
+    const pct = marginPct(meta.profit, meta.amount);
+    const pctText = pct === null ? '—' : fmtPct(pct);
+    const warn = meta.allCostUnset && meta.amount > 0
+        ? `<div style="margin-top:4px;font-size:11px;color:#999">⚠ 部分商品未填成本，計算視為 0</div>`
+        : '';
+    return `<div style="margin-top:6px;border-top:1px dashed #ddd;padding-top:4px">`
+        + `<div>成本　　${fmtMoney(Math.round(meta.costAmount))}</div>`
+        + `<div>毛利　　${fmtMoney(Math.round(meta.profit))}</div>`
+        + `<div>毛利率　${pctText}</div>`
+        + warn
+        + `</div>`;
+}
+
+interface AxisTooltipParam {
+    marker?: string;
+    seriesName?: string;
+    name?: string;
+    axisValueLabel?: string;
+    dataIndex?: number;
+    value?: number | string;
+}
+
+function buildAxisTooltip(
+    raw: AxisTooltipParam | AxisTooltipParam[],
+    metas: ReadonlyArray<ProfitMeta>,
+    valueFmt: (v: number) => string = fmtMoney,
+): string {
+    const params = Array.isArray(raw) ? raw : [raw];
+    const first = params[0];
+    const idx = first.dataIndex ?? 0;
+    const meta = metas[idx];
+    const head = params
+        .map((p) => `${p.marker ?? ''}${p.seriesName ?? ''}　${valueFmt(Number(p.value ?? 0))}`)
+        .join('<br/>');
+    const title = `<div style="font-weight:600">${first.axisValueLabel ?? first.name ?? ''}</div>`;
+    return title + head + formatProfitFooter(meta);
+}
 
 /* ================ T1.2 每日營收趨勢 ================ */
-export function dailyTrendOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count'): EChartsOption {
-    const series = dailySeries(rows);
-    const xData = series.map((p) => `${p.day}日`);
-    const yData = series.map((p) => (metric === 'amount' ? p.amount : p.count));
-    return {
-        grid: {top: 30, right: 20, bottom: 40, left: 60},
-        tooltip: {
-            trigger: 'axis',
-            valueFormatter: (v) => (metric === 'amount' ? fmtMoney(Number(v)) : String(v)),
-        },
-        xAxis: {type: 'category', data: xData, axisLabel: {fontSize: 11}},
-        yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
-        series: [
+export function dailyTrendOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind): EChartsOption {
+    const points = dailySeries(rows);
+    const xData = points.map((p) => `${p.day}日`);
+    const isAmount = metric === 'amount';
+    const valueFmt = metricValueFmt(metric);
+
+    const series: NonNullable<EChartsOption['series']> = isAmount
+        ? [
             {
+                name: '營收',
                 type: 'line',
                 smooth: true,
                 symbol: 'circle',
                 symbolSize: 6,
-                data: yData,
-                areaStyle: {opacity: 0.15},
-                lineStyle: {width: 2},
+                data: points.map((p) => p.amount),
+                areaStyle: {opacity: 0.15, color: PALETTE.revenue},
+                itemStyle: {color: PALETTE.revenue},
+                lineStyle: {width: 2, color: PALETTE.revenue},
             },
-        ],
+            {
+                name: '毛利',
+                type: 'line',
+                smooth: true,
+                symbol: 'circle',
+                symbolSize: 5,
+                data: points.map((p) => Math.round(p.profit)),
+                itemStyle: {color: PALETTE.profit},
+                lineStyle: {width: 2, color: PALETTE.profit},
+            },
+        ]
+        : [
+            {
+                name: metricSeriesName(metric),
+                type: 'line',
+                smooth: true,
+                symbol: 'circle',
+                symbolSize: 6,
+                data: points.map((p) => metricValueFromDaily(p, metric)),
+                areaStyle: {opacity: 0.15, color: metricColor(metric)},
+                itemStyle: {color: metricColor(metric)},
+                lineStyle: {width: 2, color: metricColor(metric)},
+            },
+        ];
+
+    return {
+        grid: {top: isAmount ? 40 : 30, right: 20, bottom: 40, left: 60},
+        legend: isAmount ? {top: 0, left: 'center', textStyle: {fontSize: 11}} : {show: false},
+        tooltip: {
+            trigger: 'axis',
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], points, valueFmt),
+        },
+        xAxis: {type: 'category', data: xData, axisLabel: {fontSize: 11}},
+        yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
+        series,
     };
 }
 
-/* ================ T1.3 線別佔比（金額/數量切換） ================ */
-export function linePieOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count' = 'amount'): EChartsOption {
+/* ================ T1.3 線別佔比（金額/數量/利潤切換） ================ */
+export function linePieOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind = 'amount'): EChartsOption {
     const groups = groupBy(rows, 'line', metric, true);
+    const groupMap = new Map(groups.map((g) => [g.key, g]));
     return {
         tooltip: {
             trigger: 'item',
-            valueFormatter: (v) => fmtMoney(Number(v)),
+            formatter: (raw) => {
+                const p = Array.isArray(raw) ? raw[0] : raw;
+                const name = String(p.name ?? '');
+                const g = groupMap.get(name);
+                const pctText = typeof p.percent === 'number' ? `（${p.percent.toFixed(1)}%）` : '';
+                const head = `<div style="font-weight:600">${name}</div>${p.marker ?? ''}${fmtMoney(Number(p.value ?? 0))}${pctText}`;
+                return head + formatProfitFooter(g);
+            },
         },
         legend: {
             bottom: 0,
@@ -79,53 +199,99 @@ export function linePieOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount
                 labelLayout: {
                     hideOverlap: true,
                 },
-                data: groups.map((g) => ({name: g.key, value: metric === 'amount' ? g.amount : g.count})),
+                data: groups.map((g) => ({name: g.key, value: metricValueFromGroup(g, metric)})),
             },
         ],
     };
 }
 
 /* ================ T1.4 商品 Top 10 ================ */
-export function productTopOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count'): EChartsOption {
+export function productTopOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind): EChartsOption {
     const groups = topN(groupBy(rows, 'productName', metric, true), 10).reverse();
+    const isAmount = metric === 'amount';
+    const valueFmt = metricValueFmt(metric);
+
+    const series: NonNullable<EChartsOption['series']> = [
+        {
+            name: metricSeriesName(metric),
+            type: 'bar',
+            data: groups.map((g) => metricValueFromGroup(g, metric)),
+            itemStyle: {borderRadius: [0, 4, 4, 0], color: metricColor(metric)},
+            barMaxWidth: 22,
+            label: {show: true, position: 'right', fontSize: 11, formatter: (p) => valueFmt(Number(p.value))},
+        },
+    ];
+    if (isAmount) {
+        series.push({
+            name: '毛利',
+            type: 'bar',
+            data: groups.map((g) => Math.round(g.profit)),
+            itemStyle: {borderRadius: [0, 4, 4, 0], color: PALETTE.profit},
+            barMaxWidth: 22,
+            label: {show: true, position: 'right', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
+        });
+    }
+
     return {
-        grid: {top: 20, right: 40, bottom: 30, left: 100},
-        tooltip: {trigger: 'axis', valueFormatter: (v) => fmtMoney(Number(v))},
+        grid: {top: isAmount ? 40 : 20, right: 60, bottom: 30, left: 100},
+        legend: isAmount ? {top: 0, left: 'center', textStyle: {fontSize: 11}} : {show: false},
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {type: 'shadow'},
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], groups, valueFmt),
+        },
         xAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
         yAxis: {type: 'category', data: groups.map((g) => g.key), axisLabel: {fontSize: 11}},
-        series: [
-            {
-                type: 'bar',
-                data: groups.map((g) => (metric === 'amount' ? g.amount : g.count)),
-                itemStyle: {borderRadius: [0, 4, 4, 0]},
-                label: {show: true, position: 'right', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
-            },
-        ],
+        series,
     };
 }
 
-/* ================ T2.1 客戶 Top 10（金額/數量切換） ================ */
-export function customerTopOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count' = 'amount'): EChartsOption {
+/* ================ T2.1 客戶 Top 10（金額/數量/利潤切換） ================ */
+export function customerTopOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind = 'amount'): EChartsOption {
     const groups = topN(groupByCustomer(rows, metric, true), 10).reverse();
+    const isAmount = metric === 'amount';
+    const valueFmt = metricValueFmt(metric);
+
+    const series: NonNullable<EChartsOption['series']> = [
+        {
+            name: metricSeriesName(metric),
+            type: 'bar',
+            data: groups.map((g) => metricValueFromGroup(g, metric)),
+            itemStyle: {borderRadius: [0, 4, 4, 0], color: metricColor(metric)},
+            barMaxWidth: 22,
+            label: {show: true, position: 'right', fontSize: 11, formatter: (p) => valueFmt(Number(p.value))},
+        },
+    ];
+    if (isAmount) {
+        series.push({
+            name: '毛利',
+            type: 'bar',
+            data: groups.map((g) => Math.round(g.profit)),
+            itemStyle: {borderRadius: [0, 4, 4, 0], color: PALETTE.profit},
+            barMaxWidth: 22,
+            label: {show: true, position: 'right', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
+        });
+    }
+
     return {
-        grid: {top: 20, right: 40, bottom: 30, left: 140},
-        tooltip: {trigger: 'axis', valueFormatter: (v) => fmtMoney(Number(v))},
+        grid: {top: isAmount ? 40 : 20, right: 60, bottom: 30, left: 140},
+        legend: isAmount ? {top: 0, left: 'center', textStyle: {fontSize: 11}} : {show: false},
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {type: 'shadow'},
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], groups, valueFmt),
+        },
         xAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
         yAxis: {type: 'category', data: groups.map((g) => g.key), axisLabel: {fontSize: 11}},
-        series: [
-            {
-                type: 'bar',
-                data: groups.map((g) => (metric === 'amount' ? g.amount : g.count)),
-                itemStyle: {borderRadius: [0, 4, 4, 0], color: '#5b8def'},
-                label: {show: true, position: 'right', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
-            },
-        ],
+        series,
     };
 }
 
-/* ================ T2.3 商品分類 Treemap（金額/數量切換） ================ */
-export function categoryTreemapOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count' = 'amount'): EChartsOption {
+/* ================ T2.3 商品分類 Treemap（金額/數量/利潤切換 + 毛利率色階） ================ */
+export function categoryTreemapOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind = 'amount'): EChartsOption {
     const byCategory = groupBy(rows, 'category', metric, true);
+    const byCategoryMap = new Map(byCategory.map((g) => [g.key, g]));
+
     const productByCategory = new Map<string, Map<string, number>>();
     for (const r of rows) {
         let m = productByCategory.get(r.category);
@@ -133,22 +299,58 @@ export function categoryTreemapOption(rows: ReadonlyArray<AnalyticsRow>, metric:
             m = new Map();
             productByCategory.set(r.category, m);
         }
-        const v = metric === 'amount' ? r.amount : r.count;
+        const v = metric === 'count' ? r.count : metric === 'profit' ? r.profit : r.amount;
         m.set(r.productName, (m.get(r.productName) ?? 0) + v);
     }
-    const data = byCategory.map((cat) => {
-        const products = [...(productByCategory.get(cat.key) ?? new Map())].map(([name, value]) => ({
-            name,
-            value,
-        }));
-        return {name: cat.key, value: metric === 'amount' ? cat.amount : cat.count, children: products};
+
+    // treemap value 必須非負，對 profit 模式下虧損商品取 0（tooltip 仍顯示真實值）
+    const sizeOf = (v: number) => Math.max(0, v);
+
+    const data = byCategory.map((cat, i) => {
+        const parentColor = CATEGORY_PALETTE[i % CATEGORY_PALETTE.length];
+        const entries = [...(productByCategory.get(cat.key) ?? new Map())] as Array<[string, number]>;
+        const values = entries.map(([, v]) => v);
+        const max = values.length > 0 ? Math.max(...values) : 1;
+        const min = values.length > 0 ? Math.min(...values) : 0;
+        const range = max - min;
+        const products = entries.map(([name, value]) => {
+            // 大 value → 0 (原色)、小 value → 0.65 (淡)
+            const ratio = range > 0 ? 1 - (value - min) / range : 0;
+            const lighten = ratio * 0.65;
+            return {
+                name,
+                value: sizeOf(value),
+                itemStyle: {
+                    color: lightenHex(parentColor, lighten),
+                    borderWidth: 0,
+                },
+            };
+        });
+        return {
+            name: cat.key,
+            value: sizeOf(metricValueFromGroup(cat, metric)),
+            itemStyle: {
+                color: parentColor,
+                borderWidth: 0,
+                gapWidth: 0,
+            },
+            children: products,
+        };
     });
-    const metricLabel = metric === 'amount' ? '金額' : '數量';
+
+    const metricLabel = metric === 'count' ? '數量' : metric === 'profit' ? '利潤' : '金額';
+
     return {
         tooltip: {
-            formatter: (params) => {
-                const p = Array.isArray(params) ? params[0] : params;
-                return `${p.name}<br/>${metricLabel}: ${fmtMoney(Number(p.value))}`;
+            formatter: (raw) => {
+                const p = Array.isArray(raw) ? raw[0] : raw;
+                const name = String(p.name ?? '');
+                const head = `<div style="font-weight:600">${name}</div>${metricLabel}　${fmtMoney(Number(p.value ?? 0))}`;
+                const path = (p as unknown as { treePathInfo?: Array<{ name: string }> }).treePathInfo ?? [];
+                let cat: GroupSum | undefined;
+                if (path.length >= 2) cat = byCategoryMap.get(path[1].name);
+                else cat = byCategoryMap.get(name);
+                return head + formatProfitFooter(cat);
             },
         },
         series: [
@@ -160,12 +362,13 @@ export function categoryTreemapOption(rows: ReadonlyArray<AnalyticsRow>, metric:
                 label: {show: true, formatter: '{b}', fontSize: 11},
                 upperLabel: {show: true, height: 20, fontSize: 12, fontWeight: 'bold'},
                 levels: [
+                    {},
                     {
-                        itemStyle: {borderColor: '#fff', borderWidth: 2, gapWidth: 2},
+                        itemStyle: {borderWidth: 0, gapWidth: 0},
                     },
                     {
-                        colorSaturation: [0.35, 0.55],
-                        itemStyle: {borderColorSaturation: 0.7, gapWidth: 1, borderWidth: 1},
+                        itemStyle: {borderWidth: 0, gapWidth: 0},
+                        upperLabel: {show: false},
                     },
                 ],
                 data,
@@ -174,20 +377,38 @@ export function categoryTreemapOption(rows: ReadonlyArray<AnalyticsRow>, metric:
     };
 }
 
-/* ================ T2.4 客戶帕累托（金額/數量切換） ================ */
-export function customerParetoOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count' = 'amount'): EChartsOption {
+/* ================ T2.4 客戶帕累托（金額/數量/利潤切換） ================ */
+export function customerParetoOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind = 'amount'): EChartsOption {
     const groups = topN(groupByCustomer(rows, metric, true), 30); // 取前 30 客戶
-    const values = groups.map((g) => (metric === 'amount' ? g.amount : g.count));
+    const values = groups.map((g) => metricValueFromGroup(g, metric));
     const total = values.reduce((s, v) => s + v, 0) || 1;
     let acc = 0;
     const cumPct = values.map((v) => {
         acc += v;
         return Number(((acc / total) * 100).toFixed(2));
     });
-    const seriesName = metric === 'amount' ? '營收' : '銷售數量';
+    const seriesName = metricSeriesName(metric);
+    const valueFmt = metricValueFmt(metric);
     return {
         grid: {top: 40, right: 60, bottom: 80, left: 60},
-        tooltip: {trigger: 'axis'},
+        tooltip: {
+            trigger: 'axis',
+            formatter: (raw) => {
+                const params = Array.isArray(raw) ? raw : [raw];
+                const idx = (params[0]?.dataIndex ?? 0) as number;
+                const g = groups[idx];
+                const head = params
+                    .map((p) => {
+                        const name = p.seriesName ?? '';
+                        const isPct = name === '累積佔比';
+                        const v = Number(p.value ?? 0);
+                        return `${p.marker ?? ''}${name}　${isPct ? `${v}%` : valueFmt(v)}`;
+                    })
+                    .join('<br/>');
+                const title = `<div style="font-weight:600">${g?.key ?? ''}</div>`;
+                return title + head + formatProfitFooter(g);
+            },
+        },
         legend: {top: 0, left: 'center'},
         xAxis: {
             type: 'category',
@@ -203,7 +424,7 @@ export function customerParetoOption(rows: ReadonlyArray<AnalyticsRow>, metric: 
                 name: seriesName,
                 type: 'bar',
                 data: values,
-                itemStyle: {color: '#5b8def'},
+                itemStyle: {color: metricColor(metric)},
             },
             {
                 name: '累積佔比',
@@ -213,12 +434,12 @@ export function customerParetoOption(rows: ReadonlyArray<AnalyticsRow>, metric: 
                 smooth: false,
                 symbol: 'circle',
                 symbolSize: 5,
-                itemStyle: {color: '#f5a623'},
+                itemStyle: {color: PALETTE.cost},
                 markLine: {
                     silent: true,
                     symbol: 'none',
                     label: {formatter: '80%'},
-                    lineStyle: {color: '#f5a623', type: 'dashed'},
+                    lineStyle: {color: PALETTE.cost, type: 'dashed'},
                     data: [{yAxis: 80}],
                 },
             },
@@ -227,22 +448,29 @@ export function customerParetoOption(rows: ReadonlyArray<AnalyticsRow>, metric: 
 }
 
 /* ================ T2.5 星期銷售熱度 ================ */
-export function weekdayOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count'): EChartsOption {
+export function weekdayOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricKind): EChartsOption {
     const series = weekdaySeries(rows);
     // 重排為 一二三四五六日
     const order = [1, 2, 3, 4, 5, 6, 0];
     const reordered = order.map((i) => series[i]);
+    const valueFmt = metricValueFmt(metric);
+    const barColor = metric === 'profit' ? PALETTE.profit : PALETTE.accent;
     return {
         grid: {top: 20, right: 20, bottom: 30, left: 60},
-        tooltip: {trigger: 'axis', valueFormatter: (v) => fmtMoney(Number(v))},
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {type: 'shadow'},
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], reordered, valueFmt),
+        },
         xAxis: {type: 'category', data: order.map((i) => `週${WEEKDAY_NAMES[i]}`)},
         yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
         series: [
             {
+                name: metricSeriesName(metric),
                 type: 'bar',
-                data: reordered.map((p) => (metric === 'amount' ? p.amount : p.count)),
-                itemStyle: {color: '#9b59b6', borderRadius: [4, 4, 0, 0]},
-                label: {show: true, position: 'top', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
+                data: reordered.map((p) => metricValueFromDaily(p, metric)),
+                itemStyle: {color: barColor, borderRadius: [4, 4, 0, 0]},
+                label: {show: true, position: 'top', fontSize: 11, formatter: (p) => valueFmt(Number(p.value))},
             },
         ],
     };
@@ -255,42 +483,57 @@ export function monthOverMonthOption(dataset: AnalyticsDataset): EChartsOption {
     const fileLabels = dataset.files.map((f) => `${f.year}年${f.month}月`);
     const fileAmount: number[] = [];
     const fileCount: number[] = [];
+    const fileProfit: number[] = [];
     const fileCustomers: number[] = [];
+    const fileMetas: ProfitMeta[] = [];
     for (const f of dataset.files) {
         const fileRows = dataset.rows.filter((r) => r.fileId === f.id);
         let amount = 0;
         let count = 0;
+        let costAmount = 0;
+        let profit = 0;
+        let allCostUnset = true;
         const customers = new Set<string>();
         for (const r of fileRows) {
             amount += r.amount;
             count += r.count;
+            costAmount += r.costAmount;
+            profit += r.profit;
+            if (!r.isCostUnset) allCostUnset = false;
             customers.add(r.customerCode);
         }
         fileAmount.push(amount);
         fileCount.push(count);
+        fileProfit.push(Math.round(profit));
         fileCustomers.push(customers.size);
+        fileMetas.push({amount, costAmount, profit, allCostUnset});
     }
 
     return {
         grid: {top: 50, right: 20, bottom: 40, left: 70},
-        tooltip: {trigger: 'axis'},
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {type: 'shadow'},
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], fileMetas, fmtMoney),
+        },
         legend: {top: 0, left: 'center'},
         xAxis: {type: 'category', data: fileLabels},
         yAxis: [
-            {type: 'value', name: '金額/數量', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
+            {type: 'value', name: '金額/數量/毛利', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
             {type: 'value', name: '客戶數', minInterval: 1},
         ],
         series: [
-            {name: '營收', type: 'bar', data: fileAmount, itemStyle: {color: '#5b8def'}},
-            {name: '銷售數量', type: 'bar', data: fileCount, itemStyle: {color: '#7ac74f'}},
+            {name: '營收', type: 'bar', data: fileAmount, itemStyle: {color: PALETTE.revenue}},
+            {name: '毛利', type: 'bar', data: fileProfit, itemStyle: {color: PALETTE.profit}},
+            {name: '銷售數量', type: 'bar', data: fileCount, itemStyle: {color: PALETTE.accent}},
             {
                 name: '客戶數',
                 type: 'line',
                 yAxisIndex: 1,
                 data: fileCustomers,
-                itemStyle: {color: '#f5a623'},
+                itemStyle: {color: PALETTE.cost},
                 lineStyle: {width: 2},
-                symbolSize: 8
+                symbolSize: 8,
             },
         ],
     };

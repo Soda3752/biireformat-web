@@ -41,6 +41,7 @@ export function applyFilter(
         rows,
         files: dataset.files,
         unmatchedProducts: dataset.unmatchedProducts,
+        unsetCostProducts: dataset.unsetCostProducts,
     };
 }
 

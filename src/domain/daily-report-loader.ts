@@ -88,10 +88,11 @@ export function parseDailyReportCsv(text: string): DailyProductMap {
     const groupName = (row[0] ?? '').trim();
     const code = (row[1] ?? '').trim();
     const name = (row[2] ?? '').trim();
+      const costRaw = (row[3] ?? '').trim();
 
     if (groupName.length > 0) currentGroup = groupName;
       if (name.length > 0) {
-      products.push({ code, name, groupName: currentGroup, count: 0 });
+          products.push({code, name, groupName: currentGroup, costRaw, count: 0});
     }
   }
 

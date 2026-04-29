@@ -9,6 +9,7 @@ import type {Bill} from '@/domain/models/bill';
 import {getWeekday} from '@/domain/date-utility';
 import type {CategoryMap} from './category-loader';
 import {UNCATEGORIZED} from './category-loader';
+import type {CostMap} from './cost-loader';
 
 export interface LoadedFileMeta {
     id: string;
@@ -34,6 +35,10 @@ export interface AnalyticsRow {
     count: number;
     price: number;
     amount: number;      // count × price
+    cost: number;        // 單品成本（未填視為 0）
+    costAmount: number;  // count × cost
+    profit: number;      // amount - costAmount
+    isCostUnset: boolean; // 該商品於 daily_report_list 未填成本
 }
 
 export interface AnalyticsFileEntry {
@@ -49,15 +54,18 @@ export interface AnalyticsDataset {
     rows: AnalyticsRow[];
     files: AnalyticsFileEntry[];
     unmatchedProducts: string[];
+    unsetCostProducts: string[];
 }
 
 export function buildDataset(
     files: ReadonlyArray<LoadedFileMeta>,
-    categoryMap: CategoryMap
+    categoryMap: CategoryMap,
+    costMap: CostMap
 ): AnalyticsDataset {
     const rows: AnalyticsRow[] = [];
     const fileEntries: AnalyticsFileEntry[] = [];
     const unmatched = new Set<string>();
+    const unsetCost = new Set<string>();
 
     for (const file of files) {
         const {bill} = file;
@@ -75,7 +83,14 @@ export function buildDataset(
                 const category = categoryMap.get(product.name);
                 if (!category) unmatched.add(product.name);
 
+                const costLookup = costMap.get(product.name);
+                const isCostUnset = costLookup === undefined || costLookup === null;
+                const cost = isCostUnset ? 0 : costLookup;
+                if (isCostUnset) unsetCost.add(product.name);
+
                 for (const order of product.orderList) {
+                    const amount = order.count * product.price;
+                    const costAmount = order.count * cost;
                     rows.push({
                         fileId: file.id,
                         fileName: file.name,
@@ -93,7 +108,11 @@ export function buildDataset(
                         category: category ?? UNCATEGORIZED,
                         count: order.count,
                         price: product.price,
-                        amount: order.count * product.price,
+                        amount,
+                        cost,
+                        costAmount,
+                        profit: amount - costAmount,
+                        isCostUnset,
                     });
                     fileRowCount += 1;
                 }
@@ -114,5 +133,6 @@ export function buildDataset(
         rows,
         files: fileEntries,
         unmatchedProducts: [...unmatched].sort(),
+        unsetCostProducts: [...unsetCost].sort(),
     };
 }

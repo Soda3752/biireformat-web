@@ -1,7 +1,7 @@
 /**
  * 設定分頁：管理 cargo_sort.csv 與 daily_report_list.csv 的本地覆寫。
  *
- * - 內部子分頁：「帳單排序」 / 「明細排序」
+ * - 內部子分頁：「帳單排序」 / 「品項分類」
  * - 每個子分頁支援：表格內編輯、新增列、刪除列、匯入 CSV、匯出 CSV
  * - 編輯 / 匯入後立即寫入 localStorage 並 invalidate 對應的 loader 快取
  * - 匯出格式與內建 CSV 相同
@@ -47,6 +47,7 @@ interface DailyRow {
     group: string;
     code: string;
     name: string;
+    cost: string;
 }
 
 interface LastFiveRow {
@@ -56,7 +57,7 @@ interface LastFiveRow {
 }
 
 const CARGO_HEADER = ['貨品編號', '貨品名稱', '代送費'];
-const DAILY_HEADER = ['分類', '貨品編號', '貨品名稱'];
+const DAILY_HEADER = ['分類', '貨品編號', '貨品名稱', '成本'];
 const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
 const CUSTOMER_HEADER = Array.from(CUSTOMER_ORDER_HEADER);
 
@@ -74,13 +75,13 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">設定</h1>
         <p class="card-subtitle">
-          管理「帳單排序（cargo_sort）」與「明細排序（daily_report_list）」兩份資料。
+          管理「帳單排序（cargo_sort）」與「品項分類（daily_report_list）」兩份資料。
         </p>
       </header>
 
       <nav class="settings-subnav" role="tablist" aria-label="設定子分頁">
         <button type="button" class="settings-subnav-item is-active" data-subtab="cargo" role="tab" aria-selected="true">帳單排序</button>
-        <button type="button" class="settings-subnav-item" data-subtab="daily" role="tab" aria-selected="false">明細排序</button>
+        <button type="button" class="settings-subnav-item" data-subtab="daily" role="tab" aria-selected="false">品項分類</button>
         <button type="button" class="settings-subnav-item" data-subtab="bill-customer" role="tab" aria-selected="false">帳單客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="overview-customer" role="tab" aria-selected="false">明細客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="lastfive" role="tab" aria-selected="false">末五碼</button>
@@ -395,7 +396,7 @@ async function buildCargoXlsxBlob(rows: CargoRow[]): Promise<Blob> {
 }
 
 // ============================================================================
-// 明細排序 (daily_report_list)
+// 品項分類 (daily_report_list)
 // ============================================================================
 
 function bindDailyPane(panel: HTMLElement): void {
@@ -431,13 +432,14 @@ function bindDailyPane(panel: HTMLElement): void {
             buildEditableTable({
                 headers: DAILY_HEADER,
                 rows,
-                rowToCells: (row) => [row.group, row.code, row.name],
+                rowToCells: (row) => [row.group, row.code, row.name, row.cost],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
                     if (!r) return;
                     if (colIdx === 0) r.group = value;
                     else if (colIdx === 1) r.code = value;
                     else if (colIdx === 2) r.name = value;
+                    else if (colIdx === 3) r.cost = value;
                     persist();
                 },
                 onDeleteRow: (rowIdx) => {
@@ -453,13 +455,13 @@ function bindDailyPane(panel: HTMLElement): void {
                 onInsertAbove: (rowIdx) => {
                     // 沿用相鄰列的分類（往上插入時繼承被插入位置那列的 group）
                     const inheritGroup = rows[rowIdx]?.group ?? '';
-                    rows.splice(rowIdx, 0, {group: inheritGroup, code: '', name: ''});
+                    rows.splice(rowIdx, 0, {group: inheritGroup, code: '', name: '', cost: ''});
                     renderTable();
                     persist();
                 },
                 onInsertBelow: (rowIdx) => {
                     const inheritGroup = rows[rowIdx]?.group ?? '';
-                    rows.splice(rowIdx + 1, 0, {group: inheritGroup, code: '', name: ''});
+                    rows.splice(rowIdx + 1, 0, {group: inheritGroup, code: '', name: '', cost: ''});
                     renderTable();
                     persist();
                 },
@@ -487,7 +489,7 @@ function bindDailyPane(panel: HTMLElement): void {
 
     addBtn.addEventListener('click', () => {
         const lastGroup = rows.length > 0 ? rows[rows.length - 1].group : '';
-        rows.push({group: lastGroup, code: '', name: ''});
+        rows.push({group: lastGroup, code: '', name: '', cost: ''});
         renderTable();
         persist();
     });
@@ -529,7 +531,7 @@ function bindDailyPane(panel: HTMLElement): void {
             renderTable();
             showToast({
                 variant: 'success',
-                title: '明細排序已匯入',
+                title: '品項分類已匯入',
                 message: `${file.name}（${rows.length} 筆）`,
             });
         } catch (err) {
@@ -569,8 +571,9 @@ function parseDailyCsv(text: string): DailyRow[] {
         const groupRaw = String(row[0] ?? '').trim();
         const code = String(row[1] ?? '').trim();
         const name = String(row[2] ?? '').trim();
+        const cost = String(row[3] ?? '').trim();
         if (groupRaw.length > 0) currentGroup = groupRaw;
-        out.push({group: currentGroup, code, name});
+        out.push({group: currentGroup, code, name, cost});
     }
     return out;
 }
@@ -590,7 +593,7 @@ function sparsifyDailyRows(rows: DailyRow[]): string[][] {
     let prevGroup = '';
     for (const r of rows) {
         const groupCol = r.group !== prevGroup ? r.group : '';
-        out.push([groupCol, r.code, r.name]);
+        out.push([groupCol, r.code, r.name, r.cost]);
         prevGroup = r.group;
     }
     return out;
@@ -608,8 +611,9 @@ function parseDailyFromXlsxRows(xlsxRows: string[][]): DailyRow[] {
         const groupRaw = (row[0] ?? '').trim();
         const code = (row[1] ?? '').trim();
         const name = (row[2] ?? '').trim();
+        const cost = (row[3] ?? '').trim();
         if (groupRaw.length > 0) currentGroup = groupRaw;
-        out.push({group: currentGroup, code, name});
+        out.push({group: currentGroup, code, name, cost});
     }
     return out;
 }
@@ -619,11 +623,15 @@ async function buildDailyXlsxBlob(rows: DailyRow[]): Promise<Blob> {
     const ws = wb.addWorksheet('daily_report_list');
     ws.addRow(DAILY_HEADER);
     for (const r of sparsifyDailyRows(rows)) {
-        ws.addRow(r);
+        const [groupCol, code, name, costRaw] = r;
+        const costNum = Number(costRaw);
+        const costCell = costRaw !== '' && Number.isFinite(costNum) ? costNum : costRaw;
+        ws.addRow([groupCol, code, name, costCell]);
     }
     ws.getColumn(1).width = 14;
     ws.getColumn(2).width = 12;
     ws.getColumn(3).width = 24;
+    ws.getColumn(4).width = 10;
     const buf = await wb.xlsx.writeBuffer();
     return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

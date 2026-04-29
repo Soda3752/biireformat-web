@@ -19,8 +19,14 @@ import {localSettings} from '@/infra/local-settings-store';
 export interface CargoItem {
   id: string;
   name: string;
-  deliveryFee: number;
+    /** null 代表 cargo_sort.csv 中此商品的代送費欄位為空白（未填） */
+    deliveryFee: number | null;
 }
+
+export type DeliveryFeeStatus =
+    | { kind: 'filled'; fee: number }
+    | { kind: 'unfilled' }
+    | { kind: 'missing' };
 
 export interface SortingList {
   cargoItems: ReadonlyArray<CargoItem>;
@@ -76,14 +82,20 @@ export function parseCargoSortCsv(text: string): SortingList {
     // 跳過第一列標題
     for (let i = 1; i < parsed.data.length; i++) {
         const row = parsed.data[i];
-        if (!row || row.length < 3) continue;
-        const fee = Number(String(row[2]).trim());
-        if (Number.isNaN(fee)) continue;
-        items.push({
-            id: String(row[0]).trim(),
-            name: String(row[1]).trim(),
-            deliveryFee: fee,
-        });
+        if (!row || row.length < 2) continue;
+        const id = String(row[0] ?? '').trim();
+        const name = String(row[1] ?? '').trim();
+        if (name.length === 0) continue;
+        const feeRaw = String(row[2] ?? '').trim();
+        let deliveryFee: number | null;
+        if (feeRaw.length === 0) {
+            deliveryFee = null;
+        } else {
+            const fee = Number(feeRaw);
+            if (Number.isNaN(fee)) continue;
+            deliveryFee = fee;
+        }
+        items.push({id, name, deliveryFee});
     }
 
     return {
@@ -117,5 +129,19 @@ export function getCargoByName(name: string): CargoItem | undefined {
 }
 
 export function getDeliveryFee(name: string): number | undefined {
-  return getCargoByName(name)?.deliveryFee;
+    const fee = getCargoByName(name)?.deliveryFee;
+    return typeof fee === 'number' ? fee : undefined;
+}
+
+/**
+ * 判定商品在 cargo_sort.csv 中的代送費登錄狀態：
+ *  - missing：商品名根本不在 csv
+ *  - unfilled：在 csv 但「代送費」欄位為空白（須補登）
+ *  - filled：已有正常代送費（含 0，視為合法零代送費）
+ */
+export function findDeliveryFeeStatus(name: string): DeliveryFeeStatus {
+    const item = getCargoByName(name);
+    if (!item) return {kind: 'missing'};
+    if (item.deliveryFee === null) return {kind: 'unfilled'};
+    return {kind: 'filled', fee: item.deliveryFee};
 }
