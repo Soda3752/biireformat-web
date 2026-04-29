@@ -13,6 +13,7 @@ export type IconName =
   | 'alert'
   | 'info'
     | 'document'
+    | 'chart'
     | 'settings'
     | 'plus'
     | 'trash'
@@ -46,6 +47,8 @@ const PATHS: Record<IconName, string> = {
     '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
   document:
     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+    chart:
+        '<line x1="3" y1="21" x2="21" y2="21"/><rect x="5" y="13" width="3" height="6"/><rect x="10.5" y="9" width="3" height="10"/><rect x="16" y="5" width="3" height="14"/>',
     download:
         '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
     settings:

@@ -12,3 +12,4 @@ dist-ssr
 npm-debug.log*
 /CLAUDE.md
 /.ref/
+/.claude/

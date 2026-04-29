@@ -25,3 +25,15 @@ export function parseDayOfMonth(dateString: string): number {
 export function parseMonth(dateString: string): number {
   return parseDate(dateString).getMonth() + 1;
 }
+
+/**
+ * 從民國年 + 月 + 日推算星期（0=週日, 1=週一, ..., 6=週六）。
+ * 民國年 + 1911 = 西元年。
+ */
+export function getWeekday(minguoYear: number | string, month: number, day: number): number {
+  const y = Number(minguoYear) + 1911;
+  return new Date(y, month - 1, day).getDay();
+}
+
+/** 0~6 對應的中文短名 */
+export const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'] as const;
