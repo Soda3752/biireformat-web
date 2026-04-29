@@ -32,10 +32,8 @@ import {
     anomalyOption,
     categoryTreemapOption,
     customerParetoOption,
-    customerProductHeatmapOption,
     customerTopOption,
     dailyTrendOption,
-    dateProductHeatmapOption,
     detectAnomalies,
     linePieOption,
     monthOverMonthOption,
@@ -147,10 +145,15 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     let filterState: FilterState = {...EMPTY_FILTER};
     let resizeCleanup: (() => void) | null = null;
 
-    // ===== 圖表切換按鈕的當下狀態 =====
+    // ===== 圖表切換按鈕的當下狀態（每張圖獨立） =====
     let dailyMetric: 'amount' | 'count' = 'amount';
     let productMetric: 'amount' | 'count' = 'amount';
     let weekdayMetric: 'amount' | 'count' = 'amount';
+    let linePieMetric: 'amount' | 'count' = 'amount';
+    let customerTopMetric: 'amount' | 'count' = 'amount';
+    let categoryMetric: 'amount' | 'count' = 'amount';
+    let paretoMetric: 'amount' | 'count' = 'amount';
+    let anomalyMetric: 'amount' | 'count' = 'amount';
 
     // ===== 子元件 =====
     const detailTable = createDetailTable();
@@ -189,8 +192,12 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             },
             {
                 id: 'line-pie',
-                title: '線別營收佔比',
-                build: (rows) => (rows.length === 0 ? null : linePieOption(rows)),
+                title: '線別佔比',
+                makeControls: () => makeMetricSwitch('amount', (v) => {
+                    linePieMetric = v;
+                    void renderAll();
+                }, () => linePieMetric),
+                build: (rows) => (rows.length === 0 ? null : linePieOption(rows, linePieMetric)),
             },
             {
                 id: 'product-top',
@@ -204,12 +211,20 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             {
                 id: 'customer-top',
                 title: '客戶銷售 Top 10',
-                build: (rows) => (rows.length === 0 ? null : customerTopOption(rows)),
+                makeControls: () => makeMetricSwitch('amount', (v) => {
+                    customerTopMetric = v;
+                    void renderAll();
+                }, () => customerTopMetric),
+                build: (rows) => (rows.length === 0 ? null : customerTopOption(rows, customerTopMetric)),
             },
             {
                 id: 'category-treemap',
                 title: '商品分類佔比',
-                build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows)),
+                makeControls: () => makeMetricSwitch('amount', (v) => {
+                    categoryMetric = v;
+                    void renderAll();
+                }, () => categoryMetric),
+                build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows, categoryMetric)),
             },
             {
                 id: 'payment-mode',
@@ -220,7 +235,11 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 id: 'customer-pareto',
                 title: '客戶 80/20 帕累托',
                 wide: true,
-                build: (rows) => (rows.length === 0 ? null : customerParetoOption(rows)),
+                makeControls: () => makeMetricSwitch('amount', (v) => {
+                    paretoMetric = v;
+                    void renderAll();
+                }, () => paretoMetric),
+                build: (rows) => (rows.length === 0 ? null : customerParetoOption(rows, paretoMetric)),
             },
             {
                 id: 'weekday-heat',
@@ -232,22 +251,14 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 build: (rows) => (rows.length === 0 ? null : weekdayOption(rows, weekdayMetric)),
             },
             {
-                id: 'customer-product-heatmap',
-                title: '客戶 × 商品 熱力圖（Top 15 × Top 15）',
-                wide: true,
-                build: (rows) => (rows.length === 0 ? null : customerProductHeatmapOption(rows)),
-            },
-            {
-                id: 'date-product-heatmap',
-                title: '日期 × 商品 熱力圖',
-                wide: true,
-                build: (rows) => (rows.length === 0 ? null : dateProductHeatmapOption(rows)),
-            },
-            {
                 id: 'anomaly',
-                title: '銷量異常日偵測（|z|>2）',
+                title: '異常日偵測（|z|>2）',
                 wide: true,
-                build: (rows) => (rows.length === 0 ? null : anomalyOption(rows)),
+                makeControls: () => makeMetricSwitch('amount', (v) => {
+                    anomalyMetric = v;
+                    void renderAll();
+                }, () => anomalyMetric),
+                build: (rows) => (rows.length === 0 ? null : anomalyOption(rows, anomalyMetric)),
             },
             {
                 id: 'month-over-month',
@@ -316,10 +327,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 // p.name 形如「客戶名(代碼)」，反推回 code
                 const m = /\(([^()]+)\)$/.exec(p.name);
                 if (m) filterUi.applyPatch({customerCodes: new Set([m[1]])});
-            } else if ((slot.id === 'customer-product-heatmap' || slot.id === 'date-product-heatmap') && p.data) {
-                // heatmap data: [xIdx, yIdx, value]
-                // 此處不解析具體 product/customer，只跳到明細表
-                detailTable.scrollIntoView();
             }
         });
     };
@@ -377,8 +384,8 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         // 明細表
         detailTable.setRows(filteredRows);
 
-        // 異常清單寫到 status 區
-        const {anomalies} = detectAnomalies(filteredRows);
+        // 異常清單寫到 status 區（依當前異常圖的 metric）
+        const {anomalies} = detectAnomalies(filteredRows, anomalyMetric);
         const anomalyHint = anomalies.length > 0 ? `　|　偵測到 ${anomalies.length} 個異常日（${anomalies.map((a) => `${a.day}日`).join(', ')}）` : '';
 
         statusEl.textContent = `已載入 ${dataset.files.length} 檔 / 篩選後 ${filteredRows.length.toLocaleString()} 筆 / 原始 ${dataset.rows.length.toLocaleString()} 筆${anomalyHint}`;

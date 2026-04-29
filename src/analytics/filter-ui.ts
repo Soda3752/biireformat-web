@@ -56,6 +56,10 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
       <select multiple size="1" data-role="customer-select" class="analytics-filter-select"></select>
     </div>
     <div class="analytics-filter-group">
+      <label class="analytics-filter-label">排除客戶</label>
+      <select multiple size="1" data-role="excluded-customer-select" class="analytics-filter-select"></select>
+    </div>
+    <div class="analytics-filter-group">
       <label class="analytics-filter-label">商品</label>
       <select multiple size="1" data-role="product-select" class="analytics-filter-select"></select>
     </div>
@@ -81,6 +85,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
     const lineChipsHost = root.querySelector<HTMLElement>('[data-role="line-chips"]')!;
     const categoryChipsHost = root.querySelector<HTMLElement>('[data-role="category-chips"]')!;
     const customerSelect = root.querySelector<HTMLSelectElement>('[data-role="customer-select"]')!;
+    const excludedCustomerSelect = root.querySelector<HTMLSelectElement>('[data-role="excluded-customer-select"]')!;
     const productSelect = root.querySelector<HTMLSelectElement>('[data-role="product-select"]')!;
     const payChips = root.querySelectorAll<HTMLButtonElement>('[data-pay]');
     const fileChipsHost = root.querySelector<HTMLElement>('[data-role="file-chips"]')!;
@@ -118,7 +123,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
     };
 
     const toggleSet = (
-        key: 'lines' | 'categories' | 'fileIds' | 'customerCodes' | 'productNames',
+        key: 'lines' | 'categories' | 'fileIds' | 'customerCodes' | 'excludedCustomerCodes' | 'productNames',
         value: string
     ) => {
         const cur = state[key];
@@ -135,6 +140,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
         refreshChips();
         refreshPayChips();
         syncSelectMulti(customerSelect, state.customerCodes);
+        syncSelectMulti(excludedCustomerSelect, state.excludedCustomerCodes);
         syncSelectMulti(productSelect, state.productNames);
         options.onChange(state);
     };
@@ -183,6 +189,12 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
         state = {...state, customerCodes: set.size === 0 ? null : set};
         options.onChange(state);
     });
+    excludedCustomerSelect.addEventListener('change', () => {
+        const set = new Set<string>();
+        for (const opt of Array.from(excludedCustomerSelect.selectedOptions)) set.add(opt.value);
+        state = {...state, excludedCustomerCodes: set.size === 0 ? null : set};
+        options.onChange(state);
+    });
     productSelect.addEventListener('change', () => {
         const set = new Set<string>();
         for (const opt of Array.from(productSelect.selectedOptions)) set.add(opt.value);
@@ -197,6 +209,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
         refreshChips();
         refreshPayChips();
         syncSelectMulti(customerSelect, null);
+        syncSelectMulti(excludedCustomerSelect, null);
         syncSelectMulti(productSelect, null);
         options.onChange(state);
     });
@@ -219,10 +232,12 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
             categoryOptions = [...categorySet].sort().map((v) => ({value: v, label: v}));
             fileOptions = dataset.files.map((f) => ({value: f.id, label: `${f.year}/${f.month} ${f.name}`}));
 
-            customerSelect.innerHTML = [...customerMap]
-                .sort((a, b) => a[1].localeCompare(b[1]))
+            const customerOptionsHtml = [...customerMap]
+                .sort((a, b) => compareCustomerCode(a[0], b[0]))
                 .map(([code, label]) => `<option value="${escapeHtml(code)}">${escapeHtml(label)}</option>`)
                 .join('');
+            customerSelect.innerHTML = customerOptionsHtml;
+            excludedCustomerSelect.innerHTML = customerOptionsHtml;
             productSelect.innerHTML = [...productSet]
                 .sort()
                 .map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`)
@@ -232,6 +247,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
             refreshChips();
             refreshPayChips();
             syncSelectMulti(customerSelect, state.customerCodes);
+            syncSelectMulti(excludedCustomerSelect, state.excludedCustomerCodes);
             syncSelectMulti(productSelect, state.productNames);
         },
         applyPatch(patch) {
@@ -242,6 +258,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
             refreshChips();
             refreshPayChips();
             syncSelectMulti(customerSelect, state.customerCodes);
+            syncSelectMulti(excludedCustomerSelect, state.excludedCustomerCodes);
             syncSelectMulti(productSelect, state.productNames);
             options.onChange(state);
         },
@@ -252,6 +269,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
             refreshChips();
             refreshPayChips();
             syncSelectMulti(customerSelect, null);
+            syncSelectMulti(excludedCustomerSelect, null);
             syncSelectMulti(productSelect, null);
             options.onChange(state);
         },
@@ -271,6 +289,17 @@ function syncSelectMulti(select: HTMLSelectElement, set: ReadonlySet<string> | n
     Array.from(select.options).forEach((opt) => {
         opt.selected = set ? set.has(opt.value) : false;
     });
+}
+
+function compareCustomerCode(a: string, b: string): number {
+    const numA = Number(a);
+    const numB = Number(b);
+    const aIsNum = Number.isFinite(numA);
+    const bIsNum = Number.isFinite(numB);
+    if (aIsNum && bIsNum) return numA - numB;
+    if (aIsNum) return -1;
+    if (bIsNum) return 1;
+    return a.localeCompare(b);
 }
 
 function escapeHtml(value: string): string {

@@ -8,6 +8,7 @@ export interface FilterState {
     fileIds: ReadonlySet<string> | null;
     lines: ReadonlySet<string> | null;
     customerCodes: ReadonlySet<string> | null;
+    excludedCustomerCodes: ReadonlySet<string> | null;
     productNames: ReadonlySet<string> | null;
     categories: ReadonlySet<string> | null;
     dayMin: number | null; // 1~31，null 表示不限
@@ -21,6 +22,7 @@ export const EMPTY_FILTER: FilterState = {
     fileIds: null,
     lines: null,
     customerCodes: null,
+    excludedCustomerCodes: null,
     productNames: null,
     categories: null,
     dayMin: null,
@@ -45,6 +47,7 @@ export function applyFilter(
 function matchRow(r: AnalyticsRow, f: FilterState): boolean {
     if (f.fileIds && !f.fileIds.has(r.fileId)) return false;
     if (f.lines && !f.lines.has(r.line)) return false;
+    if (f.excludedCustomerCodes && f.excludedCustomerCodes.has(r.customerCode)) return false;
     if (f.customerCodes && !f.customerCodes.has(r.customerCode)) return false;
     if (f.productNames && !f.productNames.has(r.productName)) return false;
     if (f.categories && !f.categories.has(r.category)) return false;
@@ -61,6 +64,7 @@ export function isFilterActive(f: FilterState): boolean {
         f.fileIds !== null ||
         f.lines !== null ||
         f.customerCodes !== null ||
+        f.excludedCustomerCodes !== null ||
         f.productNames !== null ||
         f.categories !== null ||
         f.dayMin !== null ||

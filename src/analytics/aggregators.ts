@@ -54,9 +54,13 @@ export function customerLabel(rows: ReadonlyArray<AnalyticsRow>): Map<string, st
 }
 
 /** 依「客戶」分組（用 customerCode 為 key，但顯示用 name+code） */
-export function groupByCustomer(rows: ReadonlyArray<AnalyticsRow>, desc = true): GroupSum[] {
+export function groupByCustomer(
+    rows: ReadonlyArray<AnalyticsRow>,
+    sortBy: 'amount' | 'count' = 'amount',
+    desc = true
+): GroupSum[] {
     const labelMap = customerLabel(rows);
-    const groups = groupBy(rows, 'customerCode', 'amount', desc);
+    const groups = groupBy(rows, 'customerCode', sortBy, desc);
     return groups.map((g) => ({...g, key: labelMap.get(g.key) ?? g.key}));
 }
 
@@ -132,49 +136,3 @@ export function sumCount(rows: ReadonlyArray<AnalyticsRow>): number {
     return s;
 }
 
-/** 二維交叉聚合：回傳 yKeys、xKeys、values（[yIdx, xIdx, value] 格式給 ECharts heatmap） */
-export interface CrossMatrix {
-    xKeys: string[];
-    yKeys: string[];
-    values: Array<[number, number, number]>; // [xIdx, yIdx, value]  ← ECharts 慣例
-    max: number;
-    min: number;
-}
-
-export function crossAggregate<KX extends keyof AnalyticsRow, KY extends keyof AnalyticsRow>(
-    rows: ReadonlyArray<AnalyticsRow>,
-    xKey: KX,
-    yKey: KY,
-    metric: 'amount' | 'count' = 'amount',
-    topX = 15,
-    topY = 15
-): CrossMatrix {
-    const xTop = topN(groupBy(rows, xKey, metric, true), topX).map((g) => g.key);
-    const yTop = topN(groupBy(rows, yKey, metric, true), topY).map((g) => g.key);
-    const xSet = new Set(xTop);
-    const ySet = new Set(yTop);
-    const xIdx = new Map(xTop.map((k, i) => [k, i]));
-    const yIdx = new Map(yTop.map((k, i) => [k, i]));
-
-    const matrix = new Map<string, number>();
-    for (const r of rows) {
-        const xv = String(r[xKey]);
-        const yv = String(r[yKey]);
-        if (!xSet.has(xv) || !ySet.has(yv)) continue;
-        const k = `${xv}|||${yv}`;
-        matrix.set(k, (matrix.get(k) ?? 0) + (metric === 'amount' ? r.amount : r.count));
-    }
-
-    const values: Array<[number, number, number]> = [];
-    let max = 0;
-    let min = Infinity;
-    for (const [k, v] of matrix) {
-        const [xv, yv] = k.split('|||');
-        values.push([xIdx.get(xv)!, yIdx.get(yv)!, v]);
-        if (v > max) max = v;
-        if (v < min) min = v;
-    }
-    if (min === Infinity) min = 0;
-
-    return {xKeys: xTop, yKeys: yTop, values, max, min};
-}
