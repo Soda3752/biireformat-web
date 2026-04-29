@@ -37,7 +37,6 @@ import {
     detectAnomalies,
     linePieOption,
     monthOverMonthOption,
-    paymentModeOption,
     productTopOption,
     weekdayOption,
 } from '@/analytics/chart-options';
@@ -191,13 +190,13 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 build: (rows) => (rows.length === 0 ? null : dailyTrendOption(rows, dailyMetric)),
             },
             {
-                id: 'line-pie',
-                title: '線別佔比',
+                id: 'weekday-heat',
+                title: '星期銷售熱度',
                 makeControls: () => makeMetricSwitch('amount', (v) => {
-                    linePieMetric = v;
+                    weekdayMetric = v;
                     void renderAll();
-                }, () => linePieMetric),
-                build: (rows) => (rows.length === 0 ? null : linePieOption(rows, linePieMetric)),
+                }, () => weekdayMetric),
+                build: (rows) => (rows.length === 0 ? null : weekdayOption(rows, weekdayMetric)),
             },
             {
                 id: 'product-top',
@@ -227,11 +226,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows, categoryMetric)),
             },
             {
-                id: 'payment-mode',
-                title: '結帳模式分佈',
-                build: (rows) => (rows.length === 0 ? null : paymentModeOption(rows)),
-            },
-            {
                 id: 'customer-pareto',
                 title: '客戶 80/20 帕累托',
                 wide: true,
@@ -242,13 +236,13 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 build: (rows) => (rows.length === 0 ? null : customerParetoOption(rows, paretoMetric)),
             },
             {
-                id: 'weekday-heat',
-                title: '星期銷售熱度',
+                id: 'line-pie',
+                title: '線別佔比',
                 makeControls: () => makeMetricSwitch('amount', (v) => {
-                    weekdayMetric = v;
+                    linePieMetric = v;
                     void renderAll();
-                }, () => weekdayMetric),
-                build: (rows) => (rows.length === 0 ? null : weekdayOption(rows, weekdayMetric)),
+                }, () => linePieMetric),
+                build: (rows) => (rows.length === 0 ? null : linePieOption(rows, linePieMetric)),
             },
             {
                 id: 'anomaly',

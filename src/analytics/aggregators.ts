@@ -97,23 +97,6 @@ export function weekdaySeries(rows: ReadonlyArray<AnalyticsRow>): DailyPoint[] {
     return [...map.values()];
 }
 
-/** 結帳模式重疊計數：回傳每個模式的客戶數（distinct customerCode） */
-export function paymentModeCounts(
-    rows: ReadonlyArray<AnalyticsRow>
-): { monthly: number; needTex: number; cash: number; total: number } {
-    const monthly = new Set<string>();
-    const needTex = new Set<string>();
-    const cash = new Set<string>();
-    const all = new Set<string>();
-    for (const r of rows) {
-        all.add(r.customerCode);
-        if (r.isMonthly) monthly.add(r.customerCode);
-        if (r.isNeedTex) needTex.add(r.customerCode);
-        if (r.isCashUser) cash.add(r.customerCode);
-    }
-    return {monthly: monthly.size, needTex: needTex.size, cash: cash.size, total: all.size};
-}
-
 /** distinct count */
 export function distinctCount<K extends keyof AnalyticsRow>(
     rows: ReadonlyArray<AnalyticsRow>,

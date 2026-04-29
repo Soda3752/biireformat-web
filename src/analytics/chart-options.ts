@@ -10,7 +10,7 @@
 
 import type {EChartsOption} from 'echarts';
 import type {AnalyticsDataset, AnalyticsRow} from './dataset-builder';
-import {dailySeries, groupBy, groupByCustomer, paymentModeCounts, topN, weekdaySeries,} from './aggregators';
+import {dailySeries, groupBy, groupByCustomer, topN, weekdaySeries,} from './aggregators';
 import {WEEKDAY_NAMES} from '@/domain/date-utility';
 
 const fmtMoney = (v: number) => v.toLocaleString('zh-TW');
@@ -118,53 +118,6 @@ export function customerTopOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'am
                 data: groups.map((g) => (metric === 'amount' ? g.amount : g.count)),
                 itemStyle: {borderRadius: [0, 4, 4, 0], color: '#5b8def'},
                 label: {show: true, position: 'right', fontSize: 11, formatter: (p) => fmtMoney(Number(p.value))},
-            },
-        ],
-    };
-}
-
-/* ================ T2.2 結帳模式（重疊計數） ================ */
-export function paymentModeOption(rows: ReadonlyArray<AnalyticsRow>): EChartsOption {
-    const c = paymentModeCounts(rows);
-    const total = c.total || 1;
-    const data = [
-        {name: '月結', value: c.monthly},
-        {name: '含稅', value: c.needTex},
-        {name: '現金', value: c.cash},
-    ];
-    return {
-        grid: {top: 30, right: 20, bottom: 40, left: 50},
-        tooltip: {
-            trigger: 'axis',
-            formatter: (params) => {
-                const arr = Array.isArray(params) ? params : [params];
-                const p = arr[0] as { value: number; name: string; axisValue?: string };
-                const v = Number(p.value);
-                return `${p.axisValue ?? p.name}: ${v} 人（${((v / total) * 100).toFixed(1)}%）`;
-            },
-        },
-        xAxis: {type: 'category', data: data.map((d) => d.name)},
-        yAxis: {type: 'value', name: '客戶數', minInterval: 1},
-        title: {
-            text: '同一客戶可同時屬於多類，總和可能 > 100%',
-            left: 'center',
-            top: 'bottom',
-            textStyle: {fontSize: 11, fontWeight: 'normal', color: '#888'},
-        },
-        series: [
-            {
-                type: 'bar',
-                data: data.map((d) => d.value),
-                itemStyle: {color: '#7ac74f', borderRadius: [4, 4, 0, 0]},
-                label: {
-                    show: true,
-                    position: 'top',
-                    fontSize: 12,
-                    formatter: (p) => {
-                        const v = Number(p.value);
-                        return `${v}\n(${((v / total) * 100).toFixed(0)}%)`;
-                    },
-                },
             },
         ],
     };
