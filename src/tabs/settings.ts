@@ -13,7 +13,7 @@ import {saveAs} from 'file-saver';
 
 import {localSettings} from '@/infra/local-settings-store';
 import {invalidateSortingList, loadSortingList,} from '@/domain/sorting-list';
-import {invalidateDailyReportTemplate} from '@/domain/daily-report-loader';
+import {invalidateDailyReportTemplate, onDailyReportChanged} from '@/domain/daily-report-loader';
 import {
     BANK_INFO_HEADER,
     invalidateBankInfos,
@@ -472,6 +472,18 @@ function bindDailyPane(panel: HTMLElement): void {
         rows = await loadDailyRows();
         renderTable();
     })();
+
+    // 訂閱外部變更（例：數據分析頁加入未分類商品）→ 重新讀取並重繪表格
+    onDailyReportChanged(() => {
+        void (async () => {
+            try {
+                rows = await loadDailyRows();
+                renderTable();
+            } catch (err) {
+                console.error('[settings] daily 重新載入失敗', err);
+            }
+        })();
+    });
 
     addBtn.addEventListener('click', () => {
         const lastGroup = rows.length > 0 ? rows[rows.length - 1].group : '';

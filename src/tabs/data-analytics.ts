@@ -26,15 +26,14 @@ import {
 import {applyFilter, EMPTY_FILTER, type FilterState} from '@/analytics/filter-engine';
 import {createFilterUi} from '@/analytics/filter-ui';
 import {createDetailTable, rowsToCsv} from '@/analytics/detail-table';
+import {openUncategorizedDialog} from '@/analytics/uncategorized-dialog';
 import {type ChartHandle, createChart, observeChartsResize} from '@/analytics/chart-manager';
 import {computeKpi, renderKpiCards} from '@/analytics/kpi';
 import {
-    anomalyOption,
     categoryTreemapOption,
     customerParetoOption,
     customerTopOption,
     dailyTrendOption,
-    detectAnomalies,
     linePieOption,
     monthOverMonthOption,
     productTopOption,
@@ -48,13 +47,25 @@ interface LoadedBillRecord {
     bill: Bill;
 }
 
+/** 金額/數量切換按鈕 handle：暴露 element 與一個由外部觸發的 refresh */
+interface MetricSwitchHandle {
+    element: HTMLElement;
+    refresh: () => void;
+}
+
 /** 圖表 slot：對應 panel 內某個圖表卡的容器 + chart instance */
 interface ChartSlot {
     id: string;
     title: string;
     container: HTMLElement;
     pngBtn: HTMLButtonElement;
+    expandBtn: HTMLButtonElement;
     chart: ChartHandle | null;
+    modalChart: ChartHandle | null;
+    /** 同一個 slot 可能有 header 與 modal 兩個 metric switch，需同步重繪狀態 */
+    metricRefreshers: Set<() => void>;
+    /** 用於 modal 內動態建立同樣的 metric switch；無 controls 的 slot 為 null */
+    makeControls: (() => MetricSwitchHandle) | null;
     /** 篩選後的 rows + 完整 dataset，產出 EChartsOption。回傳 null 表示無資料。 */
     build: (rows: ReadonlyArray<AnalyticsRow>, dataset: AnalyticsDataset) => unknown | null;
 }
@@ -152,7 +163,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     let customerTopMetric: 'amount' | 'count' = 'amount';
     let categoryMetric: 'amount' | 'count' = 'amount';
     let paretoMetric: 'amount' | 'count' = 'amount';
-    let anomalyMetric: 'amount' | 'count' = 'amount';
 
     // ===== 子元件 =====
     const detailTable = createDetailTable();
@@ -174,85 +184,81 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             id: string;
             title: string;
             wide?: boolean;
-            makeControls?: () => HTMLElement;
+            makeControls?: (slot: ChartSlot) => MetricSwitchHandle;
             build: ChartSlot['build'];
         }
+
+        // metric switch 共用 helper：onChange 由呼叫端決定如何更新狀態
+        const metricSwitchFor = (
+            slot: ChartSlot,
+            getter: () => 'amount' | 'count',
+            setter: (v: 'amount' | 'count') => void
+        ): MetricSwitchHandle =>
+            makeMetricSwitch((v) => {
+                setter(v);
+                slot.metricRefreshers.forEach((fn) => fn());
+                void renderAll();
+            }, getter);
 
         const list: SlotDef[] = [
             {
                 id: 'daily-trend',
                 title: '每日營收趨勢',
                 wide: true,
-                makeControls: () => makeMetricSwitch('amount', (v) => {
+                makeControls: (slot) => metricSwitchFor(slot, () => dailyMetric, (v) => {
                     dailyMetric = v;
-                    void renderAll();
-                }, () => dailyMetric),
+                }),
                 build: (rows) => (rows.length === 0 ? null : dailyTrendOption(rows, dailyMetric)),
             },
             {
                 id: 'weekday-heat',
                 title: '星期銷售熱度',
-                makeControls: () => makeMetricSwitch('amount', (v) => {
+                makeControls: (slot) => metricSwitchFor(slot, () => weekdayMetric, (v) => {
                     weekdayMetric = v;
-                    void renderAll();
-                }, () => weekdayMetric),
+                }),
                 build: (rows) => (rows.length === 0 ? null : weekdayOption(rows, weekdayMetric)),
             },
             {
                 id: 'product-top',
                 title: '商品銷售 Top 10',
-                makeControls: () => makeMetricSwitch('amount', (v) => {
+                makeControls: (slot) => metricSwitchFor(slot, () => productMetric, (v) => {
                     productMetric = v;
-                    void renderAll();
-                }, () => productMetric),
+                }),
                 build: (rows) => (rows.length === 0 ? null : productTopOption(rows, productMetric)),
             },
             {
                 id: 'customer-top',
                 title: '客戶銷售 Top 10',
-                makeControls: () => makeMetricSwitch('amount', (v) => {
+                makeControls: (slot) => metricSwitchFor(slot, () => customerTopMetric, (v) => {
                     customerTopMetric = v;
-                    void renderAll();
-                }, () => customerTopMetric),
+                }),
                 build: (rows) => (rows.length === 0 ? null : customerTopOption(rows, customerTopMetric)),
             },
             {
-                id: 'category-treemap',
-                title: '商品分類佔比',
-                makeControls: () => makeMetricSwitch('amount', (v) => {
-                    categoryMetric = v;
-                    void renderAll();
-                }, () => categoryMetric),
-                build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows, categoryMetric)),
+                id: 'line-pie',
+                title: '線別佔比',
+                makeControls: (slot) => metricSwitchFor(slot, () => linePieMetric, (v) => {
+                    linePieMetric = v;
+                }),
+                build: (rows) => (rows.length === 0 ? null : linePieOption(rows, linePieMetric)),
             },
             {
                 id: 'customer-pareto',
                 title: '客戶 80/20 帕累托',
                 wide: true,
-                makeControls: () => makeMetricSwitch('amount', (v) => {
+                makeControls: (slot) => metricSwitchFor(slot, () => paretoMetric, (v) => {
                     paretoMetric = v;
-                    void renderAll();
-                }, () => paretoMetric),
+                }),
                 build: (rows) => (rows.length === 0 ? null : customerParetoOption(rows, paretoMetric)),
             },
             {
-                id: 'line-pie',
-                title: '線別佔比',
-                makeControls: () => makeMetricSwitch('amount', (v) => {
-                    linePieMetric = v;
-                    void renderAll();
-                }, () => linePieMetric),
-                build: (rows) => (rows.length === 0 ? null : linePieOption(rows, linePieMetric)),
-            },
-            {
-                id: 'anomaly',
-                title: '異常日偵測（|z|>2）',
+                id: 'category-treemap',
+                title: '商品分類佔比',
                 wide: true,
-                makeControls: () => makeMetricSwitch('amount', (v) => {
-                    anomalyMetric = v;
-                    void renderAll();
-                }, () => anomalyMetric),
-                build: (rows) => (rows.length === 0 ? null : anomalyOption(rows, anomalyMetric)),
+                makeControls: (slot) => metricSwitchFor(slot, () => categoryMetric, (v) => {
+                    categoryMetric = v;
+                }),
+                build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows, categoryMetric)),
             },
             {
                 id: 'month-over-month',
@@ -276,52 +282,80 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
 
             const headerRight = document.createElement('div');
             headerRight.className = 'analytics-chart-header-right';
-            const ctlEl = s.makeControls ? s.makeControls() : null;
-            if (ctlEl) headerRight.appendChild(ctlEl);
+
             const pngBtn = document.createElement('button');
             pngBtn.type = 'button';
             pngBtn.className = 'analytics-chart-png-btn';
             pngBtn.title = '下載 PNG';
             pngBtn.innerHTML = icon('download', 14);
-            headerRight.appendChild(pngBtn);
-            header.appendChild(headerRight);
 
-            card.appendChild(header);
+            const expandBtn = document.createElement('button');
+            expandBtn.type = 'button';
+            expandBtn.className = 'analytics-chart-expand-btn';
+            expandBtn.title = '放大檢視';
+            expandBtn.setAttribute('aria-label', '放大檢視');
+            expandBtn.innerHTML = icon('maximize', 14);
 
             const body = document.createElement('div');
             body.className = 'analytics-chart-body';
-            card.appendChild(body);
 
-            chartGridHost.appendChild(card);
-
-            built.push({
+            const slot: ChartSlot = {
                 id: s.id,
                 title: s.title,
                 container: body,
                 pngBtn,
+                expandBtn,
                 chart: null,
+                modalChart: null,
+                metricRefreshers: new Set(),
+                makeControls: null,
                 build: s.build,
-            });
+            };
+            if (s.makeControls) {
+                const factory = s.makeControls;
+                slot.makeControls = () => factory(slot);
+                const ms = slot.makeControls();
+                slot.metricRefreshers.add(ms.refresh);
+                headerRight.appendChild(ms.element);
+            }
+
+            headerRight.appendChild(pngBtn);
+            headerRight.appendChild(expandBtn);
+            header.appendChild(headerRight);
+
+            card.appendChild(header);
+            card.appendChild(body);
+            chartGridHost.appendChild(card);
+
+            expandBtn.addEventListener('click', () => openChartModal(slot));
+
+            built.push(slot);
         }
         return built;
     }
 
     // ===== 鑽取（chart click → filterUi.applyPatch） =====
-    const wireDrillDown = (slot: ChartSlot) => {
-        if (!slot.chart) return;
-        slot.chart.off('click');
-        slot.chart.on('click', (params) => {
+    const wireDrillDown = (slot: ChartSlot, handle: ChartHandle, onTrigger?: () => void) => {
+        handle.off('click');
+        handle.on('click', (params) => {
             const p = params as { seriesType?: string; name?: string; data?: unknown };
+            let triggered = false;
             if (slot.id === 'line-pie' && p.name) {
                 filterUi.applyPatch({lines: new Set([p.name])});
+                triggered = true;
             } else if (slot.id === 'product-top' && p.name) {
                 filterUi.applyPatch({productNames: new Set([p.name])});
                 detailTable.scrollIntoView();
+                triggered = true;
             } else if (slot.id === 'customer-top' && p.name) {
                 // p.name 形如「客戶名(代碼)」，反推回 code
                 const m = /\(([^()]+)\)$/.exec(p.name);
-                if (m) filterUi.applyPatch({customerCodes: new Set([m[1]])});
+                if (m) {
+                    filterUi.applyPatch({customerCodes: new Set([m[1]])});
+                    triggered = true;
+                }
             }
+            if (triggered) onTrigger?.();
         });
     };
 
@@ -331,7 +365,7 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             if (slot.chart) continue;
             try {
                 slot.chart = await createChart(slot.container);
-                wireDrillDown(slot);
+                wireDrillDown(slot, slot.chart);
                 slot.pngBtn.addEventListener('click', () => exportSlotPng(slot));
             } catch (err) {
                 console.error('[analytics] chart mount failed', slot.id, err);
@@ -341,6 +375,15 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         const handles = slots.map((s) => s.chart).filter((c): c is ChartHandle => c !== null);
         resizeCleanup = observeChartsResize(handles);
     };
+
+    const EMPTY_CHART_OPTION = {
+        title: {
+            text: '無資料',
+            left: 'center',
+            top: 'center',
+            textStyle: {fontSize: 13, color: '#999'},
+        },
+    } as const;
 
     const renderAll = async () => {
         if (!dataset) return;
@@ -353,22 +396,16 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         // 圖表
         await mountChartsIfNeeded();
         for (const slot of slots) {
-            if (!slot.chart) continue;
-            const opt = slot.build(filteredRows, dataset);
-            if (opt) {
-                slot.chart.setOption(opt as never);
+            const opt = (slot.chart || slot.modalChart) ? slot.build(filteredRows, dataset) : null;
+            const apply = (handle: ChartHandle) => {
+                if (opt) handle.setOption(opt as never);
+                else handle.setOption(EMPTY_CHART_OPTION as never);
+            };
+            if (slot.chart) {
+                apply(slot.chart);
                 slot.container.parentElement!.classList.remove('is-empty');
-            } else {
-                // 無資料時顯示空狀態，但保留 chart instance
-                slot.chart.setOption({
-                    title: {
-                        text: '無資料',
-                        left: 'center',
-                        top: 'center',
-                        textStyle: {fontSize: 13, color: '#999'}
-                    }
-                } as never);
             }
+            if (slot.modalChart) apply(slot.modalChart);
             // month-over-month 只在多檔時顯示卡片
             if (slot.id === 'month-over-month') {
                 slot.container.parentElement!.hidden = dataset.files.length < 2;
@@ -378,11 +415,103 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         // 明細表
         detailTable.setRows(filteredRows);
 
-        // 異常清單寫到 status 區（依當前異常圖的 metric）
-        const {anomalies} = detectAnomalies(filteredRows, anomalyMetric);
-        const anomalyHint = anomalies.length > 0 ? `　|　偵測到 ${anomalies.length} 個異常日（${anomalies.map((a) => `${a.day}日`).join(', ')}）` : '';
+        statusEl.textContent = `已載入 ${dataset.files.length} 檔 / 篩選後 ${filteredRows.length.toLocaleString()} 筆 / 原始 ${dataset.rows.length.toLocaleString()} 筆`;
+    };
 
-        statusEl.textContent = `已載入 ${dataset.files.length} 檔 / 篩選後 ${filteredRows.length.toLocaleString()} 筆 / 原始 ${dataset.rows.length.toLocaleString()} 筆${anomalyHint}`;
+    // ===== 圖表放大彈窗 =====
+    const openChartModal = (slot: ChartSlot) => {
+        if (!dataset) return;
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'app-modal-backdrop';
+
+        const modal = document.createElement('div');
+        modal.className = 'app-modal app-modal--chart';
+
+        const header = document.createElement('div');
+        header.className = 'app-modal-header';
+
+        const titleEl = document.createElement('h2');
+        titleEl.className = 'app-modal-title';
+        titleEl.textContent = slot.title;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'app-modal-close';
+        closeBtn.setAttribute('aria-label', '關閉');
+        closeBtn.innerHTML = icon('close', 18);
+
+        header.appendChild(titleEl);
+        header.appendChild(closeBtn);
+
+        const body = document.createElement('div');
+        body.className = 'app-modal-body';
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'analytics-chart-modal-toolbar';
+
+        let modalSwitchRefresh: (() => void) | null = null;
+        if (slot.makeControls) {
+            const ms = slot.makeControls();
+            modalSwitchRefresh = ms.refresh;
+            slot.metricRefreshers.add(ms.refresh);
+            toolbar.appendChild(ms.element);
+        }
+
+        const chartHost = document.createElement('div');
+        chartHost.className = 'analytics-chart-modal-body';
+
+        body.appendChild(toolbar);
+        body.appendChild(chartHost);
+
+        modal.appendChild(header);
+        modal.appendChild(body);
+        backdrop.appendChild(modal);
+        document.body.appendChild(backdrop);
+
+        let isClosed = false;
+        let resizeObserver: ResizeObserver | null = null;
+        const close = () => {
+            if (isClosed) return;
+            isClosed = true;
+            document.removeEventListener('keydown', onKey);
+            if (modalSwitchRefresh) slot.metricRefreshers.delete(modalSwitchRefresh);
+            if (resizeObserver) resizeObserver.disconnect();
+            if (slot.modalChart) {
+                slot.modalChart.dispose();
+                slot.modalChart = null;
+            }
+            backdrop.remove();
+        };
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                close();
+            }
+        };
+
+        closeBtn.addEventListener('click', close);
+        document.addEventListener('keydown', onKey);
+
+        void (async () => {
+            try {
+                const handle = await createChart(chartHost);
+                if (isClosed) {
+                    handle.dispose();
+                    return;
+                }
+                slot.modalChart = handle;
+                wireDrillDown(slot, handle, close);
+                const filtered = applyFilter(dataset!, filterState);
+                const opt = slot.build(filtered.rows, dataset!);
+                handle.setOption((opt ?? EMPTY_CHART_OPTION) as never);
+                resizeObserver = new ResizeObserver(() => handle.resize());
+                resizeObserver.observe(chartHost);
+                requestAnimationFrame(() => handle.resize());
+            } catch (err) {
+                console.error('[analytics] modal chart mount failed', err);
+            }
+        })();
     };
 
     // ===== 上傳/解析 =====
@@ -469,10 +598,25 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             return;
         }
         unmatchedHost.hidden = false;
-        unmatchedSummary.textContent = `未分類商品（${ds.unmatchedProducts.length}）— 設定頁可補充 daily_report_list 對應`;
+        unmatchedSummary.textContent = `未分類商品（${ds.unmatchedProducts.length}）— 點擊任一項即可加入分類`;
         unmatchedList.innerHTML = ds.unmatchedProducts
-            .map((name) => `<li>${escapeHtml(name)}</li>`)
+            .map(
+                (name) =>
+                    `<li><button type="button" class="analytics-unmatched-chip" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button></li>`
+            )
             .join('');
+        unmatchedList.querySelectorAll<HTMLButtonElement>('.analytics-unmatched-chip').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const name = btn.dataset.name ?? '';
+                if (!name) return;
+                void openUncategorizedDialog({
+                    productName: name,
+                    onSaved: async () => {
+                        await rebuildDataset();
+                    },
+                });
+            });
+        });
     };
 
     const handleFiles = async (files: FileList | File[]) => {
@@ -586,10 +730,9 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
 /* ================ helpers ================ */
 
 function makeMetricSwitch(
-    initial: 'amount' | 'count',
     onChange: (v: 'amount' | 'count') => void,
     getCurrent: () => 'amount' | 'count'
-): HTMLElement {
+): MetricSwitchHandle {
     const wrap = document.createElement('div');
     wrap.className = 'analytics-metric-switch';
     const renderBtns = () => {
@@ -602,15 +745,14 @@ function makeMetricSwitch(
             b.addEventListener('click', () => {
                 const v = b.dataset.v as 'amount' | 'count';
                 if (v !== getCurrent()) {
+                    // onChange 由呼叫端串接 metricRefreshers，會自動重繪本元件
                     onChange(v);
-                    renderBtns();
                 }
             });
         });
     };
     renderBtns();
-    void initial;
-    return wrap;
+    return {element: wrap, refresh: renderBtns};
 }
 
 function escapeHtml(value: string): string {

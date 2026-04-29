@@ -28,6 +28,34 @@ export const invalidateDailyReportTemplate = (): void => {
   cached = null;
 };
 
+/**
+ * 訂閱 daily_report_list 「外部來源」變更事件。
+ *
+ * 設計：本機編輯（設定頁 daily 子分頁）只呼叫 `invalidateDailyReportTemplate()`，
+ * 不會觸發本事件——避免使用者打字時被自己的 listener 打斷光標。
+ * 外部來源（例如數據分析頁的「未分類商品 → 加入分類」彈窗）改呼叫
+ * `notifyDailyReportChanged()`，會清快取並通知所有訂閱者重新載入。
+ */
+const listeners = new Set<() => void>();
+
+export const onDailyReportChanged = (cb: () => void): (() => void) => {
+    listeners.add(cb);
+    return () => {
+        listeners.delete(cb);
+    };
+};
+
+export const notifyDailyReportChanged = (): void => {
+    cached = null;
+    for (const cb of listeners) {
+        try {
+            cb();
+        } catch (err) {
+            console.error('[daily-report-loader] listener error', err);
+        }
+    }
+};
+
 const fetchAndParse = async (): Promise<DailyProductMap> => {
   const text = await readDailyReportCsvText();
   return parseDailyReportCsv(text);
@@ -62,7 +90,7 @@ export function parseDailyReportCsv(text: string): DailyProductMap {
     const name = (row[2] ?? '').trim();
 
     if (groupName.length > 0) currentGroup = groupName;
-    if (code.length > 0 && name.length > 0) {
+      if (name.length > 0) {
       products.push({ code, name, groupName: currentGroup, count: 0 });
     }
   }

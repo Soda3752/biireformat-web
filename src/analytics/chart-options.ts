@@ -248,62 +248,6 @@ export function weekdayOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount
     };
 }
 
-/* ================ T3.3 異常偵測（金額/數量切換） ================ */
-export interface AnomalyPoint {
-    day: number;
-    value: number;
-    zscore: number;
-}
-
-export function detectAnomalies(
-    rows: ReadonlyArray<AnalyticsRow>,
-    metric: 'amount' | 'count' = 'amount'
-): {
-    series: ReturnType<typeof dailySeries>;
-    anomalies: AnomalyPoint[];
-} {
-    const series = dailySeries(rows);
-    if (series.length < 3) return {series, anomalies: []};
-    const values = series.map((p) => (metric === 'amount' ? p.amount : p.count));
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
-    const std = Math.sqrt(variance);
-    const anomalies: AnomalyPoint[] = [];
-    if (std > 0) {
-        for (let i = 0; i < series.length; i++) {
-            const v = values[i];
-            const z = (v - mean) / std;
-            if (Math.abs(z) > 2) anomalies.push({day: series[i].day, value: v, zscore: Number(z.toFixed(2))});
-        }
-    }
-    return {series, anomalies};
-}
-
-export function anomalyOption(rows: ReadonlyArray<AnalyticsRow>, metric: 'amount' | 'count' = 'amount'): EChartsOption {
-    const {series, anomalies} = detectAnomalies(rows, metric);
-    const yData = series.map((p) => (metric === 'amount' ? p.amount : p.count));
-    return {
-        grid: {top: 30, right: 20, bottom: 30, left: 60},
-        tooltip: {trigger: 'axis', valueFormatter: (v) => fmtMoney(Number(v))},
-        xAxis: {type: 'category', data: series.map((p) => `${p.day}日`)},
-        yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
-        series: [
-            {
-                type: 'line',
-                smooth: true,
-                data: yData,
-                lineStyle: {width: 2},
-                markPoint: {
-                    symbol: 'pin',
-                    symbolSize: 50,
-                    itemStyle: {color: '#e74c3c'},
-                    label: {formatter: '異常', fontSize: 10, color: '#fff'},
-                    data: anomalies.map((a) => ({xAxis: `${a.day}日`, yAxis: a.value, name: `z=${a.zscore}`})),
-                },
-            },
-        ],
-    };
-}
 
 /* ================ T3.4 月對月成長 ================ */
 export function monthOverMonthOption(dataset: AnalyticsDataset): EChartsOption {

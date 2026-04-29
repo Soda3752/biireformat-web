@@ -1451,11 +1451,186 @@ p {
 
 .analytics-unmatched-list {
     margin: var(--space-3) 0 0;
-    padding-left: var(--space-5);
+    padding-left: 0;
+    list-style: none;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: var(--space-1);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-2);
     color: var(--color-text-secondary);
+}
+
+.analytics-unmatched-list > li {
+    list-style: none;
+}
+
+.analytics-unmatched-chip {
+    width: 100%;
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-surface);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color var(--motion-fast), border-color var(--motion-fast),
+    transform var(--motion-fast);
+}
+
+.analytics-unmatched-chip:hover {
+    background-color: var(--color-surface-hover);
+    border-color: var(--color-warning);
+    transform: translateY(-1px);
+}
+
+.analytics-unmatched-chip:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+/* 通用 Modal（未分類商品分類對話框） */
+.app-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-toast);
+    padding: var(--space-4);
+    animation: app-modal-fade var(--motion-base);
+}
+
+@keyframes app-modal-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.app-modal {
+    width: min(440px, 100%);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 32px);
+    overflow: hidden;
+    animation: app-modal-pop var(--motion-base);
+}
+
+@keyframes app-modal-pop {
+    from {
+        transform: translateY(8px) scale(0.98);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+}
+
+.app-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.app-modal-title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.app-modal-close {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+
+.app-modal-close:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-primary);
+}
+
+.app-modal-body {
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    overflow-y: auto;
+}
+
+.app-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--color-border);
+    background-color: var(--color-surface-hover);
+}
+
+.app-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.app-form-label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+}
+
+.app-form-hint {
+    font-weight: var(--font-weight-regular);
+    color: var(--color-text-muted);
+    margin-left: var(--space-1);
+}
+
+.app-form-readonly {
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    word-break: break-all;
+}
+
+.app-form-input {
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    width: 100%;
+    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.app-form-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 /* KPI 卡片 */
@@ -1501,7 +1676,8 @@ p {
     gap: var(--space-2);
 }
 
-.analytics-chart-png-btn {
+.analytics-chart-png-btn,
+.analytics-chart-expand-btn {
     width: 26px;
     height: 26px;
     display: grid;
@@ -1514,9 +1690,37 @@ p {
     transition: background-color var(--motion-fast), color var(--motion-fast);
 }
 
-.analytics-chart-png-btn:hover {
+.analytics-chart-png-btn:hover,
+.analytics-chart-expand-btn:hover {
     background-color: var(--color-surface-hover);
     color: var(--color-text-primary);
+}
+
+/* Chart 放大彈窗：覆用 .app-modal-* 結構，加 modifier 撐到 90vw/90vh */
+.app-modal--chart {
+    width: min(90vw, 1600px);
+    max-width: 90vw;
+    height: 90vh;
+    max-height: 90vh;
+}
+
+.app-modal--chart .app-modal-body {
+    flex: 1;
+    padding: var(--space-3) var(--space-4);
+    gap: var(--space-3);
+    overflow: hidden;
+}
+
+.analytics-chart-modal-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+.analytics-chart-modal-body {
+    flex: 1;
+    min-height: 0;
 }
 
 .analytics-chart-body {
