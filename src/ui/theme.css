@@ -928,6 +928,86 @@ p {
   color: var(--color-text-primary);
 }
 
+/* Date shift stepper */
+.date-shift {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.date-shift-label {
+    font-size: var(--font-size-base);
+    color: var(--color-text-primary);
+}
+
+.date-shift-control {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background-color: var(--color-surface);
+}
+
+.date-shift-step {
+    border: none;
+    background-color: transparent;
+    color: var(--color-text-primary);
+    width: 32px;
+    font-size: var(--font-size-lg);
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--motion-fast);
+}
+
+.date-shift-step:hover:not(:disabled) {
+    background-color: var(--color-surface-hover);
+}
+
+.date-shift-step:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.date-shift-input {
+    width: 56px;
+    border: none;
+    border-left: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
+    background-color: transparent;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--font-size-base);
+    color: var(--color-text-primary);
+    padding: var(--space-2) 0;
+    -moz-appearance: textfield;
+}
+
+.date-shift-input:focus {
+    outline: none;
+    background-color: var(--color-surface-hover);
+}
+
+.date-shift-input::-webkit-outer-spin-button,
+.date-shift-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.date-shift.is-disabled {
+    opacity: 0.5;
+}
+
+.date-shift.is-disabled .date-shift-input {
+    cursor: not-allowed;
+}
+
+.date-shift-hint {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
 /* Utilities */
 .stack {
   display: flex;

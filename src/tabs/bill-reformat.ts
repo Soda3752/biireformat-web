@@ -6,11 +6,11 @@
  *  2) 客戶排序：改由「設定 → 客戶排序」管理（不再每次上傳 .xlsx）
  *  3) Switch：半月結 / 全月結
  *  4) 統計區：依線別、月結、現金各列計
- *  5) 開始處理按鈕：呼叫 BillWriter 產出多檔，逐檔下載
- *     （ZIP 整合排在 P5.1，目前以 saveAs 多次觸發）
+ *  5) 開始處理按鈕：呼叫 BillWriter 產出多檔，多檔包成 ZIP 後下載；單檔直接下載
  */
 
 import {saveAs} from 'file-saver';
+import JSZip from 'jszip';
 
 import {createDropZone, type DropZoneController} from '@/ui/drop-zone';
 import {showToast} from '@/ui/toast';
@@ -24,11 +24,15 @@ import {getCashCustomer, getHalfMonthlyCustomer, getMonthlyCustomer,} from '@/wr
 import type {Bill} from '@/domain/models/bill';
 import type {TabDefinition} from '@/ui/tabs';
 
+const DATE_SHIFT_MIN = -30;
+const DATE_SHIFT_MAX = 30;
+
 interface State {
   bill: Bill | null;
   billFileName: string | null;
   isFullMonth: boolean;
   isProcessing: boolean;
+  dateShiftDays: number;
 }
 
 export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
@@ -62,6 +66,23 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
           <span class="toggle-track"><span class="toggle-thumb"></span></span>
           <span class="toggle-label" id="bill-mode-label">輸出半月結</span>
         </label>
+        <div class="date-shift" id="bill-date-shift">
+          <span class="date-shift-label">日期校正</span>
+          <div class="date-shift-control">
+            <button type="button" class="date-shift-step" id="bill-date-shift-dec" aria-label="減一天">−</button>
+            <input
+              type="number"
+              class="date-shift-input"
+              id="bill-date-shift-input"
+              value="0"
+              step="1"
+              min="${DATE_SHIFT_MIN}"
+              max="${DATE_SHIFT_MAX}"
+            />
+            <button type="button" class="date-shift-step" id="bill-date-shift-inc" aria-label="加一天">+</button>
+          </div>
+          <span class="date-shift-hint" id="bill-date-shift-hint"></span>
+        </div>
         <div class="action-bar-actions">
           <button type="button" class="btn btn-primary btn-lg" id="bill-process" disabled>
             開始處理
@@ -76,6 +97,7 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
     billFileName: null,
     isFullMonth: false,
     isProcessing: false,
+    dateShiftDays: 0,
   };
 
     const banner = panel.querySelector<HTMLElement>('[data-role="customer-order-banner"]')!;
@@ -85,6 +107,11 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
   const fullMonthToggle = panel.querySelector<HTMLInputElement>('#bill-full-month')!;
   const modeLabel = panel.querySelector<HTMLElement>('#bill-mode-label')!;
   const processBtn = panel.querySelector<HTMLButtonElement>('#bill-process')!;
+  const dateShiftWrap = panel.querySelector<HTMLElement>('#bill-date-shift')!;
+  const dateShiftInput = panel.querySelector<HTMLInputElement>('#bill-date-shift-input')!;
+  const dateShiftDec = panel.querySelector<HTMLButtonElement>('#bill-date-shift-dec')!;
+  const dateShiftInc = panel.querySelector<HTMLButtonElement>('#bill-date-shift-inc')!;
+  const dateShiftHint = panel.querySelector<HTMLElement>('#bill-date-shift-hint')!;
 
     /* ------ DropZone ------ */
   let billDz: DropZoneController;
@@ -98,14 +125,18 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
         const bill = await processBillFile(file);
         state.bill = bill;
         state.billFileName = file.name;
+        resetDateShift();
         billDz.setStatus('loaded', `${file.name}（${bill.customerModels.length} 位客戶）`);
         renderStats();
+        refreshDateShiftHint();
         refreshButton();
       } catch (err) {
         state.bill = null;
         state.billFileName = null;
+        resetDateShift();
         billDz.setStatus('error', err instanceof Error ? err.message : '解析失敗');
         renderStats();
+        refreshDateShiftHint();
         refreshButton();
         throw err;
       }
@@ -118,6 +149,21 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
   fullMonthToggle.addEventListener('change', () => {
     state.isFullMonth = fullMonthToggle.checked;
     modeLabel.textContent = state.isFullMonth ? '輸出全月結' : '輸出半月結';
+    if (state.isFullMonth) resetDateShift();
+    refreshDateShiftDisabled();
+    refreshDateShiftHint();
+  });
+
+  /* ------ Date shift ------ */
+  dateShiftDec.addEventListener('click', () => applyDateShiftDelta(-1));
+  dateShiftInc.addEventListener('click', () => applyDateShiftDelta(1));
+  dateShiftInput.addEventListener('input', () => {
+    const raw = parseInt(dateShiftInput.value, 10);
+    setDateShift(Number.isFinite(raw) ? raw : 0, false);
+  });
+  dateShiftInput.addEventListener('blur', () => {
+    // 失焦時將輸入值正規化（空白或非數字 → 0；超出範圍夾住）
+    setDateShift(state.dateShiftDays, true);
   });
 
   /* ------ Process ------ */
@@ -128,7 +174,8 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
 
     try {
         const orderList = getCustomerOrderBill().map((e) => e.code);
-        const writer = new BillWriter(state.bill, orderList);
+      const shift = state.isFullMonth ? 0 : state.dateShiftDays;
+      const writer = new BillWriter(state.bill, orderList, shift);
       const files = await writer.write(state.isFullMonth);
 
       if (files.length === 0) {
@@ -140,15 +187,28 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
         return;
       }
 
-      for (const f of files) {
-        saveAs(f.blob, f.filename);
+      if (files.length === 1) {
+        const only = files[0];
+        saveAs(only.blob, only.filename);
+        showToast({
+          variant: 'success',
+          title: '處理完成',
+          message: `已輸出 ${only.filename}`,
+        });
+      } else {
+        const zip = new JSZip();
+        for (const f of files) {
+          zip.file(f.filename, f.blob);
+        }
+        const zipBlob = await zip.generateAsync({type: 'blob'});
+        const zipName = `帳單_${state.bill.billDateInfo.month}月.zip`;
+        saveAs(zipBlob, zipName);
+        showToast({
+          variant: 'success',
+          title: '處理完成',
+          message: `已輸出 ${zipName}（含 ${files.length} 份檔案）`,
+        });
       }
-
-      showToast({
-        variant: 'success',
-        title: '處理完成',
-        message: `已輸出 ${files.length} 份檔案`,
-      });
     } catch (err) {
       console.error(err);
       showToast({
@@ -217,12 +277,60 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
     processBtn.textContent = state.isProcessing ? '處理中…' : '開始處理';
   }
 
+  function clamp(value: number): number {
+    return Math.max(DATE_SHIFT_MIN, Math.min(DATE_SHIFT_MAX, value));
+  }
+
+  function setDateShift(value: number, syncInput: boolean): void {
+    const next = clamp(Math.trunc(value || 0));
+    state.dateShiftDays = next;
+    if (syncInput) dateShiftInput.value = String(next);
+    refreshDateShiftHint();
+  }
+
+  function applyDateShiftDelta(delta: number): void {
+    if (state.isFullMonth) return;
+    setDateShift(state.dateShiftDays + delta, true);
+  }
+
+  function resetDateShift(): void {
+    setDateShift(0, true);
+  }
+
+  function refreshDateShiftDisabled(): void {
+    const disabled = state.isFullMonth;
+    dateShiftInput.disabled = disabled;
+    dateShiftDec.disabled = disabled;
+    dateShiftInc.disabled = disabled;
+    dateShiftWrap.classList.toggle('is-disabled', disabled);
+  }
+
+  function refreshDateShiftHint(): void {
+    if (!state.bill || state.isFullMonth || state.dateShiftDays === 0) {
+      dateShiftHint.textContent = '';
+      return;
+    }
+    const {year, month, dateRange} = state.bill.billDateInfo;
+    if (dateRange.length === 0) {
+      dateShiftHint.textContent = '';
+      return;
+    }
+    const wYear = parseInt(year, 10) + 1911;
+    const mIdx = parseInt(month, 10) - 1;
+    const start = new Date(wYear, mIdx, dateRange[0] + state.dateShiftDays);
+    const end = new Date(wYear, mIdx, dateRange[dateRange.length - 1] + state.dateShiftDays);
+    const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
+    dateShiftHint.textContent = `→ ${fmt(start)}–${fmt(end)}`;
+  }
+
     // 使用者從設定頁回來時 refresh banner
     window.addEventListener('hashchange', () => {
         if (window.location.hash === tab.hash) refreshBanner();
     });
 
     refreshBanner();
+  refreshDateShiftDisabled();
+  refreshDateShiftHint();
 
   return panel;
 }

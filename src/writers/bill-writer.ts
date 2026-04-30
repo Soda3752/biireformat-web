@@ -16,30 +16,25 @@
 
 import ExcelJS from 'exceljs';
 
-import {
-  setColumnWidthPoi,
-  setupPrintSetting,
-  workbookToBlob,
-  createWorkbook,
-} from '@/infra/excel-service';
+import {createWorkbook, setColumnWidthPoi, setupPrintSetting, workbookToBlob,} from '@/infra/excel-service';
 
 import {
   CENTER_LINE_WIDTH_POI,
-  FIRST_LINE_WIDTH_POI,
-  RIGHT_LINE_WIDTH_POI,
   createCustInfo,
   createDateRangeRow,
   createFooter,
   createHeader,
   createProductRow,
   createTotalRow,
+  FIRST_LINE_WIDTH_POI,
   getCashCustomer,
   getHalfMonthlyCustomer,
   getMonthlyCustomer,
+  RIGHT_LINE_WIDTH_POI,
 } from './sheet-extension';
 
-import type { Bill } from '@/domain/models/bill';
-import type { CustomerModel } from '@/domain/models/customer-model';
+import type {Bill} from '@/domain/models/bill';
+import type {CustomerModel} from '@/domain/models/customer-model';
 
 const FULL_MONTH_MAX_ROW = 19;
 const FULL_MONTH_FIRST_RANGE: ReadonlyArray<number> = Array.from({ length: 15 }, (_, i) => i + 1);
@@ -53,12 +48,37 @@ export interface BillFile {
 
 export class BillWriter {
   private readonly halfMonthMaxRow: number;
+    /** 位移後的顯示用年（民國，字串） */
+    private readonly displayYear: string;
+    /** 位移後的顯示用月（字串） */
+    private readonly displayMonth: string;
+    /** 位移後的顯示用日期區間（length 與原 dateRange 相同，只換內容） */
+    private readonly displayDateRange: ReadonlyArray<number>;
 
   constructor(
     private readonly bill: Bill,
-    private readonly orderList: ReadonlyArray<string>
+    private readonly orderList: ReadonlyArray<string>,
+    private readonly dateShiftDays: number = 0
   ) {
     this.halfMonthMaxRow = bill.billDateInfo.dateRange.length + 3;
+
+      const {year, month, dateRange} = bill.billDateInfo;
+      if (dateShiftDays === 0) {
+          this.displayYear = year;
+          this.displayMonth = month;
+          this.displayDateRange = dateRange;
+      } else {
+          const startDate = this.shiftToDate(dateRange[0]);
+          this.displayYear = String(startDate.getFullYear() - 1911);
+          this.displayMonth = String(startDate.getMonth() + 1);
+          this.displayDateRange = dateRange.map((d) => this.shiftToDate(d).getDate());
+      }
+  }
+
+    private shiftToDate(day: number): Date {
+        const westernYear = parseInt(this.bill.billDateInfo.year, 10) + 1911;
+        const monthIndex = parseInt(this.bill.billDateInfo.month, 10) - 1;
+        return new Date(westernYear, monthIndex, day + this.dateShiftDays);
   }
 
   /** 產出所有檔案的 Blob 列表，呼叫端負責下載/打包 ZIP。 */
@@ -173,8 +193,8 @@ export class BillWriter {
   private writeHalfMonthBlock(ws: ExcelJS.Worksheet, customer: CustomerModel): void {
     const max = this.halfMonthMaxRow;
     createHeader(ws, max);
-    createCustInfo(ws, customer, this.bill.billDateInfo.year, this.bill.billDateInfo.month, max);
-    createDateRangeRow(ws, this.bill.billDateInfo.dateRange);
+      createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
+      createDateRangeRow(ws, this.displayDateRange);
     createProductRow(ws, customer.productList, this.bill.billDateInfo.dateRange);
     createTotalRow(ws, customer, max);
     createFooter(ws, max);
@@ -183,7 +203,7 @@ export class BillWriter {
   private writeFullMonthBlock(ws: ExcelJS.Worksheet, customer: CustomerModel): void {
     const max = FULL_MONTH_MAX_ROW;
     createHeader(ws, max);
-    createCustInfo(ws, customer, this.bill.billDateInfo.year, this.bill.billDateInfo.month, max);
+      createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
 
     // 上半月：日期 1..15，maxDate=16
     createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16);
@@ -242,11 +262,11 @@ export class BillWriter {
   }
 
   private getFilename(prefix: string): string {
-    const half = this.bill.billDateInfo.dateRange.includes(18) ? '下半' : '上半';
-    return `${this.bill.billDateInfo.month}月_${half}_${prefix}.xlsx`;
+      const half = this.displayDateRange.includes(18) ? '下半' : '上半';
+      return `${this.displayMonth}月_${half}_${prefix}.xlsx`;
   }
 
   private getSheetName(prefix: string): string {
-    return `${prefix}${this.bill.billDateInfo.dateRange.includes(18) ? '_下' : '_上'}`;
+      return `${prefix}${this.displayDateRange.includes(18) ? '_下' : '_上'}`;
   }
 }
