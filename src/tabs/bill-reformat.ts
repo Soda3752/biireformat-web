@@ -310,17 +310,16 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
       dateShiftHint.textContent = '';
       return;
     }
-    const {year, month, dateRange} = state.bill.billDateInfo;
-    if (dateRange.length === 0) {
+    const dates = state.bill.billDateInfo.dates;
+    if (!dates || dates.length === 0) {
       dateShiftHint.textContent = '';
       return;
     }
-    const wYear = parseInt(year, 10) + 1911;
-    const mIdx = parseInt(month, 10) - 1;
-    const start = new Date(wYear, mIdx, dateRange[0] + state.dateShiftDays);
-    const end = new Date(wYear, mIdx, dateRange[dateRange.length - 1] + state.dateShiftDays);
+    const oneDay = 24 * 60 * 60 * 1000;
+    const start = new Date(dates[0].getTime() - state.dateShiftDays * oneDay);
+    const end = new Date(dates[dates.length - 1].getTime() - state.dateShiftDays * oneDay);
     const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
-    dateShiftHint.textContent = `→ ${fmt(start)}–${fmt(end)}`;
+    dateShiftHint.textContent = `← 取用 ${fmt(start)}–${fmt(end)} 的訂單`;
   }
 
     // 使用者從設定頁回來時 refresh banner

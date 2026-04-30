@@ -25,7 +25,10 @@ import {
   createFooter,
   createHeader,
   createProductRow,
+  createProductRowBySlots,
   createTotalRow,
+  createTotalRowBySlots,
+  type DateSlot,
   FIRST_LINE_WIDTH_POI,
   getCashCustomer,
   getHalfMonthlyCustomer,
@@ -39,6 +42,7 @@ import type {CustomerModel} from '@/domain/models/customer-model';
 const FULL_MONTH_MAX_ROW = 19;
 const FULL_MONTH_FIRST_RANGE: ReadonlyArray<number> = Array.from({ length: 15 }, (_, i) => i + 1);
 const FULL_MONTH_SECOND_RANGE: ReadonlyArray<number> = Array.from({ length: 16 }, (_, i) => i + 16);
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface BillFile {
   /** 輸出檔名（含 .xlsx），對應桌面版 `getFilePath` */
@@ -48,37 +52,39 @@ export interface BillFile {
 
 export class BillWriter {
   private readonly halfMonthMaxRow: number;
-    /** 位移後的顯示用年（民國，字串） */
-    private readonly displayYear: string;
-    /** 位移後的顯示用月（字串） */
+    /** 顯示用 day 序列，永遠等於原 dateRange（不隨校正變動） */
+    private readonly displayDateRange: number[];
+    /** 顯示用月份，取自原 dates[0] */
     private readonly displayMonth: string;
-    /** 位移後的顯示用日期區間（length 與原 dateRange 相同，只換內容） */
-    private readonly displayDateRange: ReadonlyArray<number>;
+    /** 顯示用民國年 */
+    private readonly displayYear: string;
+    /**
+     * DateSlot 序列：每格的 displayDay 是原日期，sourceMonth/Day 是「校正後要去原資料找的日期」。
+     * shift=+1 → display 4/1 格的 source=3/31，達成「3/31 訂單併入 4/1 格」。
+     */
+    private readonly halfMonthSlots: DateSlot[];
 
   constructor(
     private readonly bill: Bill,
     private readonly orderList: ReadonlyArray<string>,
-    private readonly dateShiftDays: number = 0
+    dateShiftDays: number = 0
   ) {
     this.halfMonthMaxRow = bill.billDateInfo.dateRange.length + 3;
 
-      const {year, month, dateRange} = bill.billDateInfo;
-      if (dateShiftDays === 0) {
-          this.displayYear = year;
-          this.displayMonth = month;
-          this.displayDateRange = dateRange;
-      } else {
-          const startDate = this.shiftToDate(dateRange[0]);
-          this.displayYear = String(startDate.getFullYear() - 1911);
-          this.displayMonth = String(startDate.getMonth() + 1);
-          this.displayDateRange = dateRange.map((d) => this.shiftToDate(d).getDate());
-      }
-  }
+      const dates = bill.billDateInfo.dates;
+      this.displayDateRange = dates.map((d) => d.getDate());
+      const head = dates[0];
+      this.displayMonth = String(head.getMonth() + 1);
+      this.displayYear = String(head.getFullYear() - 1911);
 
-    private shiftToDate(day: number): Date {
-        const westernYear = parseInt(this.bill.billDateInfo.year, 10) + 1911;
-        const monthIndex = parseInt(this.bill.billDateInfo.month, 10) - 1;
-        return new Date(westernYear, monthIndex, day + this.dateShiftDays);
+      this.halfMonthSlots = dates.map((d) => {
+          const src = new Date(d.getTime() - dateShiftDays * ONE_DAY_MS);
+          return {
+              displayDay: d.getDate(),
+              sourceMonth: src.getMonth() + 1,
+              sourceDay: src.getDate(),
+          };
+      });
   }
 
   /** 產出所有檔案的 Blob 列表，呼叫端負責下載/打包 ZIP。 */
@@ -195,15 +201,16 @@ export class BillWriter {
     createHeader(ws, max);
       createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
       createDateRangeRow(ws, this.displayDateRange);
-    createProductRow(ws, customer.productList, this.bill.billDateInfo.dateRange);
-    createTotalRow(ws, customer, max);
+      createProductRowBySlots(ws, customer.productList, this.halfMonthSlots);
+      createTotalRowBySlots(ws, customer, max, this.halfMonthSlots);
     createFooter(ws, max);
   }
 
   private writeFullMonthBlock(ws: ExcelJS.Worksheet, customer: CustomerModel): void {
     const max = FULL_MONTH_MAX_ROW;
+      const {year, month} = this.bill.billDateInfo;
     createHeader(ws, max);
-      createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
+      createCustInfo(ws, customer, year, month, max);
 
     // 上半月：日期 1..15，maxDate=16
     createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16);

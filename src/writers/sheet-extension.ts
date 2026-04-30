@@ -11,19 +11,19 @@
 import ExcelJS from 'exceljs';
 
 import {
-  ARGB_RED,
-  KAI_FONT,
-  buildStyle,
-  mergeRange,
-  poiFontSize,
-  setRowHeightPoi,
-  writeMixedRow,
-  type StyledCell,
+    ARGB_RED,
+    buildStyle,
+    KAI_FONT,
+    mergeRange,
+    poiFontSize,
+    setRowHeightPoi,
+    type StyledCell,
+    writeMixedRow,
 } from '@/infra/excel-service';
 
-import type { CustomerModel } from '@/domain/models/customer-model';
-import type { Product } from '@/domain/models/product';
-import { getItemIndex } from '@/domain/sorting-list';
+import type {CustomerModel} from '@/domain/models/customer-model';
+import type {Product} from '@/domain/models/product';
+import {getItemIndex} from '@/domain/sorting-list';
 
 /* ============================================================
    桌面版 Writer.companion 常數（POI 單位）
@@ -203,8 +203,8 @@ export function createDateRangeRow(
 }
 
 /**
- * 商品資料列：依 SortingList 排序後逐列輸出。
- * 對應 `Sheet.createProductRow(productList, dateRange, maxDate)`.
+ * 商品資料列（沿用桌面版邏輯：以 day 比對，無月份概念）。
+ * 用於非帳單分頁（overview / delivery-fee 等）。
  */
 export function createProductRow(
   sheet: ExcelJS.Worksheet,
@@ -214,7 +214,6 @@ export function createProductRow(
 ): void {
   const cellStyle = styles.cellWithBorder();
 
-  // P2.13：商品依 SortingList 排序
   const sorted = [...productList].sort((a, b) => getItemIndex(a.name) - getItemIndex(b.name));
 
   for (const product of sorted) {
@@ -242,8 +241,60 @@ export function createProductRow(
 }
 
 /**
+ * 帳單分頁專用：以 DateSlot 序列輸出商品列。
+ * 每個 slot 包含「顯示用 day」與「對應原資料 (month, day)」，
+ * 因此能同時支援跨月日期區間與整體日期校正。
+ */
+export interface DateSlot {
+    /** 表頭顯示的 day（位移後的） */
+    displayDay: number;
+    /** 對應原資料的月份（用於 (month, day) 配對） */
+    sourceMonth: number;
+    /** 對應原資料的 day */
+    sourceDay: number;
+}
+
+export function createProductRowBySlots(
+    sheet: ExcelJS.Worksheet,
+    productList: ReadonlyArray<Product>,
+    slots: ReadonlyArray<DateSlot>,
+    maxDate = 0
+): void {
+    const cellStyle = styles.cellWithBorder();
+
+    const sorted = [...productList].sort((a, b) => getItemIndex(a.name) - getItemIndex(b.name));
+    const sources = slots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
+
+    for (const product of sorted) {
+        const cells: StyledCell[] = [[product.name, cellStyle]];
+
+        for (const src of sources) {
+            const order = product.orderList.find((o) => o.day === src.day && o.month === src.month);
+            cells.push([order ? order.count : '', cellStyle]);
+        }
+
+        if (slots.length < maxDate) {
+            const pad = maxDate - slots.length;
+            for (let i = 0; i < pad; i++) cells.push(['', cellStyle]);
+        }
+
+        cells.push(
+            [product.getCountForDates(sources), cellStyle],
+            [product.price, cellStyle],
+            [product.getPriceForDates(sources), cellStyle]
+        );
+
+        const row = writeMixedRow(sheet, cells, cellStyle);
+        setRowHeightPoi(row, ROW_HEIGHT_POI);
+    }
+}
+
+/**
  * 總計列（紅字）。若客戶含稅，再多兩列：稅金 / 含稅小計。
  * 對應 `Sheet.createTotalRow(customer, rowMaxSize)`.
+ *
+ * 沿用桌面版邏輯：以 customer.getTotalPrice() 加總全部 orderList。
+ * 用於非帳單分頁。
  */
 export function createTotalRow(
   sheet: ExcelJS.Worksheet,
@@ -252,14 +303,12 @@ export function createTotalRow(
 ): void {
   const redStyle = styles.redTotal();
 
-  // 總計列：repeat(rowMaxSize - 1) 空白 + 「總計」+ 金額
   const totalCells: StyledCell[] = [];
   for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
   totalCells.push(['總計', redStyle], [customer.getTotalPrice(), redStyle]);
   const totalRow = writeMixedRow(sheet, totalCells, redStyle);
   setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
 
-  // 含稅客戶：稅金行 + 含稅小計行（P2.14）
   if (customer.isNeedTex) {
     const taxCells: StyledCell[] = [];
     for (let i = 0; i < rowMaxSize - 1; i++) taxCells.push(['', redStyle]);
@@ -273,6 +322,39 @@ export function createTotalRow(
     const sumRow = writeMixedRow(sheet, sumCells, redStyle);
     setRowHeightPoi(sumRow, ROW_HEIGHT_POI);
   }
+}
+
+/**
+ * 帳單分頁專用：以 DateSlot 加總，避免將「不在輸出範圍內的資料」算進總計。
+ */
+export function createTotalRowBySlots(
+    sheet: ExcelJS.Worksheet,
+    customer: CustomerModel,
+    rowMaxSize: number,
+    slots: ReadonlyArray<DateSlot>
+): void {
+    const redStyle = styles.redTotal();
+    const sources = slots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
+
+    const totalCells: StyledCell[] = [];
+    for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
+    totalCells.push(['總計', redStyle], [customer.getTotalPriceForDates(sources), redStyle]);
+    const totalRow = writeMixedRow(sheet, totalCells, redStyle);
+    setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
+
+    if (customer.isNeedTex) {
+        const taxCells: StyledCell[] = [];
+        for (let i = 0; i < rowMaxSize - 1; i++) taxCells.push(['', redStyle]);
+        taxCells.push(['稅金', redStyle], [customer.getTexForDates(sources), redStyle]);
+        const taxRow = writeMixedRow(sheet, taxCells, redStyle);
+        setRowHeightPoi(taxRow, ROW_HEIGHT_POI);
+
+        const sumCells: StyledCell[] = [];
+        for (let i = 0; i < rowMaxSize; i++) sumCells.push(['', redStyle]);
+        sumCells.push([customer.getAfterTexSumForDates(sources), redStyle]);
+        const sumRow = writeMixedRow(sheet, sumCells, redStyle);
+        setRowHeightPoi(sumRow, ROW_HEIGHT_POI);
+    }
 }
 
 /**

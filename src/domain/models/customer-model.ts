@@ -3,9 +3,9 @@
  * 一位客戶（含結帳模式旗標、產品列表、商品設定）。
  */
 
-import type { OrderInfo } from './order-info';
-import { Product } from './product';
-import type { ProductSetting } from './product-setting';
+import type {OrderInfo} from './order-info';
+import {Product} from './product';
+import type {ProductSetting} from './product-setting';
 
 const PARAM_NAME = '客戶名稱';
 const PARAM_CODE = '客戶編號';
@@ -75,4 +75,22 @@ export class CustomerModel {
   getAfterTexSum(): number {
     return this.getTotalPrice() + this.getTex();
   }
+
+    /**
+     * 以「(月, 日) slot 序列」加總總金額。
+     * 用於帳單分頁：跨月或日期校正時，僅計入確實會輸出到表格中的訂單。
+     */
+    getTotalPriceForDates(sources: ReadonlyArray<{ month: number; day: number }>): number {
+        let sum = 0;
+        for (const p of this.productList) sum += p.getPriceForDates(sources);
+        return Math.round(sum);
+    }
+
+    getTexForDates(sources: ReadonlyArray<{ month: number; day: number }>): number {
+        return Math.round(this.getTotalPriceForDates(sources) * 0.05);
+    }
+
+    getAfterTexSumForDates(sources: ReadonlyArray<{ month: number; day: number }>): number {
+        return this.getTotalPriceForDates(sources) + this.getTexForDates(sources);
+    }
 }
