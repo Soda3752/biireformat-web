@@ -113,8 +113,8 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         <div class="analytics-section-label">趨勢與分佈</div>
         <div class="analytics-chart-grid" data-role="chart-grid"></div>
 
-        <div class="analytics-section-label">客戶低價值排行（平均售價）</div>
-        <p class="analytics-section-hint">以「平均售價（amount ÷ 數量）」由低至高排序，搭配「最低數量」門檻可聚焦在「買很多但平均單價偏低」的客戶。橘底＝平均售價低於整體均價；紅底＝該客戶整體毛利為負。會跟隨上方篩選器即時更新。</p>
+        <div class="analytics-section-label">客戶低價值排行（相對均價損益）</div>
+        <p class="analytics-section-hint">以「相對均價損益＝Σ(客戶單價 − 該商品整體均價) × 數量」由小到大排序，最虧的客戶（負值最大）排第 1 名，代表最該調漲價格。「每單位損益」可輔助判斷該漲多少。<span style="color:var(--color-success)">綠字</span>＝高於均價（營利、優質客戶）；<span style="color:var(--color-danger)">紅字</span>＝低於均價（虧損、該漲價）。紅底列＝該客戶整體毛利為負。搭配「最低數量」門檻可聚焦在「買很多但賣愈多虧愈多」的客戶。會跟隨上方篩選器即時更新。</p>
         <div data-role="least-profit-host"></div>
 
         <div class="analytics-section-label">商品價差分析（同商品各客戶售價落差）</div>

@@ -22,13 +22,6 @@ type SortKey =
     | 'amount';
 type SortDir = 'asc' | 'desc';
 
-const TOP_N_OPTIONS: Array<{ value: number; label: string }> = [
-    {value: 10, label: '前 10'},
-    {value: 20, label: '前 20'},
-    {value: 50, label: '前 50'},
-    {value: 0, label: '全部'},
-];
-
 const DEVIATION_OPTIONS: Array<{ value: number; label: string }> = [
     {value: 5, label: '低於均價 5%'},
     {value: 10, label: '低於均價 10%'},
@@ -90,12 +83,6 @@ export function createProductPriceVarianceTable(
           ${DEVIATION_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
         </select>
       </label>
-      <label class="analytics-least-profit-field">
-        <span>顯示</span>
-        <select data-role="topn">
-          ${TOP_N_OPTIONS.map((o) => `<option value="${o.value}">${o.label}</option>`).join('')}
-        </select>
-      </label>
       <span class="analytics-detail-stats" data-role="stats"></span>
     </div>
     <div class="analytics-detail-table-wrap">
@@ -122,14 +109,12 @@ export function createProductPriceVarianceTable(
 
     const minCountInput = root.querySelector<HTMLInputElement>('[data-role="min-count"]')!;
     const thresholdSelect = root.querySelector<HTMLSelectElement>('[data-role="threshold"]')!;
-    const topnSelect = root.querySelector<HTMLSelectElement>('[data-role="topn"]')!;
     const statsEl = root.querySelector<HTMLElement>('[data-role="stats"]')!;
     const tbody = root.querySelector<HTMLTableSectionElement>('[data-role="tbody"]')!;
 
     let allRows: ReadonlyArray<AnalyticsRow> = [];
     let sortKey: SortKey = 'priceGap';
     let sortDir: SortDir = 'desc';
-    let topN = 20;
     let minCount = 0;
     let threshold = 10;
     const expanded = new Set<string>();
@@ -322,7 +307,7 @@ export function createProductPriceVarianceTable(
             return sortDir === 'asc' ? cmp : -cmp;
         });
 
-        const limited = topN > 0 ? sorted.slice(0, topN) : sorted;
+        const limited = sorted;
         const filterHint = minCount > 0 ? `（已過濾數量≥${minCount}）` : '';
         statsEl.textContent = `符合條件 ${aggs.length.toLocaleString()} 項商品 / 全部 ${aggsAll.length.toLocaleString()} 項${filterHint} / 顯示 ${limited.length.toLocaleString()} 項`;
 
@@ -424,12 +409,6 @@ export function createProductPriceVarianceTable(
             }
             render();
         });
-    });
-
-    topnSelect.value = String(topN);
-    topnSelect.addEventListener('change', () => {
-        topN = Number(topnSelect.value);
-        render();
     });
 
     thresholdSelect.value = String(threshold);
