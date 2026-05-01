@@ -8,6 +8,19 @@
 import type {AnalyticsDataset} from './dataset-builder';
 import type {FilterState} from './filter-engine';
 import {EMPTY_FILTER} from './filter-engine';
+import {getDefaultExcludedCustomerCodeSet} from '@/domain/default-excluded-customers-loader';
+
+/**
+ * 從設定頁讀取「預設排除店家」並套到一個全空的 FilterState 上。
+ * 數據分析的初始狀態與「重置」按鈕都會回到這個狀態。
+ */
+export function defaultFilterState(): FilterState {
+    const codes = getDefaultExcludedCustomerCodeSet();
+    return {
+        ...EMPTY_FILTER,
+        excludedCustomerCodes: codes.size === 0 ? null : codes,
+    };
+}
 
 export interface FilterUiController {
     element: HTMLElement;
@@ -92,7 +105,7 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
     const fileGroup = root.querySelector<HTMLElement>('[data-role="grp-files"]')!;
     const resetBtn = root.querySelector<HTMLButtonElement>('[data-role="reset"]')!;
 
-    let state: FilterState = {...EMPTY_FILTER};
+    let state: FilterState = defaultFilterState();
     let lineOptions: OptionItem[] = [];
     let categoryOptions: OptionItem[] = [];
     let fileOptions: OptionItem[] = [];
@@ -203,13 +216,13 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
     });
 
     resetBtn.addEventListener('click', () => {
-        state = {...EMPTY_FILTER};
+        state = defaultFilterState();
         dayMin.value = '';
         dayMax.value = '';
         refreshChips();
         refreshPayChips();
         syncSelectMulti(customerSelect, null);
-        syncSelectMulti(excludedCustomerSelect, null);
+        syncSelectMulti(excludedCustomerSelect, state.excludedCustomerCodes);
         syncSelectMulti(productSelect, null);
         options.onChange(state);
     });
@@ -263,13 +276,13 @@ export function createFilterUi(options: FilterUiOptions): FilterUiController {
             options.onChange(state);
         },
         reset() {
-            state = {...EMPTY_FILTER};
+            state = defaultFilterState();
             dayMin.value = '';
             dayMax.value = '';
             refreshChips();
             refreshPayChips();
             syncSelectMulti(customerSelect, null);
-            syncSelectMulti(excludedCustomerSelect, null);
+            syncSelectMulti(excludedCustomerSelect, state.excludedCustomerCodes);
             syncSelectMulti(productSelect, null);
             options.onChange(state);
         },

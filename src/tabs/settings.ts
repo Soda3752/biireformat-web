@@ -37,6 +37,14 @@ import {
     parseCustomerOrderCsv,
     serializeCustomerOrderCsv,
 } from '@/domain/customer-order-loader';
+import {
+    collectDefaultExcludedEntries,
+    DEFAULT_EXCLUDED_CUSTOMERS_HEADER,
+    type DefaultExcludedCustomerEntry,
+    invalidateDefaultExcludedCustomers,
+    parseDefaultExcludedCustomersCsv,
+    serializeDefaultExcludedCustomersCsv,
+} from '@/domain/default-excluded-customers-loader';
 import type {BankInfo} from '@/domain/models/bank-info';
 import {equalsBankInfo} from '@/domain/models/bank-info';
 import {parseBankInfo as parseBankInfoXlsx} from '@/readers/bank-info-reader';
@@ -68,6 +76,7 @@ const CARGO_HEADER = ['貨品編號', '貨品名稱', '代送費'];
 const DAILY_HEADER = ['分類', '貨品編號', '貨品名稱', '成本'];
 const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
 const CUSTOMER_HEADER = Array.from(CUSTOMER_ORDER_HEADER);
+const DEFAULT_EXCLUDED_HEADER = Array.from(DEFAULT_EXCLUDED_CUSTOMERS_HEADER);
 
 const CARGO_ASSET_URL = `${import.meta.env.BASE_URL}assets/cargo_sort.csv`;
 const DAILY_ASSET_URL = `${import.meta.env.BASE_URL}assets/daily_report_list.csv`;
@@ -104,6 +113,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
         <button type="button" class="settings-subnav-item" data-subtab="bill-customer" role="tab" aria-selected="false">帳單客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="overview-customer" role="tab" aria-selected="false">明細客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="lastfive" role="tab" aria-selected="false">末五碼</button>
+        <button type="button" class="settings-subnav-item" data-subtab="default-excluded" role="tab" aria-selected="false">預設排除店家</button>
       </nav>
 
       <section class="settings-pane is-active" data-pane="cargo" role="tabpanel">
@@ -174,6 +184,32 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
         </div>
         <div class="settings-table-wrap" data-role="lastfive-table-wrap"></div>
       </section>
+
+      <section class="settings-pane" data-pane="default-excluded" role="tabpanel" hidden>
+        <p class="settings-pane-hint">
+          設定後，每次開啟「數據分析」分頁時會自動把這些客戶編號預先勾入「排除客戶」篩選器；按下篩選器的「重置」按鈕後仍會回到此預設狀態。<br>
+          備註欄位僅供辨識用，不影響排除邏輯。
+        </p>
+        <div class="settings-toolbar">
+          <div class="settings-toolbar-info" data-role="default-excluded-status">載入中…</div>
+          <div class="settings-toolbar-actions">
+            <button type="button" class="btn btn-secondary" data-role="default-excluded-import">
+              <span class="btn-icon">${icon('upload', 16)}</span>匯入（CSV / XLSX）
+            </button>
+            <button type="button" class="btn btn-secondary" data-role="default-excluded-export-csv">
+              <span class="btn-icon">${icon('download', 16)}</span>匯出 CSV
+            </button>
+            <button type="button" class="btn btn-secondary" data-role="default-excluded-export-xlsx">
+              <span class="btn-icon">${icon('download', 16)}</span>匯出 XLSX
+            </button>
+            <button type="button" class="btn btn-secondary" data-role="default-excluded-add">
+              <span class="btn-icon">${icon('plus', 16)}</span>新增一列
+            </button>
+          </div>
+          <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="default-excluded-file" hidden />
+        </div>
+        <div class="settings-table-wrap" data-role="default-excluded-table-wrap"></div>
+      </section>
     </div>
   `;
 
@@ -184,6 +220,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
     bindCustomerOrderPane(panel, 'bill');
     bindCustomerOrderPane(panel, 'overview');
     bindLastFivePane(panel);
+    bindDefaultExcludedPane(panel);
 
     return panel;
 }
@@ -276,7 +313,7 @@ function openSettingsImportConfirmDialog(filename: string, payload: SettingsExpo
           <div><span class="settings-import-meta-label">匯出時間</span>${escapeHtml(formatExportedAt(payload.exportedAt))}</div>
         </div>
         <p class="settings-import-warning">
-          匯入後將以此檔案內容<strong>整包覆寫</strong>目前所有 5 份設定，操作不可復原。<br>
+          匯入後將以此檔案內容<strong>整包覆寫</strong>目前所有 6 份設定，操作不可復原。<br>
           標示為「不覆寫」的項目會清除現有覆寫並回到內建預設值。
         </p>
         <ul class="settings-import-list">
@@ -1253,6 +1290,159 @@ async function buildLastFiveXlsxBlob(rows: LastFiveRow[]): Promise<Blob> {
     ws.getColumn(1).width = 18;
     ws.getColumn(2).width = 12;
     ws.getColumn(3).width = 14;
+    const buf = await wb.xlsx.writeBuffer();
+    return new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+}
+
+// ============================================================================
+// 預設排除店家 (defaultExcludedCustomers) — 數據分析開啟時自動勾入「排除客戶」
+// ============================================================================
+
+function bindDefaultExcludedPane(panel: HTMLElement): void {
+    const role = (suffix: string) => `[data-role="default-excluded-${suffix}"]`;
+    const tableWrap = panel.querySelector<HTMLElement>(role('table-wrap'))!;
+    const status = panel.querySelector<HTMLElement>(role('status'))!;
+    const importBtn = panel.querySelector<HTMLButtonElement>(role('import'))!;
+    const exportCsvBtn = panel.querySelector<HTMLButtonElement>(role('export-csv'))!;
+    const exportXlsxBtn = panel.querySelector<HTMLButtonElement>(role('export-xlsx'))!;
+    const addBtn = panel.querySelector<HTMLButtonElement>(role('add'))!;
+    const fileInput = panel.querySelector<HTMLInputElement>(role('file'))!;
+
+    let entries: DefaultExcludedCustomerEntry[] = loadInitialEntries();
+
+    function loadInitialEntries(): DefaultExcludedCustomerEntry[] {
+        const csv = localSettings.getDefaultExcludedCustomers();
+        return csv === null ? [] : parseDefaultExcludedCustomersCsv(csv);
+    }
+
+    const refreshStatus = () => {
+        const overridden = localSettings.hasDefaultExcludedCustomers();
+        const tag = overridden
+            ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
+            : '<span class="settings-badge settings-badge-default">尚未建立</span>';
+        status.innerHTML = `${tag}<span class="settings-status-text">共 ${entries.length} 筆</span>`;
+    };
+
+    const persist = () => {
+        const csv = serializeDefaultExcludedCustomersCsv(entries);
+        localSettings.setDefaultExcludedCustomers(csv);
+        invalidateDefaultExcludedCustomers();
+        refreshStatus();
+    };
+
+    const renderTable = () => {
+        tableWrap.innerHTML = '';
+        tableWrap.appendChild(
+            buildEditableTable({
+                headers: DEFAULT_EXCLUDED_HEADER,
+                rows: entries,
+                rowToCells: (row) => [row.code, row.name],
+                onCellChange: (rowIdx, colIdx, value) => {
+                    const r = entries[rowIdx];
+                    if (!r) return;
+                    if (colIdx === 0) r.code = value;
+                    else if (colIdx === 1) r.name = value;
+                    persist();
+                },
+                onDeleteRow: (rowIdx) => {
+                    entries.splice(rowIdx, 1);
+                    renderTable();
+                    persist();
+                },
+                onMoveRow: (from, to) => {
+                    moveItem(entries, from, to);
+                    renderTable();
+                    persist();
+                },
+                onInsertAbove: (rowIdx) => {
+                    entries.splice(rowIdx, 0, {code: '', name: ''});
+                    renderTable();
+                    persist();
+                },
+                onInsertBelow: (rowIdx) => {
+                    entries.splice(rowIdx + 1, 0, {code: '', name: ''});
+                    renderTable();
+                    persist();
+                },
+            })
+        );
+        refreshStatus();
+    };
+
+    renderTable();
+
+    addBtn.addEventListener('click', () => {
+        entries.push({code: '', name: ''});
+        renderTable();
+        persist();
+    });
+
+    exportCsvBtn.addEventListener('click', () => {
+        const csv = serializeDefaultExcludedCustomersCsv(entries);
+        const blob = new Blob([addBom(csv)], {type: 'text/csv;charset=utf-8'});
+        saveAs(blob, '預設排除店家.csv');
+    });
+
+    exportXlsxBtn.addEventListener('click', async () => {
+        try {
+            const blob = await buildDefaultExcludedXlsxBlob(entries);
+            saveAs(blob, '預設排除店家.xlsx');
+        } catch (err) {
+            console.error(err);
+            showToast({
+                variant: 'error',
+                title: '匯出失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+        }
+    });
+
+    importBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        try {
+            const isXlsx = /\.xlsx?$/i.test(file.name);
+            let next: DefaultExcludedCustomerEntry[];
+            if (isXlsx) {
+                next = collectDefaultExcludedEntries(await readXlsxAsRows(file));
+            } else {
+                const text = stripBom(await file.text());
+                next = parseDefaultExcludedCustomersCsv(text);
+            }
+            entries = next;
+            localSettings.setDefaultExcludedCustomers(serializeDefaultExcludedCustomersCsv(entries));
+            invalidateDefaultExcludedCustomers();
+            renderTable();
+            showToast({
+                variant: 'success',
+                title: '預設排除店家已匯入',
+                message: `${file.name}（${entries.length} 筆）`,
+            });
+        } catch (err) {
+            console.error(err);
+            showToast({
+                variant: 'error',
+                title: '匯入失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+        } finally {
+            fileInput.value = '';
+        }
+    });
+}
+
+async function buildDefaultExcludedXlsxBlob(
+    entries: DefaultExcludedCustomerEntry[]
+): Promise<Blob> {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('預設排除店家');
+    ws.addRow(DEFAULT_EXCLUDED_HEADER);
+    for (const e of entries) ws.addRow([e.code, e.name]);
+    ws.getColumn(1).width = 14;
+    ws.getColumn(2).width = 22;
     const buf = await wb.xlsx.writeBuffer();
     return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

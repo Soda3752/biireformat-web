@@ -24,9 +24,11 @@ import {
     buildDataset,
     type LoadedFileMeta,
 } from '@/analytics/dataset-builder';
-import {applyFilter, EMPTY_FILTER, type FilterState} from '@/analytics/filter-engine';
-import {createFilterUi} from '@/analytics/filter-ui';
+import {applyFilter, type FilterState} from '@/analytics/filter-engine';
+import {createFilterUi, defaultFilterState} from '@/analytics/filter-ui';
 import {createDetailTable, rowsToCsv} from '@/analytics/detail-table';
+import {createLeastProfitableTable} from '@/analytics/least-profitable-table';
+import {createProductPriceVarianceTable} from '@/analytics/product-price-variance-table';
 import {openUncategorizedDialog} from '@/analytics/uncategorized-dialog';
 import {openUnsetCostDialog} from '@/analytics/unset-cost-dialog';
 import {type ChartHandle, createChart, observeChartsResize} from '@/analytics/chart-manager';
@@ -98,9 +100,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
           <input type="file" accept=".xlsx,.xls" multiple hidden data-role="file-input">
         </div>
         <div class="analytics-file-list" data-role="file-list" hidden></div>
-        <div class="analytics-uploader-actions" hidden data-role="uploader-actions">
-          <button type="button" class="btn btn-secondary" data-role="clear-all">清空全部</button>
-        </div>
       </div>
 
       <section class="analytics-content" data-role="content" hidden>
@@ -113,6 +112,14 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
 
         <div class="analytics-section-label">趨勢與分佈</div>
         <div class="analytics-chart-grid" data-role="chart-grid"></div>
+
+        <div class="analytics-section-label">客戶低價值排行（平均售價）</div>
+        <p class="analytics-section-hint">以「平均售價（amount ÷ 數量）」由低至高排序，搭配「最低數量」門檻可聚焦在「買很多但平均單價偏低」的客戶。橘底＝平均售價低於整體均價；紅底＝該客戶整體毛利為負。會跟隨上方篩選器即時更新。</p>
+        <div data-role="least-profit-host"></div>
+
+        <div class="analytics-section-label">商品價差分析（同商品各客戶售價落差）</div>
+        <p class="analytics-section-hint">以「商品」為單位，顯示該商品在所有客戶手中的整體加權平均售價與分散程度，並列出哪些客戶售價低於均價達指定門檻。預設依「均價缺口」（＝把低價客戶補到均價可多收的金額）由大到小排序，最能定位漏血點。點商品列可展開該商品的客戶層級明細。</p>
+        <div data-role="price-variance-host"></div>
 
         <div class="analytics-section-label">明細表</div>
         <div data-role="detail-host"></div>
@@ -143,14 +150,14 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     const dropzone = panel.querySelector<HTMLElement>('[data-role="dropzone"]')!;
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="file-input"]')!;
     const fileListEl = panel.querySelector<HTMLElement>('[data-role="file-list"]')!;
-    const uploaderActions = panel.querySelector<HTMLElement>('[data-role="uploader-actions"]')!;
-    const clearAllBtn = panel.querySelector<HTMLButtonElement>('[data-role="clear-all"]')!;
     const filtersSection = panel.querySelector<HTMLElement>('[data-role="filters-section"]')!;
     const filtersHost = panel.querySelector<HTMLElement>('[data-role="filters-host"]')!;
     const contentSection = panel.querySelector<HTMLElement>('[data-role="content"]')!;
     const kpiHost = panel.querySelector<HTMLElement>('[data-role="kpi-grid"]')!;
     const chartGridHost = panel.querySelector<HTMLElement>('[data-role="chart-grid"]')!;
     const detailHost = panel.querySelector<HTMLElement>('[data-role="detail-host"]')!;
+    const leastProfitHost = panel.querySelector<HTMLElement>('[data-role="least-profit-host"]')!;
+    const priceVarianceHost = panel.querySelector<HTMLElement>('[data-role="price-variance-host"]')!;
     const exportCsvBtn = panel.querySelector<HTMLButtonElement>('[data-role="export-csv"]')!;
     const unmatchedHost = panel.querySelector<HTMLDetailsElement>('[data-role="unmatched"]')!;
     const unmatchedSummary = panel.querySelector<HTMLElement>('[data-role="unmatched-summary"]')!;
@@ -163,7 +170,7 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     // ===== 狀態 =====
     const loaded: LoadedBillRecord[] = [];
     let dataset: AnalyticsDataset | null = null;
-    let filterState: FilterState = {...EMPTY_FILTER};
+    let filterState: FilterState = defaultFilterState();
     let resizeCleanup: (() => void) | null = null;
 
     // ===== 圖表切換按鈕的當下狀態（每張圖獨立） =====
@@ -178,6 +185,26 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     // ===== 子元件 =====
     const detailTable = createDetailTable();
     detailHost.appendChild(detailTable.element);
+
+    const leastProfitableTable = createLeastProfitableTable({
+        onCustomerClick: (code) => {
+            filterUi.applyPatch({customerCodes: new Set([code])});
+            filtersSection.scrollIntoView({behavior: 'smooth', block: 'start'});
+        },
+    });
+    leastProfitHost.appendChild(leastProfitableTable.element);
+
+    const priceVarianceTable = createProductPriceVarianceTable({
+        onProductFilter: (productName) => {
+            filterUi.applyPatch({productNames: new Set([productName])});
+            filtersSection.scrollIntoView({behavior: 'smooth', block: 'start'});
+        },
+        onCustomerClick: (code) => {
+            filterUi.applyPatch({customerCodes: new Set([code])});
+            filtersSection.scrollIntoView({behavior: 'smooth', block: 'start'});
+        },
+    });
+    priceVarianceHost.appendChild(priceVarianceTable.element);
 
     const filterUi = createFilterUi({
         onChange: (s) => {
@@ -423,6 +450,12 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             }
         }
 
+        // 客戶毛利倒數排行
+        leastProfitableTable.setRows(filteredRows);
+
+        // 商品價差分析
+        priceVarianceTable.setRows(filteredRows);
+
         // 明細表
         detailTable.setRows(filteredRows);
 
@@ -531,12 +564,10 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     const renderFileList = () => {
         if (loaded.length === 0) {
             fileListEl.hidden = true;
-            uploaderActions.hidden = true;
             fileListEl.innerHTML = '';
             return;
         }
         fileListEl.hidden = false;
-        uploaderActions.hidden = false;
         fileListEl.innerHTML = loaded
             .map(
                 (rec, idx) => `
@@ -724,13 +755,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         if (fileInput.files) void handleFiles(fileInput.files);
         fileInput.value = '';
     });
-    clearAllBtn.addEventListener('click', () => {
-        loaded.splice(0, loaded.length);
-        filterUi.reset();
-        renderFileList();
-        void rebuildDataset();
-    });
-
     // ===== CSV 匯出 =====
     exportCsvBtn.addEventListener('click', () => {
         const rows = detailTable.getCurrentRows();

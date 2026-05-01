@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
     lastFiveDigit: 'bii.settings.lastFiveDigit.csv',
     customerOrderBill: 'bii.settings.customerOrder.bill.csv',
     customerOrderOverview: 'bii.settings.customerOrder.overview.csv',
+    defaultExcludedCustomers: 'bii.settings.defaultExcludedCustomers.csv',
 } as const;
 
 /** 舊版單一 customerOrder key，僅供 customer-order-loader 做一次性遷移使用。 */
@@ -108,6 +109,19 @@ export const localSettings = {
     clearCustomerOrderOverview(): void {
         removeKey('customerOrderOverview');
     },
+
+    hasDefaultExcludedCustomers(): boolean {
+        return readKey('defaultExcludedCustomers') !== null;
+    },
+    getDefaultExcludedCustomers(): string | null {
+        return readKey('defaultExcludedCustomers');
+    },
+    setDefaultExcludedCustomers(csv: string): void {
+        writeKey('defaultExcludedCustomers', csv);
+    },
+    clearDefaultExcludedCustomers(): void {
+        removeKey('defaultExcludedCustomers');
+    },
 };
 
 // ============================================================================
@@ -124,6 +138,7 @@ export interface SettingsExportPayload {
     lastFiveDigit: string | null;
     customerOrderBill: string | null;
     customerOrderOverview: string | null;
+    defaultExcludedCustomers: string | null;
 }
 
 const EXPORT_KEYS: ReadonlyArray<Exclude<keyof SettingsExportPayload, 'version' | 'exportedAt'>> = [
@@ -132,6 +147,7 @@ const EXPORT_KEYS: ReadonlyArray<Exclude<keyof SettingsExportPayload, 'version' 
     'lastFiveDigit',
     'customerOrderBill',
     'customerOrderOverview',
+    'defaultExcludedCustomers',
 ];
 
 export function exportAllSettings(): SettingsExportPayload {
@@ -143,6 +159,7 @@ export function exportAllSettings(): SettingsExportPayload {
         lastFiveDigit: readKey('lastFiveDigit'),
         customerOrderBill: readKey('customerOrderBill'),
         customerOrderOverview: readKey('customerOrderOverview'),
+        defaultExcludedCustomers: readKey('defaultExcludedCustomers'),
     };
 }
 
@@ -171,6 +188,7 @@ export function parseSettingsExportPayload(raw: unknown): SettingsExportPayload 
         lastFiveDigit: null,
         customerOrderBill: null,
         customerOrderOverview: null,
+        defaultExcludedCustomers: null,
     };
     for (const key of EXPORT_KEYS) {
         const value = obj[key];
@@ -205,6 +223,7 @@ export function summarizeImportPayload(payload: SettingsExportPayload): {
         lastFiveDigit: '末五碼',
         customerOrderBill: '帳單客戶排序',
         customerOrderOverview: '明細客戶排序',
+        defaultExcludedCustomers: '預設排除店家',
     };
     return EXPORT_KEYS.map((key) => {
         const value = payload[key];
