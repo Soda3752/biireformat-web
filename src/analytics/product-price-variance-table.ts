@@ -22,6 +22,14 @@ type SortKey =
     | 'amount';
 type SortDir = 'asc' | 'desc';
 
+type CustomerSortKey =
+    | 'customer'
+    | 'line'
+    | 'count'
+    | 'avgPrice'
+    | 'deviation'
+    | 'amount';
+
 const DEVIATION_OPTIONS: Array<{ value: number; label: string }> = [
     {value: 5, label: '低於均價 5%'},
     {value: 10, label: '低於均價 10%'},
@@ -115,6 +123,8 @@ export function createProductPriceVarianceTable(
     let allRows: ReadonlyArray<AnalyticsRow> = [];
     let sortKey: SortKey = 'priceGap';
     let sortDir: SortDir = 'desc';
+    let customerSortKey: CustomerSortKey = 'deviation';
+    let customerSortDir: SortDir = 'asc';
     let minCount = 0;
     let threshold = 10;
     const expanded = new Set<string>();
@@ -245,11 +255,30 @@ export function createProductPriceVarianceTable(
         return a.priceGap - b.priceGap;
     };
 
+    const compareCustomerBy = (a: CustomerStat, b: CustomerStat): number => {
+        if (customerSortKey === 'customer') return a.customerName.localeCompare(b.customerName);
+        if (customerSortKey === 'line') return a.line.localeCompare(b.line);
+        if (customerSortKey === 'count') return a.count - b.count;
+        if (customerSortKey === 'avgPrice') return a.avgPrice - b.avgPrice;
+        if (customerSortKey === 'deviation') return a.deviationPct - b.deviationPct;
+        if (customerSortKey === 'amount') return a.amount - b.amount;
+        return 0;
+    };
+
+    const customerSortIndicator = (k: CustomerSortKey): string => {
+        if (k !== customerSortKey) return '';
+        return customerSortDir === 'asc' ? ' ▲' : ' ▼';
+    };
+
     const renderCustomerSubRows = (p: ProductAgg): string => {
         if (p.customers.length === 0) {
             return `<tr><td colspan="11" class="analytics-price-variance-empty">無客戶資料</td></tr>`;
         }
-        const rows = p.customers.map((c) => {
+        const sortedCustomers = [...p.customers].sort((a, b) => {
+            const cmp = compareCustomerBy(a, b);
+            return customerSortDir === 'asc' ? cmp : -cmp;
+        });
+        const rows = sortedCustomers.map((c) => {
             const isLow = c.deviationPct <= -threshold;
             const isPremium = c.deviationPct >= threshold;
             const cls = isLow ? 'is-low-deviation' : (isPremium ? 'is-high-deviation' : '');
@@ -274,12 +303,12 @@ export function createProductPriceVarianceTable(
           <table class="analytics-price-variance-subtable">
             <thead>
               <tr>
-                <th>客戶</th>
-                <th>線別</th>
-                <th class="is-right">數量</th>
-                <th class="is-right">客戶均價</th>
-                <th class="is-right">vs 整體均價</th>
-                <th class="is-right">營收</th>
+                <th data-customer-sort-key="customer">客戶${customerSortIndicator('customer')}</th>
+                <th data-customer-sort-key="line">線別${customerSortIndicator('line')}</th>
+                <th data-customer-sort-key="count" class="is-right">數量${customerSortIndicator('count')}</th>
+                <th data-customer-sort-key="avgPrice" class="is-right">客戶均價${customerSortIndicator('avgPrice')}</th>
+                <th data-customer-sort-key="deviation" class="is-right">vs 整體均價${customerSortIndicator('deviation')}</th>
+                <th data-customer-sort-key="amount" class="is-right">營收${customerSortIndicator('amount')}</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -395,6 +424,22 @@ export function createProductPriceVarianceTable(
                 });
             });
         }
+
+        // 子表標頭點擊 → 切換子表排序
+        tbody.querySelectorAll<HTMLElement>('th[data-customer-sort-key]').forEach((th) => {
+            th.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const k = th.dataset.customerSortKey as CustomerSortKey;
+                if (customerSortKey === k) {
+                    customerSortDir = customerSortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    customerSortKey = k;
+                    // 文字欄升冪、數值欄降冪；deviation 預設升冪（最低價在前）
+                    customerSortDir = (k === 'customer' || k === 'line' || k === 'deviation') ? 'asc' : 'desc';
+                }
+                render();
+            });
+        });
     };
 
     root.querySelectorAll<HTMLElement>('th[data-sort-key]').forEach((th) => {

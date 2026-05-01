@@ -2291,6 +2291,16 @@ p {
     background-color: var(--color-surface-hover);
     border-bottom: 1px solid var(--color-border);
     text-align: left;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.analytics-price-variance-subtable thead th[data-customer-sort-key] {
+    cursor: pointer;
+}
+
+.analytics-price-variance-subtable thead th[data-customer-sort-key]:hover {
+    background-color: var(--color-primary-soft);
 }
 
 .analytics-price-variance-subtable thead th.is-right {
