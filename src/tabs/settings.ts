@@ -770,14 +770,14 @@ function bindDailyPane(panel: HTMLElement): void {
     });
 
     exportCsvBtn.addEventListener('click', () => {
-        const csv = serializeDailyCsv(rows);
+        const csv = serializeDailyCsv(rows, isCostColumnRevealed());
         const blob = new Blob([addBom(csv)], {type: 'text/csv;charset=utf-8'});
         saveAs(blob, 'daily_report_list.csv');
     });
 
     exportXlsxBtn.addEventListener('click', async () => {
         try {
-            const blob = await buildDailyXlsxBlob(rows);
+            const blob = await buildDailyXlsxBlob(rows, isCostColumnRevealed());
             saveAs(blob, 'daily_report_list.xlsx');
         } catch (err) {
             console.error(err);
@@ -857,18 +857,23 @@ function parseDailyCsv(text: string): DailyRow[] {
  * 序列化 daily_report_list.csv：
  * UI 上每列都填了分類，輸出時還原為稀疏格式（連續同分類僅首列保留分類，其餘留空），
  * 與內建 daily_report_list.csv 格式一致。
+ *
+ * `includeCost` 預設為 true，內部持久化（localStorage）時保留完整 cost 欄；
+ * 使用者匯出 CSV 時若成本欄處於鎖定狀態，傳入 false 以隱藏 cost 欄位。
  */
-function serializeDailyCsv(rows: DailyRow[]): string {
-    const out = sparsifyDailyRows(rows);
-    return Papa.unparse([DAILY_HEADER_FULL.slice(), ...out], {newline: '\n'});
+function serializeDailyCsv(rows: DailyRow[], includeCost = true): string {
+    const out = sparsifyDailyRows(rows, includeCost);
+    const header = includeCost ? DAILY_HEADER_FULL.slice() : DAILY_HEADER_BASE.slice();
+    return Papa.unparse([header, ...out], {newline: '\n'});
 }
 
-function sparsifyDailyRows(rows: DailyRow[]): string[][] {
+function sparsifyDailyRows(rows: DailyRow[], includeCost = true): string[][] {
     const out: string[][] = [];
     let prevGroup = '';
     for (const r of rows) {
         const groupCol = r.group !== prevGroup ? r.group : '';
-        out.push([groupCol, r.code, r.name, r.cost]);
+        const base = [groupCol, r.code, r.name];
+        out.push(includeCost ? [...base, r.cost] : base);
         prevGroup = r.group;
     }
     return out;
@@ -893,20 +898,25 @@ function parseDailyFromXlsxRows(xlsxRows: string[][]): DailyRow[] {
     return out;
 }
 
-async function buildDailyXlsxBlob(rows: DailyRow[]): Promise<Blob> {
+async function buildDailyXlsxBlob(rows: DailyRow[], includeCost = true): Promise<Blob> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('daily_report_list');
-    ws.addRow(DAILY_HEADER_FULL);
-    for (const r of sparsifyDailyRows(rows)) {
-        const [groupCol, code, name, costRaw] = r;
-        const costNum = Number(costRaw);
-        const costCell = costRaw !== '' && Number.isFinite(costNum) ? costNum : costRaw;
-        ws.addRow([groupCol, code, name, costCell]);
+    ws.addRow(includeCost ? DAILY_HEADER_FULL : DAILY_HEADER_BASE);
+    for (const r of sparsifyDailyRows(rows, includeCost)) {
+        if (includeCost) {
+            const [groupCol, code, name, costRaw] = r;
+            const costNum = Number(costRaw);
+            const costCell = costRaw !== '' && Number.isFinite(costNum) ? costNum : costRaw;
+            ws.addRow([groupCol, code, name, costCell]);
+        } else {
+            const [groupCol, code, name] = r;
+            ws.addRow([groupCol, code, name]);
+        }
     }
     ws.getColumn(1).width = 14;
     ws.getColumn(2).width = 12;
     ws.getColumn(3).width = 24;
-    ws.getColumn(4).width = 10;
+    if (includeCost) ws.getColumn(4).width = 10;
     const buf = await wb.xlsx.writeBuffer();
     return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
