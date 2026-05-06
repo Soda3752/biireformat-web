@@ -933,6 +933,7 @@ p {
     display: inline-flex;
     align-items: center;
     gap: var(--space-3);
+    position: relative;
 }
 
 .date-shift-label {
@@ -1006,6 +1007,11 @@ p {
     font-size: var(--font-size-sm);
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+    position: absolute;
+    left: 100%;
+    margin-left: var(--space-3);
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 /* Utilities */

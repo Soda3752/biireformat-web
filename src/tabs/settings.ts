@@ -73,10 +73,38 @@ interface LastFiveRow {
 }
 
 const CARGO_HEADER = ['貨品編號', '貨品名稱', '代送費'];
-const DAILY_HEADER = ['分類', '貨品編號', '貨品名稱', '成本'];
+const DAILY_HEADER_FULL = ['分類', '貨品編號', '貨品名稱', '成本'];
+const DAILY_HEADER_BASE = ['分類', '貨品編號', '貨品名稱'];
 const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
 const CUSTOMER_HEADER = Array.from(CUSTOMER_ORDER_HEADER);
 const DEFAULT_EXCLUDED_HEADER = Array.from(DEFAULT_EXCLUDED_CUSTOMERS_HEADER);
+
+// 「成本」為隱藏欄位，預設不顯示；經連點 brand icon 解鎖後當次 session 內生效。
+// 資料層永遠保留 cost 欄位（解析 / 序列化 / 匯入匯出皆完整），僅 UI 表格依此旗標顯示或隱藏。
+let costColumnRevealed = false;
+const costColumnListeners = new Set<() => void>();
+
+export const isCostColumnRevealed = (): boolean => costColumnRevealed;
+
+export const revealCostColumn = (): boolean => {
+    if (costColumnRevealed) return false;
+    costColumnRevealed = true;
+    for (const cb of costColumnListeners) {
+        try {
+            cb();
+        } catch (err) {
+            console.error('[settings] costColumn listener error', err);
+        }
+    }
+    return true;
+};
+
+export const onCostColumnRevealed = (cb: () => void): (() => void) => {
+    costColumnListeners.add(cb);
+    return () => {
+        costColumnListeners.delete(cb);
+    };
+};
 
 const CARGO_ASSET_URL = `${import.meta.env.BASE_URL}assets/cargo_sort.csv`;
 const DAILY_ASSET_URL = `${import.meta.env.BASE_URL}assets/daily_report_list.csv`;
@@ -664,12 +692,17 @@ function bindDailyPane(panel: HTMLElement): void {
     };
 
     const renderTable = () => {
+        const showCost = isCostColumnRevealed();
+        const headers = showCost ? DAILY_HEADER_FULL : DAILY_HEADER_BASE;
         tableWrap.innerHTML = '';
         tableWrap.appendChild(
             buildEditableTable({
-                headers: DAILY_HEADER,
+                headers,
                 rows,
-                rowToCells: (row) => [row.group, row.code, row.name, row.cost],
+                rowToCells: (row) =>
+                    showCost
+                        ? [row.group, row.code, row.name, row.cost]
+                        : [row.group, row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
                     if (!r) return;
@@ -722,6 +755,11 @@ function bindDailyPane(panel: HTMLElement): void {
                 console.error('[settings] daily 重新載入失敗', err);
             }
         })();
+    });
+
+    // 連點 brand icon 解鎖「成本」欄位後即時重繪
+    onCostColumnRevealed(() => {
+        renderTable();
     });
 
     addBtn.addEventListener('click', () => {
@@ -822,7 +860,7 @@ function parseDailyCsv(text: string): DailyRow[] {
  */
 function serializeDailyCsv(rows: DailyRow[]): string {
     const out = sparsifyDailyRows(rows);
-    return Papa.unparse([DAILY_HEADER.slice(), ...out], {newline: '\n'});
+    return Papa.unparse([DAILY_HEADER_FULL.slice(), ...out], {newline: '\n'});
 }
 
 function sparsifyDailyRows(rows: DailyRow[]): string[][] {
@@ -858,7 +896,7 @@ function parseDailyFromXlsxRows(xlsxRows: string[][]): DailyRow[] {
 async function buildDailyXlsxBlob(rows: DailyRow[]): Promise<Blob> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('daily_report_list');
-    ws.addRow(DAILY_HEADER);
+    ws.addRow(DAILY_HEADER_FULL);
     for (const r of sparsifyDailyRows(rows)) {
         const [groupCol, code, name, costRaw] = r;
         const costNum = Number(costRaw);

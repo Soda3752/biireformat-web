@@ -11,7 +11,7 @@ import {renderDeliveryFeePanel} from '@/tabs/delivery-fee';
 import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
-import {renderSettingsPanel} from '@/tabs/settings';
+import {renderSettingsPanel, revealCostColumn} from '@/tabs/settings';
 import {loadSortingList} from '@/domain/sorting-list';
 
 const APP_VERSION = __APP_VERSION__;
@@ -117,9 +117,18 @@ function bindHiddenTabUnlock(
         if (count < REQUIRED_CLICKS) return;
         count = 0;
         firstClickAt = 0;
-        if (revealHiddenTab('analytics')) {
+        const analyticsRevealed = revealHiddenTab('analytics');
+        const costRevealed = revealCostColumn();
+        if (analyticsRevealed) {
             renderSideNav(navHost, switchTab);
             switchTab('analytics');
+        } else if (costRevealed) {
+            // 數據分析已解鎖過，這次只解鎖成本欄位 → 提示使用者
+            showToast({
+                variant: 'success',
+                title: '已解鎖隱藏設定',
+                message: '「品項分類」現在會顯示「成本」欄位',
+            });
         }
     });
 }
