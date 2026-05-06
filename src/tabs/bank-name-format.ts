@@ -23,7 +23,7 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">銀行對帳格式化</h1>
         <p class="card-subtitle">
-          上傳「銀行對帳單 (.csv)」，系統會自動依設定頁的「末五碼對照表」將每筆交易配對到對應的客戶名稱與線別，產出合併後的對帳結果。
+          上傳「銀行對帳單 (.csv 或 .xlsx)」，系統會自動依設定頁的「末五碼對照表」將每筆交易配對到對應的客戶名稱與線別，產出合併後的對帳結果。
         </p>
       </header>
 
@@ -34,7 +34,7 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
       <div data-role="preview-host"></div>
 
       <footer class="action-bar">
-        <div class="action-bar-status" data-role="overall-status">請上傳銀行對帳單 .csv</div>
+        <div class="action-bar-status" data-role="overall-status">請上傳銀行對帳單 .csv 或 .xlsx</div>
         <div class="action-bar-actions">
           <button type="button" class="btn btn-secondary" data-role="reset">重設</button>
           <button type="button" class="btn btn-primary btn-lg" data-role="export" disabled>輸出對帳結果</button>
@@ -69,8 +69,8 @@ export function renderBankNameFormatPanel(tab: TabDefinition): HTMLElement {
 
   const transZone = createDropZone({
     title: '銀行對帳單',
-    hint: '拖曳或點擊上傳 .csv（支援 Big5 / UTF-8）',
-    accept: '.csv,text/csv',
+      hint: '拖曳或點擊上傳 .csv（支援 Big5 / UTF-8）或 .xlsx',
+      accept: '.csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     onFile: async (file) => {
       try {
         const parsed = await parseTransRecord(file);
