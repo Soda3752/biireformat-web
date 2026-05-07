@@ -40,7 +40,6 @@ import {
     dailyTrendOption,
     linePieOption,
     type MetricKind,
-    monthOverMonthOption,
     productTopOption,
     weekdayOption,
 } from '@/analytics/chart-options';
@@ -298,12 +297,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 }),
                 build: (rows) => (rows.length === 0 ? null : categoryTreemapOption(rows, categoryMetric)),
             },
-            {
-                id: 'month-over-month',
-                title: '月對月成長（多檔時顯示）',
-                wide: true,
-                build: (_rows, ds) => (ds.files.length < 2 ? null : monthOverMonthOption(ds)),
-            },
         ];
 
         const built: ChartSlot[] = [];
@@ -444,10 +437,6 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
                 slot.container.parentElement!.classList.remove('is-empty');
             }
             if (slot.modalChart) apply(slot.modalChart);
-            // month-over-month 只在多檔時顯示卡片
-            if (slot.id === 'month-over-month') {
-                slot.container.parentElement!.hidden = dataset.files.length < 2;
-            }
         }
 
         // 客戶毛利倒數排行

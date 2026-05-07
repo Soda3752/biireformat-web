@@ -22,7 +22,8 @@ export type IconName =
     | 'chevron-down'
     | 'row-insert-above'
     | 'row-insert-below'
-    | 'maximize';
+    | 'maximize'
+    | 'clipboard-list';
 
 const PATHS: Record<IconName, string> = {
   receipt:
@@ -67,6 +68,8 @@ const PATHS: Record<IconName, string> = {
     // 行線在上、加號在下：在「目前列下方」插入
     'row-insert-below':
         '<line x1="4" y1="7" x2="20" y2="7"/><line x1="12" y1="13" x2="12" y2="21"/><line x1="8" y1="17" x2="16" y2="17"/>',
+    'clipboard-list':
+        '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/>',
     // 四角向外箭頭：放大／全螢幕
     maximize:
         '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>',

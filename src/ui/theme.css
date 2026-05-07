@@ -2519,3 +2519,310 @@ p {
   color: var(--color-text-muted);
   padding: var(--space-6);
 }
+
+/* ========== 跨月分析分頁 ========== */
+
+.cross-month-warning {
+    margin: var(--space-3) 0;
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-warning-soft);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+    border-left: 4px solid var(--color-warning);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+}
+
+/* 相鄰月對區塊 */
+.cross-month-pair {
+    margin: var(--space-3) 0;
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-left: 4px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.cross-month-pair.is-positive {
+    border-left-color: var(--color-success);
+}
+
+.cross-month-pair.is-negative {
+    border-left-color: var(--color-danger);
+}
+
+.cross-month-pair.is-neutral {
+    border-left-color: var(--color-border);
+}
+
+.cross-month-pair-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.cross-month-pair-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+.cross-month-pair-chev {
+    display: inline-block;
+    width: 14px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    transition: color 120ms ease;
+}
+
+.cross-month-pair-toggle:hover .cross-month-pair-chev {
+    color: var(--color-primary);
+}
+
+.cross-month-pair-title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.cross-month-pair-arrow {
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-regular);
+    margin: 0 4px;
+}
+
+.cross-month-pair-summary {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
+.cross-month-pair-summary.is-positive {
+    color: var(--color-success);
+    background-color: var(--color-success-soft);
+}
+
+.cross-month-pair-summary.is-negative {
+    color: var(--color-danger);
+    background-color: var(--color-danger-soft);
+}
+
+.cross-month-pair-summary.is-neutral {
+    color: var(--color-text-muted);
+    background-color: var(--color-surface-hover);
+}
+
+.cross-month-pair-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.cross-month-pair-subhead {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-2);
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--color-border);
+}
+
+/* MoM 卡片 */
+.cross-month-mom-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-2);
+}
+
+.cross-month-mom-card {
+    padding: var(--space-3);
+    background-color: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-left: 4px solid var(--color-border);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cross-month-mom-card.is-positive {
+    border-left-color: var(--color-success);
+}
+
+.cross-month-mom-card.is-negative {
+    border-left-color: var(--color-danger);
+}
+
+.cross-month-mom-card.is-neutral {
+    border-left-color: var(--color-border);
+}
+
+.cross-month-mom-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.cross-month-mom-value {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.cross-month-mom-delta {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.cross-month-mom-delta.is-positive {
+    color: var(--color-success);
+}
+
+.cross-month-mom-delta.is-negative {
+    color: var(--color-danger);
+}
+
+.cross-month-mom-delta.is-neutral {
+    color: var(--color-text-muted);
+}
+
+.cross-month-mom-arrow {
+    font-size: 11px;
+}
+
+/* 趨勢圖卡 body 高度 */
+.cross-month-trend-card .analytics-chart-body {
+    min-height: 320px;
+}
+
+/* 客戶分群 tabs */
+.cross-month-segment-tabs {
+    display: flex;
+    gap: var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: var(--space-2);
+}
+
+.cross-month-segment-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--space-2) var(--space-3);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    transition: color var(--motion-fast), border-color var(--motion-fast);
+}
+
+.cross-month-segment-tab:hover {
+    color: var(--color-text-primary);
+}
+
+.cross-month-segment-tab.is-active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+}
+
+.cross-month-segment-tab-count {
+    padding: 1px 8px;
+    background-color: var(--color-surface-hover);
+    border-radius: 999px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.cross-month-segment-tab.is-active .cross-month-segment-tab-count {
+    background-color: var(--color-primary-soft);
+    color: var(--color-primary);
+}
+
+/* 表格內 sub 文字（顯示客戶代碼） */
+.cross-month-cell-sub {
+    margin-left: 6px;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+}
+
+/* 空表 placeholder */
+.cross-month-empty {
+    text-align: center !important;
+    color: var(--color-text-muted) !important;
+    padding: var(--space-6) !important;
+}
+
+/* 通用 +/- 著色 */
+.cell-positive {
+    color: var(--color-success);
+    font-weight: var(--font-weight-medium);
+}
+
+.cell-negative {
+    color: var(--color-danger);
+    font-weight: var(--font-weight-medium);
+}
+
+/* 漲價影響表 */
+.cross-month-price-change-toolbar {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.cell-price-up {
+    color: var(--color-danger);
+    font-weight: var(--font-weight-medium);
+}
+
+.cell-price-down {
+    color: var(--color-success);
+    font-weight: var(--font-weight-medium);
+}
+
+.cross-month-price-arrow {
+    display: inline-block;
+    width: 14px;
+    margin-right: 6px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-semibold);
+}
+
+.cross-month-price-arrow.is-up {
+    color: var(--color-danger);
+}
+
+.cross-month-price-arrow.is-down {
+    color: var(--color-success);
+}
+
+.cross-month-mixed-prices {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    background-color: var(--color-warning-soft);
+    color: var(--color-warning);
+    border-radius: 999px;
+    font-size: 11px;
+}

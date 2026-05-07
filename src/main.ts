@@ -11,6 +11,7 @@ import {renderDeliveryFeePanel} from '@/tabs/delivery-fee';
 import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
+import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
 import {renderSettingsPanel, revealCostColumn} from '@/tabs/settings';
 import {loadSortingList} from '@/domain/sorting-list';
 
@@ -57,6 +58,8 @@ function bootstrap(): void {
       mainHost.appendChild(renderDailyCountPanel(tab));
     } else if (tab.id === 'analytics') {
         mainHost.appendChild(renderDataAnalyticsPanel(tab));
+    } else if (tab.id === 'cross-month-analytics') {
+        mainHost.appendChild(renderCrossMonthAnalyticsPanel(tab));
     } else if (tab.id === 'settings') {
         mainHost.appendChild(renderSettingsPanel(tab));
     } else {
@@ -118,10 +121,13 @@ function bindHiddenTabUnlock(
         count = 0;
         firstClickAt = 0;
         const analyticsRevealed = revealHiddenTab('analytics');
+        const crossMonthRevealed = revealHiddenTab('cross-month-analytics');
         const costRevealed = revealCostColumn();
-        if (analyticsRevealed) {
+        if (analyticsRevealed || crossMonthRevealed) {
             renderSideNav(navHost, switchTab);
-            switchTab('analytics');
+            if (analyticsRevealed) {
+                switchTab('analytics');
+            }
         } else if (costRevealed) {
             // 數據分析已解鎖過，這次只解鎖成本欄位 → 提示使用者
             showToast({

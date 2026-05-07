@@ -13,8 +13,15 @@ export const TABS: readonly TabDefinition[] = [
   { id: 'overview', label: '明細', icon: 'list', hash: '#overview' },
   { id: 'delivery', label: '代送費', icon: 'truck', hash: '#delivery' },
   { id: 'bank', label: '對帳', icon: 'bank', hash: '#bank' },
-  { id: 'daily', label: '單日數量', icon: 'calendar', hash: '#daily' },
+    {id: 'daily', label: '單日數量', icon: 'clipboard-list', hash: '#daily'},
   {id: 'analytics', label: '數據分析', icon: 'chart', hash: '#analytics', hidden: true},
+    {
+        id: 'cross-month-analytics',
+        label: '跨月數據分析',
+        icon: 'calendar',
+        hash: '#cross-month-analytics',
+        hidden: true
+    },
     {id: 'settings', label: '設定', icon: 'settings', hash: '#settings'},
 ] as const;
 

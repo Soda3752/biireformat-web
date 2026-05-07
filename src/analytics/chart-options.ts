@@ -10,7 +10,7 @@
  */
 
 import type {EChartsOption} from 'echarts';
-import type {AnalyticsDataset, AnalyticsRow} from './dataset-builder';
+import type {AnalyticsRow} from './dataset-builder';
 import type {GroupSum} from './aggregators';
 import {dailySeries, groupBy, groupByCustomer, marginPct, topN, weekdaySeries} from './aggregators';
 import {WEEKDAY_NAMES} from '@/domain/date-utility';
@@ -476,65 +476,3 @@ export function weekdayOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricK
     };
 }
 
-
-/* ================ T3.4 月對月成長 ================ */
-export function monthOverMonthOption(dataset: AnalyticsDataset): EChartsOption {
-    // 一個 file = 一個月份
-    const fileLabels = dataset.files.map((f) => `${f.year}年${f.month}月`);
-    const fileAmount: number[] = [];
-    const fileCount: number[] = [];
-    const fileProfit: number[] = [];
-    const fileCustomers: number[] = [];
-    const fileMetas: ProfitMeta[] = [];
-    for (const f of dataset.files) {
-        const fileRows = dataset.rows.filter((r) => r.fileId === f.id);
-        let amount = 0;
-        let count = 0;
-        let costAmount = 0;
-        let profit = 0;
-        let allCostUnset = true;
-        const customers = new Set<string>();
-        for (const r of fileRows) {
-            amount += r.amount;
-            count += r.count;
-            costAmount += r.costAmount;
-            profit += r.profit;
-            if (!r.isCostUnset) allCostUnset = false;
-            customers.add(r.customerCode);
-        }
-        fileAmount.push(amount);
-        fileCount.push(count);
-        fileProfit.push(Math.round(profit));
-        fileCustomers.push(customers.size);
-        fileMetas.push({amount, costAmount, profit, allCostUnset});
-    }
-
-    return {
-        grid: {top: 50, right: 20, bottom: 40, left: 70},
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: {type: 'shadow'},
-            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], fileMetas, fmtMoney),
-        },
-        legend: {top: 0, left: 'center'},
-        xAxis: {type: 'category', data: fileLabels},
-        yAxis: [
-            {type: 'value', name: '金額/數量/毛利', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
-            {type: 'value', name: '客戶數', minInterval: 1},
-        ],
-        series: [
-            {name: '營收', type: 'bar', data: fileAmount, itemStyle: {color: PALETTE.revenue}},
-            {name: '毛利', type: 'bar', data: fileProfit, itemStyle: {color: PALETTE.profit}},
-            {name: '銷售數量', type: 'bar', data: fileCount, itemStyle: {color: PALETTE.accent}},
-            {
-                name: '客戶數',
-                type: 'line',
-                yAxisIndex: 1,
-                data: fileCustomers,
-                itemStyle: {color: PALETTE.cost},
-                lineStyle: {width: 2},
-                symbolSize: 8,
-            },
-        ],
-    };
-}
