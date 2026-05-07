@@ -27,7 +27,30 @@ export const TABS: readonly TabDefinition[] = [
 
 const DEFAULT_TAB_ID = 'bill';
 
-const revealedHiddenTabs = new Set<string>();
+const REVEALED_STORAGE_KEY = 'revealed-hidden-tabs';
+
+const revealedHiddenTabs = loadRevealedFromStorage();
+
+function loadRevealedFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem(REVEALED_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const validIds = new Set(TABS.filter((t) => t.hidden).map((t) => t.id));
+    return new Set(
+      Array.isArray(arr) ? arr.filter((x) => typeof x === 'string' && validIds.has(x)) : []
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistRevealed(): void {
+  try {
+    localStorage.setItem(REVEALED_STORAGE_KEY, JSON.stringify([...revealedHiddenTabs]));
+  } catch (err) {
+    console.warn('[tabs] persist revealed hidden tabs failed', err);
+  }
+}
 
 function isTabVisible(tab: TabDefinition): boolean {
   return !tab.hidden || revealedHiddenTabs.has(tab.id);
@@ -37,6 +60,15 @@ export function revealHiddenTab(tabId: string): boolean {
   const tab = TABS.find((t) => t.id === tabId);
   if (!tab || !tab.hidden || revealedHiddenTabs.has(tabId)) return false;
   revealedHiddenTabs.add(tabId);
+  persistRevealed();
+  return true;
+}
+
+export function hideHiddenTab(tabId: string): boolean {
+  const tab = TABS.find((t) => t.id === tabId);
+  if (!tab || !tab.hidden || !revealedHiddenTabs.has(tabId)) return false;
+  revealedHiddenTabs.delete(tabId);
+  persistRevealed();
   return true;
 }
 

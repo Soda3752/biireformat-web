@@ -79,16 +79,31 @@ const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
 const CUSTOMER_HEADER = Array.from(CUSTOMER_ORDER_HEADER);
 const DEFAULT_EXCLUDED_HEADER = Array.from(DEFAULT_EXCLUDED_CUSTOMERS_HEADER);
 
-// 「成本」為隱藏欄位，預設不顯示；經連點 brand icon 解鎖後當次 session 內生效。
+// 「成本」為隱藏欄位，預設不顯示；經連點 brand icon 解鎖後生效，狀態以 localStorage 持久化。
 // 資料層永遠保留 cost 欄位（解析 / 序列化 / 匯入匯出皆完整），僅 UI 表格依此旗標顯示或隱藏。
-let costColumnRevealed = false;
+const COST_COLUMN_STORAGE_KEY = 'cost-column-revealed';
+
+const loadCostColumnRevealed = (): boolean => {
+    try {
+        return localStorage.getItem(COST_COLUMN_STORAGE_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const persistCostColumnRevealed = (value: boolean): void => {
+    try {
+        if (value) localStorage.setItem(COST_COLUMN_STORAGE_KEY, '1');
+        else localStorage.removeItem(COST_COLUMN_STORAGE_KEY);
+    } catch (err) {
+        console.warn('[settings] persist costColumn state failed', err);
+    }
+};
+
+let costColumnRevealed = loadCostColumnRevealed();
 const costColumnListeners = new Set<() => void>();
 
-export const isCostColumnRevealed = (): boolean => costColumnRevealed;
-
-export const revealCostColumn = (): boolean => {
-    if (costColumnRevealed) return false;
-    costColumnRevealed = true;
+const notifyCostColumnListeners = (): void => {
     for (const cb of costColumnListeners) {
         try {
             cb();
@@ -96,6 +111,23 @@ export const revealCostColumn = (): boolean => {
             console.error('[settings] costColumn listener error', err);
         }
     }
+};
+
+export const isCostColumnRevealed = (): boolean => costColumnRevealed;
+
+export const revealCostColumn = (): boolean => {
+    if (costColumnRevealed) return false;
+    costColumnRevealed = true;
+    persistCostColumnRevealed(true);
+    notifyCostColumnListeners();
+    return true;
+};
+
+export const hideCostColumn = (): boolean => {
+    if (!costColumnRevealed) return false;
+    costColumnRevealed = false;
+    persistCostColumnRevealed(false);
+    notifyCostColumnListeners();
     return true;
 };
 

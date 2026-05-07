@@ -1947,6 +1947,46 @@ p {
     color: var(--color-primary-text);
 }
 
+/* 跨月趨勢：每段天數輸入器 */
+.cross-month-trend-days {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 8px;
+    height: 26px;
+    background-color: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.cross-month-trend-days-input {
+    width: 42px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xs);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    padding: 0;
+    -moz-appearance: textfield;
+}
+
+.cross-month-trend-days-input:focus {
+    outline: none;
+}
+
+.cross-month-trend-days-input::-webkit-outer-spin-button,
+.cross-month-trend-days-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.cross-month-trend-days-suffix {
+    color: var(--color-text-muted);
+}
+
 /* 篩選器 */
 .analytics-filters-section {
     padding: var(--space-3) var(--space-4);
@@ -2643,10 +2683,60 @@ p {
 }
 
 /* MoM 卡片 */
+/* MoM 卡片群：主要指標（總量/每日平均成對縱向對齊）+ 附屬指標（毛利率/客戶數/商品種類）兩段式排版 */
+.cross-month-mom-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
 .cross-month-mom-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--space-2);
+}
+
+/* 主要指標（≥961px）：3 欄 × 3 列，column-flow 讓 [總量, 每日平均, 每日中位數] 同欄家族
+   源序為 [營收, 平均營收, 中位數營收, 毛利, 平均毛利, 中位數毛利, 銷售數量, 平均數量, 中位數數量] */
+.cross-month-mom-grid-primary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(3, auto);
+    grid-auto-flow: column;
+    grid-auto-rows: 1fr;
+}
+
+/* 附屬指標：與主要指標以分隔線區隔 */
+.cross-month-mom-grid-auxiliary {
+    padding-top: var(--space-3);
+    border-top: 1px dashed var(--color-border);
+}
+
+/* 中等寬度（561–960px）：主要指標保留 3 欄 row-flow，
+   row1=三項總量、row2=三項每日平均、row3=三項每日中位數，欄向家族對齊不變。
+   附屬指標（毛利率/客戶數/商品種類）改為 2 欄。 */
+@media (max-width: 960px) {
+    .cross-month-mom-grid-auxiliary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cross-month-mom-grid-primary {
+        grid-template-rows: none;
+        grid-auto-flow: row;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+/* 窄寬（≤560px）：兩段式都改為單欄，源序已維持「家族內三聯相鄰」 */
+@media (max-width: 560px) {
+    .cross-month-mom-grid-auxiliary {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .cross-month-mom-grid-primary {
+        grid-template-rows: none;
+        grid-auto-flow: row;
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .cross-month-mom-card {
@@ -2657,7 +2747,32 @@ p {
     border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
+    min-width: 0;
+}
+
+/* 「每日平均」衍生卡片：略微內凹樣式，暗示與上方總量卡為同一家族的衍生指標 */
+.cross-month-mom-card.is-daily {
+    background-color: color-mix(in srgb, var(--color-surface-hover) 60%, transparent);
+}
+
+.cross-month-mom-card.is-daily .cross-month-mom-value {
+    font-size: var(--font-size-lg);
+}
+
+/* 「每日中位數」衍生卡片：比每日平均更內凹（更淡），與「平均/中位數」配對辨識 */
+.cross-month-mom-card.is-median {
+    background-color: color-mix(in srgb, var(--color-surface-hover) 35%, transparent);
+}
+
+.cross-month-mom-card.is-median .cross-month-mom-value {
+    font-size: var(--font-size-lg);
+}
+
+.cross-month-mom-card.is-median .cross-month-mom-label::before {
+    content: '∼ ';
+    color: var(--color-text-muted);
+    opacity: 0.7;
 }
 
 .cross-month-mom-card.is-positive {
@@ -2675,8 +2790,20 @@ p {
 .cross-month-mom-label {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cross-month-mom-meta {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: -2px;
 }
 
 .cross-month-mom-value {
@@ -2759,11 +2886,239 @@ p {
     color: var(--color-primary);
 }
 
+/* 客戶分群表分頁切換下方的摘要列：總數 + 各指標 + 佔當月比例 */
+.cross-month-segment-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+    background-color: var(--color-surface-hover);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.cross-month-segment-summary:empty {
+    display: none;
+}
+
+.cross-month-segment-summary-count {
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+}
+
+.cross-month-segment-summary-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.cross-month-segment-summary-key {
+    color: var(--color-text-muted);
+}
+
+.cross-month-segment-summary-val {
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+}
+
+.cross-month-segment-summary-ratio {
+    color: var(--color-primary);
+    font-weight: var(--font-weight-medium);
+    font-size: var(--font-size-xs);
+}
+
+/* 可排序表頭：客戶分群與其他類似表共用 */
+th.is-sortable {
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.12s ease;
+}
+
+th.is-sortable:hover {
+    background-color: var(--color-surface-hover);
+}
+
+th.is-sortable .sort-indicator {
+    display: inline-block;
+    margin-left: 4px;
+    width: 12px;
+    font-size: 10px;
+    color: var(--color-text-muted);
+    opacity: 0.4;
+    text-align: center;
+    vertical-align: baseline;
+}
+
+th.is-sortable .sort-indicator.is-active {
+    color: var(--color-primary);
+    opacity: 1;
+}
+
+/* 中位數比較 caption（提示該分頁所依據的中位數值，與徽章解讀規則） */
+.cross-month-segment-caption {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-4);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+    background-color: color-mix(in srgb, var(--color-surface-hover) 50%, transparent);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.cross-month-segment-caption strong {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+    margin-left: 4px;
+}
+
+.cross-month-segment-caption-note {
+    color: var(--color-text-muted);
+    margin-left: auto;
+}
+
+/* 表格內「值 + vs 中位數徽章」共置的儲存格 */
+.cross-month-cell-with-badge {
+    white-space: nowrap;
+}
+
+/* vs 中位數徽章：附加在金額/數量/毛利右側的小百分比 chip */
+.cross-month-vs-median {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 11px;
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+    border-radius: var(--radius-sm);
+    background-color: color-mix(in srgb, currentColor 12%, transparent);
+    vertical-align: baseline;
+}
+
+.cross-month-vs-median.is-positive {
+    color: var(--color-success);
+}
+
+.cross-month-vs-median.is-negative {
+    color: var(--color-danger);
+}
+
+.cross-month-vs-median.is-neutral {
+    color: var(--color-text-muted);
+}
+
+/* 客戶分群 tab 內的進度條：每個指標一條 bar，染色寬度即佔當月比例 */
+.cross-month-segment-bars {
+    margin-bottom: var(--space-3);
+}
+
+.cross-month-segment-bars:empty {
+    display: none;
+}
+
+.cross-month-bars-group-label {
+    margin-top: var(--space-2);
+    margin-bottom: 2px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
+}
+
+.cross-month-bars-group-label:first-child {
+    margin-top: 0;
+}
+
+.cross-month-bar-row {
+    display: grid;
+    grid-template-columns: 50px 1fr auto 60px;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 3px 0;
+    font-size: var(--font-size-sm);
+}
+
+.cross-month-bar-label {
+    color: var(--color-text-secondary);
+    font-weight: var(--font-weight-medium);
+}
+
+.cross-month-bar-track {
+    position: relative;
+    height: 10px;
+    background: var(--color-surface-hover);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.cross-month-bar-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.25s ease;
+}
+
+.cross-month-bar-value {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.cross-month-bar-pct {
+    text-align: right;
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
 /* 表格內 sub 文字（顯示客戶代碼） */
 .cross-month-cell-sub {
     margin-left: 6px;
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
+}
+
+/* 零售標記/取消按鈕 */
+.cross-month-retail-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    transition: background-color var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+    white-space: nowrap;
+}
+
+.cross-month-retail-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+}
+
+.cross-month-retail-btn.is-mark:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+.cross-month-retail-btn.is-unmark {
+    border-color: var(--color-primary-soft);
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+}
+
+.cross-month-retail-btn.is-unmark:hover {
+    border-color: var(--color-danger);
+    background: var(--color-surface);
+    color: var(--color-danger);
 }
 
 /* 空表 placeholder */
@@ -2773,13 +3128,13 @@ p {
     padding: var(--space-6) !important;
 }
 
-/* 通用 +/- 著色 */
-.cell-positive {
+/* 通用 +/- 著色（特定度需高於 .analytics-detail-table-el td） */
+td.cell-positive {
     color: var(--color-success);
     font-weight: var(--font-weight-medium);
 }
 
-.cell-negative {
+td.cell-negative {
     color: var(--color-danger);
     font-weight: var(--font-weight-medium);
 }
@@ -2790,13 +3145,13 @@ p {
     gap: var(--space-2);
 }
 
-.cell-price-up {
-    color: var(--color-danger);
+td.cell-price-up {
+    color: var(--color-success);
     font-weight: var(--font-weight-medium);
 }
 
-.cell-price-down {
-    color: var(--color-success);
+td.cell-price-down {
+    color: var(--color-danger);
     font-weight: var(--font-weight-medium);
 }
 
@@ -2810,19 +3165,10 @@ p {
 }
 
 .cross-month-price-arrow.is-up {
-    color: var(--color-danger);
-}
-
-.cross-month-price-arrow.is-down {
     color: var(--color-success);
 }
 
-.cross-month-mixed-prices {
-    display: inline-block;
-    margin-left: 6px;
-    padding: 1px 6px;
-    background-color: var(--color-warning-soft);
-    color: var(--color-warning);
-    border-radius: 999px;
-    font-size: 11px;
+.cross-month-price-arrow.is-down {
+    color: var(--color-danger);
 }
+

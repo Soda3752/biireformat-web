@@ -3,7 +3,16 @@ import './ui/theme.css';
 import {icon} from '@/ui/icons';
 import {bindThemeToggle} from '@/ui/theme';
 import {showToast} from '@/ui/toast';
-import {renderSideNav, resolveInitialTab, revealHiddenTab, setActiveTab, tabHash, TABS,} from '@/ui/tabs';
+import {
+    hideHiddenTab,
+    isHiddenTabRevealed,
+    renderSideNav,
+    resolveInitialTab,
+    revealHiddenTab,
+    setActiveTab,
+    tabHash,
+    TABS,
+} from '@/ui/tabs';
 import {renderPlaceholderPanel} from '@/tabs/placeholder';
 import {renderBillReformatPanel} from '@/tabs/bill-reformat';
 import {renderBillOverviewPanel} from '@/tabs/bill-overview';
@@ -12,7 +21,7 @@ import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
-import {renderSettingsPanel, revealCostColumn} from '@/tabs/settings';
+import {hideCostColumn, isCostColumnRevealed, renderSettingsPanel, revealCostColumn,} from '@/tabs/settings';
 import {loadSortingList} from '@/domain/sorting-list';
 
 const APP_VERSION = __APP_VERSION__;
@@ -120,6 +129,31 @@ function bindHiddenTabUnlock(
         if (count < REQUIRED_CLICKS) return;
         count = 0;
         firstClickAt = 0;
+
+        const allRevealed =
+            isHiddenTabRevealed('analytics') &&
+            isHiddenTabRevealed('cross-month-analytics') &&
+            isCostColumnRevealed();
+
+        if (allRevealed) {
+            // 已全部解鎖 → 連點再次收起
+            hideHiddenTab('analytics');
+            hideHiddenTab('cross-month-analytics');
+            hideCostColumn();
+            renderSideNav(navHost, switchTab);
+            // 若使用者目前停在被收起的分頁，切回預設分頁
+            const currentHash = window.location.hash;
+            if (currentHash === '#analytics' || currentHash === '#cross-month-analytics') {
+                switchTab(resolveInitialTab());
+            }
+            showToast({
+                variant: 'success',
+                title: '已收起隱藏功能',
+                message: '「數據分析」「跨月數據分析」與「成本」欄位已隱藏',
+            });
+            return;
+        }
+
         const analyticsRevealed = revealHiddenTab('analytics');
         const crossMonthRevealed = revealHiddenTab('cross-month-analytics');
         const costRevealed = revealCostColumn();

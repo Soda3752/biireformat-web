@@ -148,15 +148,11 @@ export function createPriceChangeTable(opts: PriceChangeTableOptions = {}): Cont
                 const priceCellClass = priceUp ? 'cell-price-up' : priceDown ? 'cell-price-down' : '';
                 const priceTagClass = priceUp ? 'is-up' : priceDown ? 'is-down' : '';
                 const priceArrow = priceUp ? '↑' : priceDown ? '↓' : '·';
-                const distinctNotice = r.currentDistinctPrices > 1 || r.prevDistinctPrices > 1
-                    ? `<span class="cross-month-mixed-prices" title="該商品在不同客戶間有 ${r.prevDistinctPrices}→${r.currentDistinctPrices} 種不同單價（顯示為加權均價）">混價</span>`
-                    : '';
                 return `
         <tr class="${opts.onProductClick ? 'is-clickable' : ''}" data-name="${escapeHtml(r.productName)}">
           <td>
             <span class="cross-month-price-arrow ${priceTagClass}">${priceArrow}</span>
             ${escapeHtml(r.productName)}
-            ${distinctNotice}
           </td>
           <td class="is-right">${fmtPrice(r.prevAvgPrice)}</td>
           <td class="is-right ${priceCellClass}">${fmtPrice(r.currentAvgPrice)}</td>

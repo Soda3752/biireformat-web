@@ -33,6 +33,26 @@ export function rowMonthSortKey(row: AnalyticsRow): string {
     return `${row.year}-${String(row.month).padStart(2, '0')}`;
 }
 
+/** 三大金額型指標的數值組（amount / count / profit）。供平均、中位數等表示一致。 */
+export interface MetricTriple {
+    /** 營收 */
+    amount: number;
+    /** 銷售數量 */
+    count: number;
+    /** 毛利 */
+    profit: number;
+}
+
+/** 沿用既有命名：每日平均沿用同一介面 */
+export type DailyMetrics = MetricTriple;
+
+/** 單一客戶在某月的彙總（用於跨客戶中位數計算） */
+interface CustomerAgg {
+    amount: number;
+    count: number;
+    profit: number;
+}
+
 export interface MonthlyTotals {
     key: MonthKey;
     amount: number;
@@ -42,8 +62,45 @@ export interface MonthlyTotals {
     customerCount: number;
     productCount: number;
     rowCount: number;
+    /** 該月份的日曆天數（依民國年 + 月份計算，2 月含閏年判斷） */
+    daysInMonth: number;
+    /**
+     * 該月「跨客戶中位數」：以每位客戶的當月彙總為樣本，
+     * 對 amount / count / profit 各取中位數。代表「典型客戶的月表現」。
+     * （注：本月有交易的客戶才納入樣本，本月零交易的客戶不會列入分母）
+     */
+    customerMedian: MetricTriple;
     /** 該月所有列皆未填成本 */
     allCostUnset: boolean;
+}
+
+/** 民國年 + 月份 → 該月日曆天數（ROC year + 1911 = 西元年）。 */
+function daysInRocMonth(rocYear: string, month: number): number {
+    const adYear = Number(rocYear) + 1911;
+    if (!Number.isFinite(adYear) || month < 1 || month > 12) return 30;
+    return new Date(adYear, month, 0).getDate();
+}
+
+/** 中位數（空陣列回 0）。偶數筆取中間兩值平均。 */
+function median(values: ReadonlyArray<number>): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+}
+
+/** 對該月所有客戶的當月彙總取中位數（跨客戶代表典型客戶月表現） */
+function customerMedianOf(
+    customerStats: Map<string, CustomerAgg>
+): MetricTriple {
+    const stats = [...customerStats.values()];
+    return {
+        amount: median(stats.map((s) => s.amount)),
+        count: median(stats.map((s) => s.count)),
+        profit: median(stats.map((s) => s.profit)),
+    };
 }
 
 /** 把 rows 依「年-月」分組，回傳排序好的月度總計（時間遞增）。 */
@@ -54,7 +111,8 @@ export function monthlyTotals(rows: ReadonlyArray<AnalyticsRow>): MonthlyTotals[
         count: number;
         costAmount: number;
         profit: number;
-        customers: Set<string>;
+        /** 該月內 customerCode → 該客戶當月彙總，用於跨客戶中位數計算 */
+        customerStats: Map<string, CustomerAgg>;
         products: Set<string>;
         rowCount: number;
         anyCostSet: boolean;
@@ -71,7 +129,7 @@ export function monthlyTotals(rows: ReadonlyArray<AnalyticsRow>): MonthlyTotals[
                 count: 0,
                 costAmount: 0,
                 profit: 0,
-                customers: new Set(),
+                customerStats: new Map(),
                 products: new Set(),
                 rowCount: 0,
                 anyCostSet: false,
@@ -82,8 +140,17 @@ export function monthlyTotals(rows: ReadonlyArray<AnalyticsRow>): MonthlyTotals[
         acc.count += r.count;
         acc.costAmount += r.costAmount;
         acc.profit += r.profit;
-        acc.customers.add(r.customerCode);
         acc.products.add(r.productName);
+
+        let cust = acc.customerStats.get(r.customerCode);
+        if (!cust) {
+            cust = {amount: 0, count: 0, profit: 0};
+            acc.customerStats.set(r.customerCode, cust);
+        }
+        cust.amount += r.amount;
+        cust.count += r.count;
+        cust.profit += r.profit;
+
         acc.rowCount += 1;
         if (!r.isCostUnset) acc.anyCostSet = true;
     }
@@ -94,9 +161,11 @@ export function monthlyTotals(rows: ReadonlyArray<AnalyticsRow>): MonthlyTotals[
         count: a.count,
         costAmount: a.costAmount,
         profit: a.profit,
-        customerCount: a.customers.size,
+        customerCount: a.customerStats.size,
         productCount: a.products.size,
         rowCount: a.rowCount,
+        daysInMonth: daysInRocMonth(a.key.year, a.key.month),
+        customerMedian: customerMedianOf(a.customerStats),
         allCostUnset: !a.anyCostSet,
     }));
 
@@ -112,6 +181,204 @@ export function rowsOfMonth(
     return rows.filter((r) => rowMonthSortKey(r) === sortKey);
 }
 
+/* ============== 期段（每 N 日為一段）細粒度聚合，用於趨勢圖 ============== */
+
+/** 趨勢圖期段天數預設值（每段 N 日；可由 UI 動態調整為 1~31）。 */
+export const DEFAULT_TREND_DAYS_PER_PERIOD = 5;
+export const MIN_TREND_DAYS_PER_PERIOD = 1;
+export const MAX_TREND_DAYS_PER_PERIOD = 31;
+
+/** 把使用者輸入夾擠到合法範圍並轉為整數；NaN/越界皆退回預設值。 */
+export function clampTrendDaysPerPeriod(value: number): number {
+    if (!Number.isFinite(value)) return DEFAULT_TREND_DAYS_PER_PERIOD;
+    const v = Math.floor(value);
+    if (v < MIN_TREND_DAYS_PER_PERIOD) return MIN_TREND_DAYS_PER_PERIOD;
+    if (v > MAX_TREND_DAYS_PER_PERIOD) return MAX_TREND_DAYS_PER_PERIOD;
+    return v;
+}
+
+/** 民國年（字串）→ 西曆年（number）。 */
+function rocToAdYear(rocYear: string): number {
+    return Number(rocYear) + 1911;
+}
+
+/** 把 (民國年, 月, 日) 轉為自 Unix epoch 起算的「絕對天數」，用於跨月連續切段。 */
+function rocDateToAbsoluteDay(rocYear: string, month: number, day: number): number {
+    return Math.floor(Date.UTC(rocToAdYear(rocYear), month - 1, day) / 86400000);
+}
+
+/** 絕對天數 → (民國年字串, 月, 日)。 */
+function absoluteDayToRocCalendar(absDay: number): { year: string; month: number; day: number } {
+    const d = new Date(absDay * 86400000);
+    return {
+        year: String(d.getUTCFullYear() - 1911),
+        month: d.getUTCMonth() + 1,
+        day: d.getUTCDate(),
+    };
+}
+
+/** 段標籤（x 軸用，緊湊）。同月：「3月1-5日」；跨月：「3/31-4/4」；跨年：「114/12/30-115/1/3」。 */
+function buildPeriodLabel(
+    start: { year: string; month: number; day: number },
+    end: { year: string; month: number; day: number }
+): string {
+    const sameYear = start.year === end.year;
+    const sameMonth = sameYear && start.month === end.month;
+    if (sameMonth && start.day === end.day) return `${start.month}月${start.day}日`;
+    if (sameMonth) return `${start.month}月${start.day}-${end.day}日`;
+    if (sameYear) return `${start.month}/${start.day}-${end.month}/${end.day}`;
+    return `${start.year}/${start.month}/${start.day}-${end.year}/${end.month}/${end.day}`;
+}
+
+/** 段完整標籤（tooltip 用）。 */
+function buildPeriodFullLabel(
+    start: { year: string; month: number; day: number },
+    end: { year: string; month: number; day: number }
+): string {
+    const sameYear = start.year === end.year;
+    const sameMonth = sameYear && start.month === end.month;
+    if (sameMonth && start.day === end.day) return `${start.year}年${start.month}月${start.day}日`;
+    if (sameMonth) return `${start.year}年${start.month}月${start.day}-${end.day}日`;
+    if (sameYear) return `${start.year}年${start.month}月${start.day}日 ~ ${end.month}月${end.day}日`;
+    return `${start.year}年${start.month}月${start.day}日 ~ ${end.year}年${end.month}月${end.day}日`;
+}
+
+export interface PeriodKey {
+    /** 段索引（0 起算，相對於資料的最早月份 1 號） */
+    periodIndex: number;
+    /** 段起始日（民國年） */
+    startYear: string;
+    startMonth: number;
+    startDay: number;
+    /** 段結束日（民國年）。最後一段保持 daysPerPeriod 寬度，可能落在資料末日之後（僅標籤用）。 */
+    endYear: string;
+    endMonth: number;
+    endDay: number;
+    /** x 軸用緊湊標籤，例：「3月1-5日」、「3/31-4/4」 */
+    label: string;
+    /** 含年的完整標籤，例：「114年3月1-5日」、「114年3月31日 ~ 4月4日」 */
+    fullLabel: string;
+    /** 排序鍵，使用起始絕對天數補零至 8 位 */
+    sortKey: string;
+}
+
+export interface PeriodTotals {
+    key: PeriodKey;
+    amount: number;
+    count: number;
+    costAmount: number;
+    profit: number;
+    customerCount: number;
+    productCount: number;
+    rowCount: number;
+    /** 該段所有列皆未填成本 */
+    allCostUnset: boolean;
+}
+
+function makePeriodKey(
+    baseAbsDay: number,
+    periodIndex: number,
+    daysPerPeriod: number
+): PeriodKey {
+    const startAbsDay = baseAbsDay + periodIndex * daysPerPeriod;
+    const endAbsDay = startAbsDay + daysPerPeriod - 1;
+    const start = absoluteDayToRocCalendar(startAbsDay);
+    const end = absoluteDayToRocCalendar(endAbsDay);
+    return {
+        periodIndex,
+        startYear: start.year,
+        startMonth: start.month,
+        startDay: start.day,
+        endYear: end.year,
+        endMonth: end.month,
+        endDay: end.day,
+        label: buildPeriodLabel(start, end),
+        fullLabel: buildPeriodFullLabel(start, end),
+        sortKey: String(startAbsDay).padStart(8, '0'),
+    };
+}
+
+/**
+ * 把 rows 依連續 N 日段分組（不在月底切割：如 daysPerPeriod=5 時 3/31~4/4 為同一段）。
+ * 段錨點為「資料中最早一筆的所屬月 1 號」，由此向後每 N 日為一段。
+ * @param daysPerPeriod 每段天數（1~31，會自動 clamp）。
+ */
+export function periodTotals(
+    rows: ReadonlyArray<AnalyticsRow>,
+    daysPerPeriod: number = DEFAULT_TREND_DAYS_PER_PERIOD
+): PeriodTotals[] {
+    const dpp = clampTrendDaysPerPeriod(daysPerPeriod);
+    if (rows.length === 0) return [];
+
+    // 找出最早資料月份，以該月 1 號為段錨點
+    let earliest = rows[0];
+    let earliestAbsDay = rocDateToAbsoluteDay(earliest.year, earliest.month, earliest.day);
+    for (const r of rows) {
+        const ad = rocDateToAbsoluteDay(r.year, r.month, r.day);
+        if (ad < earliestAbsDay) {
+            earliest = r;
+            earliestAbsDay = ad;
+        }
+    }
+    const baseAbsDay = rocDateToAbsoluteDay(earliest.year, earliest.month, 1);
+
+    interface Acc {
+        key: PeriodKey;
+        amount: number;
+        count: number;
+        costAmount: number;
+        profit: number;
+        customers: Set<string>;
+        products: Set<string>;
+        rowCount: number;
+        anyCostSet: boolean;
+    }
+
+    const map = new Map<number, Acc>();
+    for (const r of rows) {
+        const ad = rocDateToAbsoluteDay(r.year, r.month, r.day);
+        const idx = Math.floor((ad - baseAbsDay) / dpp);
+        let acc = map.get(idx);
+        if (!acc) {
+            acc = {
+                key: makePeriodKey(baseAbsDay, idx, dpp),
+                amount: 0,
+                count: 0,
+                costAmount: 0,
+                profit: 0,
+                customers: new Set(),
+                products: new Set(),
+                rowCount: 0,
+                anyCostSet: false,
+            };
+            map.set(idx, acc);
+        }
+        acc.amount += r.amount;
+        acc.count += r.count;
+        acc.costAmount += r.costAmount;
+        acc.profit += r.profit;
+        acc.customers.add(r.customerCode);
+        acc.products.add(r.productName);
+        acc.rowCount += 1;
+        if (!r.isCostUnset) acc.anyCostSet = true;
+    }
+
+    const arr: PeriodTotals[] = [...map.values()].map((a) => ({
+        key: a.key,
+        amount: a.amount,
+        count: a.count,
+        costAmount: a.costAmount,
+        profit: a.profit,
+        customerCount: a.customers.size,
+        productCount: a.products.size,
+        rowCount: a.rowCount,
+        allCostUnset: !a.anyCostSet,
+    }));
+
+    arr.sort((a, b) => a.key.sortKey.localeCompare(b.key.sortKey));
+    return arr;
+}
+
 /* ============== MoM 環比 ============== */
 
 export interface DeltaValue {
@@ -121,9 +388,20 @@ export interface DeltaValue {
     pct: number | null;
 }
 
+/** 每日平均（amount / count / profit ÷ daysInMonth） */
+export type DailyAverages = DailyMetrics;
+
 export interface MoMComparison {
     current: MonthlyTotals;
     previous: MonthlyTotals | null;
+    /** 本月每日平均（依 daysInMonth） */
+    currentDaily: DailyAverages;
+    /** 上月每日平均（無上月時為 null） */
+    previousDaily: DailyAverages | null;
+    /** 本月跨客戶中位數（每位客戶月彙總取中位） */
+    currentMedian: MetricTriple;
+    /** 上月跨客戶中位數（無上月時為 null） */
+    previousMedian: MetricTriple | null;
     diffs: {
         amount: DeltaValue;
         count: DeltaValue;
@@ -131,6 +409,21 @@ export interface MoMComparison {
         customerCount: DeltaValue;
         productCount: DeltaValue;
         marginPct: DeltaValue;
+        dailyAmount: DeltaValue;
+        dailyCount: DeltaValue;
+        dailyProfit: DeltaValue;
+        medianAmount: DeltaValue;
+        medianCount: DeltaValue;
+        medianProfit: DeltaValue;
+    };
+}
+
+function dailyOf(t: MonthlyTotals): DailyAverages {
+    const d = t.daysInMonth > 0 ? t.daysInMonth : 1;
+    return {
+        amount: t.amount / d,
+        count: t.count / d,
+        profit: t.profit / d,
     };
 }
 
@@ -151,9 +444,17 @@ export function computeMoM(
     previous: MonthlyTotals | null
 ): MoMComparison {
     const prev = previous;
+    const curDaily = dailyOf(current);
+    const prevDaily = prev ? dailyOf(prev) : null;
+    const curMedian = current.customerMedian;
+    const prevMedian = prev?.customerMedian ?? null;
     return {
         current,
         previous: prev,
+        currentDaily: curDaily,
+        previousDaily: prevDaily,
+        currentMedian: curMedian,
+        previousMedian: prevMedian,
         diffs: {
             amount: deltaOf(current.amount, prev?.amount ?? null),
             count: deltaOf(current.count, prev?.count ?? null),
@@ -164,6 +465,12 @@ export function computeMoM(
                 delta: marginOf(current),
                 pct: null,
             },
+            dailyAmount: deltaOf(curDaily.amount, prevDaily?.amount ?? null),
+            dailyCount: deltaOf(curDaily.count, prevDaily?.count ?? null),
+            dailyProfit: deltaOf(curDaily.profit, prevDaily?.profit ?? null),
+            medianAmount: deltaOf(curMedian.amount, prevMedian?.amount ?? null),
+            medianCount: deltaOf(curMedian.count, prevMedian?.count ?? null),
+            medianProfit: deltaOf(curMedian.profit, prevMedian?.profit ?? null),
         },
     };
 }
@@ -274,8 +581,6 @@ interface ProductMonthAgg {
     costAmount: number;
     profit: number;
     customers: Set<string>;
-    /** 該月份內出現過的 distinct 單價（一個商品在不同客戶可能不同價）。 */
-    distinctPrices: Set<number>;
 }
 
 function aggregateProductsOfMonth(rows: ReadonlyArray<AnalyticsRow>): Map<string, ProductMonthAgg> {
@@ -290,7 +595,6 @@ function aggregateProductsOfMonth(rows: ReadonlyArray<AnalyticsRow>): Map<string
                 costAmount: 0,
                 profit: 0,
                 customers: new Set(),
-                distinctPrices: new Set(),
             };
             map.set(r.productName, s);
         }
@@ -299,7 +603,6 @@ function aggregateProductsOfMonth(rows: ReadonlyArray<AnalyticsRow>): Map<string
         s.costAmount += r.costAmount;
         s.profit += r.profit;
         s.customers.add(r.customerCode);
-        s.distinctPrices.add(r.price);
     }
     return map;
 }
@@ -311,9 +614,6 @@ export interface ProductPriceChange {
     currentAvgPrice: number;
     priceChange: number;
     priceChangePct: number | null;
-    /** 各客戶使用的單價數（>1 表示同月份內就有混價） */
-    prevDistinctPrices: number;
-    currentDistinctPrices: number;
 
     prevCount: number;
     currentCount: number;
@@ -376,8 +676,6 @@ export function detectProductPriceChanges(
             currentAvgPrice: currAvg,
             priceChange,
             priceChangePct,
-            prevDistinctPrices: p.distinctPrices.size,
-            currentDistinctPrices: c.distinctPrices.size,
 
             prevCount: p.count,
             currentCount: c.count,

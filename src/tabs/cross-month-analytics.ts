@@ -27,10 +27,16 @@ import {
     type MonthKey,
     type MonthlyTotals,
     monthlyTotals,
+    type PeriodTotals,
+    periodTotals,
     rowsOfMonth,
+    DEFAULT_TREND_DAYS_PER_PERIOD,
+    MIN_TREND_DAYS_PER_PERIOD,
+    MAX_TREND_DAYS_PER_PERIOD,
+    clampTrendDaysPerPeriod,
 } from '@/analytics/cross-month/month-aggregators';
 import {monthlyTrendOption, TREND_METRICS, type TrendMetric,} from '@/analytics/cross-month/monthly-trend-chart';
-import {createCustomerSegmentTable} from '@/analytics/cross-month/customer-segment-table';
+import {createCustomerSegmentTable, type MonthTotalsRef} from '@/analytics/cross-month/customer-segment-table';
 import {createPriceChangeTable} from '@/analytics/cross-month/price-change-table';
 
 interface LoadedBillRecord {
@@ -76,11 +82,11 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
       <div class="cross-month-warning" data-role="warning" hidden></div>
 
       <section class="analytics-content" data-role="content" hidden>
-        <div class="analytics-section-label">月度趨勢</div>
-        <p class="analytics-section-hint">所有載入月份依時間順序的折線。可切換指標。</p>
+        <div class="analytics-section-label" data-role="trend-section-label">每 ${DEFAULT_TREND_DAYS_PER_PERIOD} 日趨勢</div>
+        <p class="analytics-section-hint" data-role="trend-section-hint">所有載入月份依時間順序的折線，每 ${DEFAULT_TREND_DAYS_PER_PERIOD} 日為一個基準點（連續切段、跨月不重置）。可切換指標、調整每段天數（${MIN_TREND_DAYS_PER_PERIOD}~${MAX_TREND_DAYS_PER_PERIOD} 日）。</p>
         <div class="analytics-chart-card analytics-chart-card-wide cross-month-trend-card">
           <div class="analytics-chart-header">
-            <div class="analytics-chart-title">月度 趨勢</div>
+            <div class="analytics-chart-title" data-role="trend-title">每 ${DEFAULT_TREND_DAYS_PER_PERIOD} 日 趨勢</div>
             <div class="analytics-chart-header-right" data-role="trend-controls"></div>
           </div>
           <div class="analytics-chart-body" data-role="trend-body"></div>
@@ -89,7 +95,7 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
         <div class="analytics-section-label">相鄰月份對比</div>
         <p class="analytics-section-hint">
           所有月份依時間升冪排序，對每組相鄰月份呈現 MoM 卡片、客戶新增/流失/留存、商品漲價影響。
-          每個區塊的左側顏色條：<span style="color:var(--color-success)">綠</span>＝營收成長、<span style="color:var(--color-danger)">紅</span>＝營收衰退。
+          每個區塊的左側顏色條：<span style="color:var(--color-success)">綠</span>＝日平均營收成長、<span style="color:var(--color-danger)">紅</span>＝日平均營收衰退。
         </p>
         <div data-role="pairs-host"></div>
       </section>
@@ -107,19 +113,73 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
     const contentSection = panel.querySelector<HTMLElement>('[data-role="content"]')!;
     const trendBody = panel.querySelector<HTMLElement>('[data-role="trend-body"]')!;
     const trendControls = panel.querySelector<HTMLElement>('[data-role="trend-controls"]')!;
+    const trendSectionLabel = panel.querySelector<HTMLElement>('[data-role="trend-section-label"]')!;
+    const trendSectionHint = panel.querySelector<HTMLElement>('[data-role="trend-section-hint"]')!;
+    const trendTitle = panel.querySelector<HTMLElement>('[data-role="trend-title"]')!;
     const pairsHost = panel.querySelector<HTMLElement>('[data-role="pairs-host"]')!;
     const statusEl = panel.querySelector<HTMLElement>('[data-role="status"]')!;
 
     const loaded: LoadedBillRecord[] = [];
     let dataset: AnalyticsDataset | null = null;
     let monthly: MonthlyTotals[] = [];
+    let periods: PeriodTotals[] = [];
     let trendMetric: TrendMetric = 'amount';
+    let daysPerPeriod: number = DEFAULT_TREND_DAYS_PER_PERIOD;
     let trendChart: ChartHandle | null = null;
     let resizeCleanup: (() => void) | null = null;
 
-    /* ============== 趨勢圖 metric 切換 ============== */
+    const updateTrendLabels = () => {
+        trendSectionLabel.textContent = `每 ${daysPerPeriod} 日趨勢`;
+        trendTitle.textContent = `每 ${daysPerPeriod} 日 趨勢`;
+        trendSectionHint.textContent =
+            `所有載入月份依時間順序的折線，每 ${daysPerPeriod} 日為一個基準點（連續切段、跨月不重置）。可切換指標、調整每段天數（${MIN_TREND_DAYS_PER_PERIOD}~${MAX_TREND_DAYS_PER_PERIOD} 日）。`;
+    };
+
+    /* ============== 趨勢圖 metric 切換 ＋ 每段天數 ============== */
     const renderTrendControls = () => {
         trendControls.innerHTML = '';
+
+        // 每段天數選擇器
+        const daysWrap = document.createElement('label');
+        daysWrap.className = 'cross-month-trend-days';
+        daysWrap.innerHTML = `
+            <span class="cross-month-trend-days-label">每段天數</span>
+            <input
+              type="number"
+              class="cross-month-trend-days-input"
+              min="${MIN_TREND_DAYS_PER_PERIOD}"
+              max="${MAX_TREND_DAYS_PER_PERIOD}"
+              step="1"
+              inputmode="numeric"
+              value="${daysPerPeriod}"
+              aria-label="每段天數（${MIN_TREND_DAYS_PER_PERIOD}~${MAX_TREND_DAYS_PER_PERIOD} 日）"
+            >
+            <span class="cross-month-trend-days-suffix">日</span>
+        `;
+        const input = daysWrap.querySelector<HTMLInputElement>('input')!;
+        const commit = () => {
+            const next = clampTrendDaysPerPeriod(Number(input.value));
+            if (next !== daysPerPeriod) {
+                daysPerPeriod = next;
+                updateTrendLabels();
+                recomputePeriods();
+                void renderTrend();
+            }
+            // 即使值不變也回填，避免使用者輸入越界值殘留在 UI
+            input.value = String(daysPerPeriod);
+        };
+        input.addEventListener('change', commit);
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+                input.blur();
+            }
+        });
+        trendControls.appendChild(daysWrap);
+
+        // 指標切換
         const wrap = document.createElement('div');
         wrap.className = 'analytics-metric-switch';
         for (const m of TREND_METRICS) {
@@ -138,8 +198,16 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
         trendControls.appendChild(wrap);
     };
 
+    const recomputePeriods = () => {
+        if (!dataset) {
+            periods = [];
+            return;
+        }
+        periods = periodTotals(dataset.rows, daysPerPeriod);
+    };
+
     const renderTrend = async () => {
-        if (monthly.length === 0) return;
+        if (periods.length === 0) return;
         if (!trendChart) {
             try {
                 trendChart = await createChart(trendBody);
@@ -150,7 +218,7 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
             if (resizeCleanup) resizeCleanup();
             resizeCleanup = observeChartsResize([trendChart]);
         }
-        trendChart.setOption(monthlyTrendOption(monthly, trendMetric) as never);
+        trendChart.setOption(monthlyTrendOption(periods, trendMetric) as never);
     };
 
     /* ============== 相鄰月對區塊 ============== */
@@ -219,6 +287,7 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
         if (loaded.length === 0) {
             dataset = null;
             monthly = [];
+            periods = [];
             contentSection.hidden = true;
             showWarning(null);
             statusEl.textContent = '請拖入或選擇 ≥ 2 份月份的 .xlsx 帳單檔';
@@ -234,6 +303,7 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
             }));
             dataset = buildDataset(fileMetas, categoryMap, costMap);
             monthly = monthlyTotals(dataset.rows);
+            periods = periodTotals(dataset.rows, daysPerPeriod);
 
             if (monthly.length < 2) {
                 showWarning('目前只載入 1 個月份，需要 ≥ 2 個月份才能做跨月對比。');
@@ -244,6 +314,7 @@ export function renderCrossMonthAnalyticsPanel(tab: TabDefinition): HTMLElement 
 
             showWarning(null);
             contentSection.hidden = false;
+            updateTrendLabels();
             renderTrendControls();
             await renderTrend();
             renderPairs();
@@ -340,9 +411,9 @@ function buildPairSection(
     seg: ReturnType<typeof customerSegmentation>,
     priceChanges: ReturnType<typeof detectProductPriceChanges>
 ): HTMLElement {
-    const amountDelta = mom.diffs.amount.delta;
-    const tone = amountDelta > 0 ? 'is-positive' : amountDelta < 0 ? 'is-negative' : 'is-neutral';
-    const headerArrow = amountDelta > 0 ? '▲' : amountDelta < 0 ? '▼' : '·';
+    const dailyAmountDelta = mom.diffs.dailyAmount.delta;
+    const tone = dailyAmountDelta > 0 ? 'is-positive' : dailyAmountDelta < 0 ? 'is-negative' : 'is-neutral';
+    const headerArrow = dailyAmountDelta > 0 ? '▲' : dailyAmountDelta < 0 ? '▼' : '·';
 
     const section = document.createElement('section');
     section.className = `cross-month-pair ${tone}`;
@@ -350,17 +421,17 @@ function buildPairSection(
     <header class="cross-month-pair-header">
       <button type="button" class="cross-month-pair-toggle" data-role="toggle" aria-expanded="true">
         <span class="cross-month-pair-chev">▾</span>
-        <h3 class="cross-month-pair-title">${cur.label} <span class="cross-month-pair-arrow">←</span> ${prev.label}</h3>
+        <h3 class="cross-month-pair-title">${prev.label} <span class="cross-month-pair-arrow">→</span> ${cur.label}</h3>
       </button>
       <span class="cross-month-pair-summary ${tone}">
         <span class="cross-month-pair-summary-arrow">${headerArrow}</span>
-        營收 ${fmtDelta(amountDelta)}
-        ${mom.diffs.amount.pct !== null ? `（${fmtPct(mom.diffs.amount.pct)}）` : ''}
+        每日平均營收 ${fmtDelta(dailyAmountDelta)}
+        ${mom.diffs.dailyAmount.pct !== null ? `（${fmtPct(mom.diffs.dailyAmount.pct)}）` : ''}
       </span>
     </header>
     <div class="cross-month-pair-body" data-role="body">
-      <div class="cross-month-mom-grid" data-role="mom-grid"></div>
-      <div class="cross-month-pair-subhead">客戶新增 / 流失 / 留存</div>
+      <div class="cross-month-mom-stack" data-role="mom-grid"></div>
+      <div class="cross-month-pair-subhead">客戶分群（新增 / 零售新增 / 流失 / 零售流失 / 留存）</div>
       <div data-role="segment-host"></div>
       <div class="cross-month-pair-subhead">商品漲價影響</div>
       <div data-role="price-host"></div>
@@ -370,10 +441,28 @@ function buildPairSection(
     const momGrid = section.querySelector<HTMLElement>('[data-role="mom-grid"]')!;
     renderMomCards(momGrid, mom);
 
+    const zeroMedian = {amount: 0, count: 0, profit: 0};
+    const curRef: MonthTotalsRef = {
+        label: cur.label,
+        amount: mom.current.amount,
+        profit: mom.current.profit,
+        count: mom.current.count,
+        median: mom.current.customerMedian,
+    };
+    const prevRef: MonthTotalsRef = mom.previous
+        ? {
+            label: prev.label,
+            amount: mom.previous.amount,
+            profit: mom.previous.profit,
+            count: mom.previous.count,
+            median: mom.previous.customerMedian,
+        }
+        : {label: prev.label, amount: 0, profit: 0, count: 0, median: zeroMedian};
+
     const segmentHost = section.querySelector<HTMLElement>('[data-role="segment-host"]')!;
     const segmentTable = createCustomerSegmentTable();
     segmentHost.appendChild(segmentTable.element);
-    segmentTable.setData(seg, cur.label, prev.label);
+    segmentTable.setData(seg, curRef, prevRef);
 
     const priceHost = section.querySelector<HTMLElement>('[data-role="price-host"]')!;
     const priceChangeTable = createPriceChangeTable();
@@ -394,15 +483,45 @@ function buildPairSection(
     return section;
 }
 
+/** 兩月日曆天數合併標籤，例：「3月31天 / 4月30天」（時間順序：上月 → 本月） */
+function dailyDaysSuffix(mom: MoMComparison): string {
+    const cur = `${mom.current.key.month}月${mom.current.daysInMonth}天`;
+    if (!mom.previous) return cur;
+    const prev = `${mom.previous.key.month}月${mom.previous.daysInMonth}天`;
+    return `${prev} / ${cur}`;
+}
+
+/** 兩月客戶數合併標籤，例：「409 客戶 / 411 客戶」（樣本數說明，跨客戶中位數用） */
+function customerSampleSuffix(mom: MoMComparison): string {
+    const cur = `${mom.current.customerCount} 客戶`;
+    if (!mom.previous) return cur;
+    const prev = `${mom.previous.customerCount} 客戶`;
+    return `${prev} / ${cur}`;
+}
+
 function renderMomCards(host: HTMLElement, mom: MoMComparison): void {
-    const cards: Array<{
+    const dailyMeta = dailyDaysSuffix(mom);
+    const medianMeta = customerSampleSuffix(mom);
+    interface CardSpec {
         label: string;
+        meta?: string;
         currValue: string;
         delta: number;
         deltaLabel: string;
         pct: number | null;
         higherIsBetter: boolean;
-    }> = [
+        /** 是否為「每日平均」衍生指標（樣式略微內凹） */
+        isDaily?: boolean;
+        /** 是否為「每日中位數」衍生指標 */
+        isMedian?: boolean;
+    }
+
+    // 主要指標（家族配置）：源序為「總量 → 每日平均 → 客戶中位數」三聯，CSS 用 grid-auto-flow:column
+    //   ≥3 欄：每欄一個家族（col1=營收家族、col2=毛利家族、col3=銷售數量家族）
+    //   ≤960px：3 欄 row-flow，每列一個指標層級（總量列 / 每日平均列 / 客戶中位數列）
+    //   ≤560px：單欄堆疊，源序保持「總量 → 每日平均 → 客戶中位數」家族相鄰
+    const primaryCards: CardSpec[] = [
+        // === 營收家族 ===
         {
             label: '營收',
             currValue: fmtMoney(Math.round(mom.current.amount)),
@@ -412,6 +531,27 @@ function renderMomCards(host: HTMLElement, mom: MoMComparison): void {
             higherIsBetter: true,
         },
         {
+            label: '每日平均營收',
+            meta: dailyMeta,
+            currValue: fmtMoney(Math.round(mom.currentDaily.amount)),
+            delta: mom.diffs.dailyAmount.delta,
+            deltaLabel: fmtDelta(mom.diffs.dailyAmount.delta),
+            pct: mom.diffs.dailyAmount.pct,
+            higherIsBetter: true,
+            isDaily: true,
+        },
+        {
+            label: '客戶中位數營收',
+            meta: medianMeta,
+            currValue: fmtMoney(Math.round(mom.currentMedian.amount)),
+            delta: mom.diffs.medianAmount.delta,
+            deltaLabel: fmtDelta(mom.diffs.medianAmount.delta),
+            pct: mom.diffs.medianAmount.pct,
+            higherIsBetter: true,
+            isMedian: true,
+        },
+        // === 毛利家族 ===
+        {
             label: '毛利',
             currValue: fmtMoney(Math.round(mom.current.profit)),
             delta: mom.diffs.profit.delta,
@@ -420,11 +560,66 @@ function renderMomCards(host: HTMLElement, mom: MoMComparison): void {
             higherIsBetter: true,
         },
         {
+            label: '每日平均毛利',
+            meta: dailyMeta,
+            currValue: fmtMoney(Math.round(mom.currentDaily.profit)),
+            delta: mom.diffs.dailyProfit.delta,
+            deltaLabel: fmtDelta(mom.diffs.dailyProfit.delta),
+            pct: mom.diffs.dailyProfit.pct,
+            higherIsBetter: true,
+            isDaily: true,
+        },
+        {
+            label: '客戶中位數毛利',
+            meta: medianMeta,
+            currValue: fmtMoney(Math.round(mom.currentMedian.profit)),
+            delta: mom.diffs.medianProfit.delta,
+            deltaLabel: fmtDelta(mom.diffs.medianProfit.delta),
+            pct: mom.diffs.medianProfit.pct,
+            higherIsBetter: true,
+            isMedian: true,
+        },
+        // === 銷售數量家族 ===
+        {
             label: '銷售數量',
             currValue: fmtCount(mom.current.count),
             delta: mom.diffs.count.delta,
             deltaLabel: fmtCountDelta(mom.diffs.count.delta),
             pct: mom.diffs.count.pct,
+            higherIsBetter: true,
+        },
+        {
+            label: '每日平均數量',
+            meta: dailyMeta,
+            currValue: fmtCount(Math.round(mom.currentDaily.count)),
+            delta: mom.diffs.dailyCount.delta,
+            deltaLabel: fmtCountDelta(Math.round(mom.diffs.dailyCount.delta)),
+            pct: mom.diffs.dailyCount.pct,
+            higherIsBetter: true,
+            isDaily: true,
+        },
+        {
+            label: '客戶中位數數量',
+            meta: medianMeta,
+            currValue: fmtCount(Math.round(mom.currentMedian.count)),
+            delta: mom.diffs.medianCount.delta,
+            deltaLabel: fmtCountDelta(Math.round(mom.diffs.medianCount.delta)),
+            pct: mom.diffs.medianCount.pct,
+            higherIsBetter: true,
+            isMedian: true,
+        },
+    ];
+
+    // 附屬指標（1×3）：與主要指標家族無一對一關係，獨立一列
+    const auxiliaryCards: CardSpec[] = [
+        {
+            label: '毛利率',
+            currValue: mom.current.amount > 0
+                ? `${((mom.current.profit / mom.current.amount) * 100).toFixed(1)}%`
+                : '—',
+            delta: mom.diffs.marginPct.delta,
+            deltaLabel: `${mom.diffs.marginPct.delta >= 0 ? '+' : ''}${mom.diffs.marginPct.delta.toFixed(1)}pp`,
+            pct: null,
             higherIsBetter: true,
         },
         {
@@ -443,25 +638,17 @@ function renderMomCards(host: HTMLElement, mom: MoMComparison): void {
             pct: mom.diffs.productCount.pct,
             higherIsBetter: true,
         },
-        {
-            label: '毛利率',
-            currValue: mom.current.amount > 0
-                ? `${((mom.current.profit / mom.current.amount) * 100).toFixed(1)}%`
-                : '—',
-            delta: mom.diffs.marginPct.delta,
-            deltaLabel: `${mom.diffs.marginPct.delta >= 0 ? '+' : ''}${mom.diffs.marginPct.delta.toFixed(1)}pp`,
-            pct: null,
-            higherIsBetter: true,
-        },
     ];
 
-    host.innerHTML = cards
-        .map((c) => {
-            const tone = (c.higherIsBetter ? c.delta >= 0 : c.delta <= 0) ? 'is-positive' : 'is-negative';
-            const arrow = c.delta > 0 ? '▲' : c.delta < 0 ? '▼' : '·';
-            return `
-        <div class="cross-month-mom-card ${tone}">
+    const renderCard = (c: CardSpec): string => {
+        const tone = (c.higherIsBetter ? c.delta >= 0 : c.delta <= 0) ? 'is-positive' : 'is-negative';
+        const arrow = c.delta > 0 ? '▲' : c.delta < 0 ? '▼' : '·';
+        const metaLine = c.meta ? `<div class="cross-month-mom-meta">${c.meta}</div>` : '';
+        const variantClass = c.isDaily ? ' is-daily' : c.isMedian ? ' is-median' : '';
+        return `
+        <div class="cross-month-mom-card ${tone}${variantClass}">
           <div class="cross-month-mom-label">${c.label}</div>
+          ${metaLine}
           <div class="cross-month-mom-value">${c.currValue}</div>
           <div class="cross-month-mom-delta ${tone}">
             <span class="cross-month-mom-arrow">${arrow}</span>
@@ -469,8 +656,16 @@ function renderMomCards(host: HTMLElement, mom: MoMComparison): void {
           </div>
         </div>
       `;
-        })
-        .join('');
+    };
+
+    host.innerHTML = `
+      <div class="cross-month-mom-grid cross-month-mom-grid-primary">
+        ${primaryCards.map(renderCard).join('')}
+      </div>
+      <div class="cross-month-mom-grid cross-month-mom-grid-auxiliary">
+        ${auxiliaryCards.map(renderCard).join('')}
+      </div>
+    `;
 }
 
 function escapeHtml(value: string): string {
