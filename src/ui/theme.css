@@ -3083,6 +3083,115 @@ th.is-sortable .sort-indicator.is-active {
     font-size: var(--font-size-xs);
 }
 
+/* 客戶流動分頁：新增 vs 流失 = 淨差額 卡片組 */
+.cross-month-flow-cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.cross-month-flow-cards:empty {
+    display: none;
+}
+
+.cross-month-flow-group-label {
+    margin-bottom: var(--space-2);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    border-left: 3px solid var(--color-primary);
+    padding-left: 8px;
+}
+
+.cross-month-flow-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.cross-month-flow-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-3) var(--space-3);
+    border-radius: var(--radius-md);
+    background-color: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    min-height: 96px;
+}
+
+.cross-month-flow-card.is-new {
+    border-color: color-mix(in srgb, #5b8def 35%, transparent);
+    background-color: color-mix(in srgb, #5b8def 8%, var(--color-surface-hover));
+}
+
+.cross-month-flow-card.is-churn {
+    border-color: color-mix(in srgb, #e74c3c 35%, transparent);
+    background-color: color-mix(in srgb, #e74c3c 8%, var(--color-surface-hover));
+}
+
+.cross-month-flow-card.is-net.is-positive {
+    border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+    background-color: color-mix(in srgb, var(--color-success) 10%, var(--color-surface-hover));
+}
+
+.cross-month-flow-card.is-net.is-negative {
+    border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
+    background-color: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface-hover));
+}
+
+.cross-month-flow-card.is-net.is-neutral {
+    border-color: var(--color-border);
+}
+
+.cross-month-flow-card-title {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-bottom: 4px;
+    font-weight: var(--font-weight-medium);
+}
+
+.cross-month-flow-card-amount {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+}
+
+.cross-month-flow-card.is-net.is-positive .cross-month-flow-card-amount {
+    color: var(--color-success);
+}
+
+.cross-month-flow-card.is-net.is-negative .cross-month-flow-card-amount {
+    color: var(--color-danger);
+}
+
+.cross-month-flow-card-sub {
+    margin-top: 4px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.cross-month-flow-card-sub.is-positive {
+    color: var(--color-success);
+}
+
+.cross-month-flow-card-sub.is-negative {
+    color: var(--color-danger);
+}
+
+.cross-month-flow-op {
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-muted);
+    text-align: center;
+    padding: 0 var(--space-2);
+}
+
 /* 零售標記/取消按鈕 */
 .cross-month-retail-btn {
     display: inline-flex;

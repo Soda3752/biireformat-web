@@ -1,8 +1,9 @@
 /**
- * B1 客戶分群表：新增 / 零售新增 / 流失 / 零售流失 / 留存 五個分頁切換，
+ * B1 客戶分群表：新增 / 零售新增 / 流失 / 零售流失 / 留存 / 客戶流動 六個分頁切換，
  * 共用同一張表骨架，欄位略有差異：
  *   - 新增 / 流失 / 零售新增 / 零售流失：客戶 / 線別 / 金額 / 數量 / 毛利 / 動作
  *   - 留存：客戶 / 線別 / 上月金額 / 本月金額 / Δ金額 / Δ% / Δ數量 / Δ%
+ *   - 客戶流動：以卡片呈現「新增 vs 流失 = 淨差額」（並列全部 + 零售兩組）
  *
  * 「零售」標記為全域 Set（localStorage 持久化），詳見 retail-store.ts。
  */
@@ -15,7 +16,7 @@ import type {
 } from './month-aggregators';
 import {isRetail, setRetail, subscribeRetail} from './retail-store';
 
-type SegmentKind = 'new' | 'retail-new' | 'churned' | 'retail-churned' | 'retained';
+type SegmentKind = 'new' | 'retail-new' | 'churned' | 'retail-churned' | 'retained' | 'flow';
 
 type SortDir = 'asc' | 'desc';
 
@@ -132,11 +133,15 @@ export function createCustomerSegmentTable(opts: CustomerSegmentTableOptions = {
         <span class="cross-month-segment-tab-label">留存客戶</span>
         <span class="cross-month-segment-tab-count" data-role="count-retained">0</span>
       </button>
+      <button type="button" class="cross-month-segment-tab" data-kind="flow">
+        <span class="cross-month-segment-tab-label">客戶流動</span>
+      </button>
     </div>
     <div class="cross-month-segment-summary" data-role="summary"></div>
     <div class="cross-month-segment-bars" data-role="bars"></div>
     <div data-role="median-caption"></div>
-    <div class="analytics-detail-table-wrap">
+    <div class="cross-month-flow-cards" data-role="flow-cards"></div>
+    <div class="analytics-detail-table-wrap" data-role="table-wrap">
       <table class="analytics-detail-table-el cross-month-segment-tableel">
         <thead data-role="thead"></thead>
         <tbody data-role="tbody"></tbody>
@@ -150,6 +155,8 @@ export function createCustomerSegmentTable(opts: CustomerSegmentTableOptions = {
     const summaryEl = root.querySelector<HTMLElement>('[data-role="summary"]')!;
     const barsEl = root.querySelector<HTMLElement>('[data-role="bars"]')!;
     const medianCaptionEl = root.querySelector<HTMLElement>('[data-role="median-caption"]')!;
+    const flowCardsEl = root.querySelector<HTMLElement>('[data-role="flow-cards"]')!;
+    const tableWrapEl = root.querySelector<HTMLElement>('[data-role="table-wrap"]')!;
     const countNew = root.querySelector<HTMLElement>('[data-role="count-new"]')!;
     const countRetailNew = root.querySelector<HTMLElement>('[data-role="count-retail-new"]')!;
     const countChurn = root.querySelector<HTMLElement>('[data-role="count-churned"]')!;
@@ -321,6 +328,7 @@ export function createCustomerSegmentTable(opts: CustomerSegmentTableOptions = {
         'churned': '#e74c3c',
         'retail-churned': '#f0a07c',
         'retained': '#7ac74f',
+        'flow': '#0ea5e9',
     };
 
     const renderBarRow = (label: string, num: number, den: number, fmt: (v: number) => string, color: string): string => {
@@ -389,8 +397,24 @@ export function createCustomerSegmentTable(opts: CustomerSegmentTableOptions = {
             summaryEl.innerHTML = '';
             barsEl.innerHTML = '';
             medianCaptionEl.innerHTML = '';
+            flowCardsEl.innerHTML = '';
             return;
         }
+        if (activeKind === 'flow') {
+            // 客戶流動分頁不使用 table，改以卡片呈現「新增 vs 流失 = 淨差額」
+            summaryEl.innerHTML = '';
+            barsEl.innerHTML = '';
+            medianCaptionEl.innerHTML = '';
+            thead.innerHTML = '';
+            tbody.innerHTML = '';
+            tableWrapEl.style.display = 'none';
+            flowCardsEl.style.display = '';
+            renderFlowCards();
+            return;
+        }
+        tableWrapEl.style.display = '';
+        flowCardsEl.style.display = 'none';
+        flowCardsEl.innerHTML = '';
         renderSummary();
         renderBars();
         renderMedianCaption();
@@ -404,6 +428,63 @@ export function createCustomerSegmentTable(opts: CustomerSegmentTableOptions = {
         const split = splitByRetail(source);
         const rows = isRetailTab ? split.retail : split.regular;
         renderSimpleTable(rows, isNewSide, isRetailTab);
+    };
+
+    /**
+     * 客戶流動分頁：以卡片呈現「新增營收 / 流失營收 / 淨差額」與客戶數對比，
+     * 並列「一般客戶（已扣除零售）」與「零售客戶」兩組。
+     */
+    const renderFlowCards = () => {
+        if (!lastSeg) {
+            flowCardsEl.innerHTML = '';
+            return;
+        }
+        const newSplit = splitByRetail(lastSeg.newCustomers);
+        const churnSplit = splitByRetail(lastSeg.churnedCustomers);
+
+        flowCardsEl.innerHTML = `
+            ${renderFlowGroup('一般客戶', newSplit.regular, churnSplit.regular)}
+            ${renderFlowGroup('零售客戶', newSplit.retail, churnSplit.retail)}
+        `;
+    };
+
+    const renderFlowGroup = (
+        label: string,
+        newRows: ReadonlyArray<CustomerMonthStat>,
+        churnRows: ReadonlyArray<CustomerMonthStat>
+    ): string => {
+        const newAmount = newRows.reduce((s, r) => s + r.amount, 0);
+        const churnAmount = churnRows.reduce((s, r) => s + r.amount, 0);
+        const amountNet = newAmount - churnAmount;
+        const countNet = newRows.length - churnRows.length;
+
+        const netToneAmount = amountNet > 0 ? 'is-positive' : amountNet < 0 ? 'is-negative' : 'is-neutral';
+        const netToneCount = countNet > 0 ? 'is-positive' : countNet < 0 ? 'is-negative' : 'is-neutral';
+
+        return `
+            <div class="cross-month-flow-group">
+                <div class="cross-month-flow-group-label">${escapeHtml(label)}</div>
+                <div class="cross-month-flow-row">
+                    <div class="cross-month-flow-card is-new">
+                        <div class="cross-month-flow-card-title">新增</div>
+                        <div class="cross-month-flow-card-amount">${fmtMoney(Math.round(newAmount))}</div>
+                        <div class="cross-month-flow-card-sub">${newRows.length} 位客戶</div>
+                    </div>
+                    <div class="cross-month-flow-op">−</div>
+                    <div class="cross-month-flow-card is-churn">
+                        <div class="cross-month-flow-card-title">流失</div>
+                        <div class="cross-month-flow-card-amount">${fmtMoney(Math.round(churnAmount))}</div>
+                        <div class="cross-month-flow-card-sub">${churnRows.length} 位客戶</div>
+                    </div>
+                    <div class="cross-month-flow-op">=</div>
+                    <div class="cross-month-flow-card is-net ${netToneAmount}">
+                        <div class="cross-month-flow-card-title">淨差額</div>
+                        <div class="cross-month-flow-card-amount">${fmtDelta(amountNet)}</div>
+                        <div class="cross-month-flow-card-sub ${netToneCount}">${countNet >= 0 ? '+' : ''}${countNet} 位客戶</div>
+                    </div>
+                </div>
+            </div>
+        `;
     };
 
     /** 依當前分頁決定中位數依據哪一個月並渲染提示 caption。 */

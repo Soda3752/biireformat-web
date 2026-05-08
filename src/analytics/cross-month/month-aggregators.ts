@@ -530,6 +530,12 @@ export interface CustomerSegmentation {
 /**
  * @param currentRows  本月完整 rows
  * @param previousRows 上月完整 rows
+ *
+ * 「活躍」定義：該月有訂單且營收 > 0；amount ≤ 0（無訂單或退貨抵銷後為零/負）視為當月不活躍。
+ *   - 上月活躍、本月不活躍 → 流失
+ *   - 上月不活躍、本月活躍 → 新增
+ *   - 兩月皆活躍 → 留存
+ *   - 兩月皆不活躍 → 不納入任何分群
  */
 export function customerSegmentation(
     currentRows: ReadonlyArray<AnalyticsRow>,
@@ -538,17 +544,29 @@ export function customerSegmentation(
     const cur = aggregateCustomersOfMonth(currentRows);
     const prev = aggregateCustomersOfMonth(previousRows);
 
+    const isActive = (s: CustomerMonthStat | undefined): s is CustomerMonthStat =>
+        s !== undefined && s.amount > 0;
+
     const newCustomers: CustomerMonthStat[] = [];
     const retainedCustomers: RetainedCustomer[] = [];
-    for (const [code, s] of cur) {
+    const churnedCustomers: CustomerMonthStat[] = [];
+
+    const codes = new Set<string>([...cur.keys(), ...prev.keys()]);
+    for (const code of codes) {
+        const c = cur.get(code);
         const p = prev.get(code);
-        if (!p) {
-            newCustomers.push(s);
-        } else {
-            const amountDelta = s.amount - p.amount;
-            const countDelta = s.count - p.count;
+        const cActive = isActive(c);
+        const pActive = isActive(p);
+
+        if (cActive && !pActive) {
+            newCustomers.push(c);
+        } else if (!cActive && pActive) {
+            churnedCustomers.push(p);
+        } else if (cActive && pActive) {
+            const amountDelta = c.amount - p.amount;
+            const countDelta = c.count - p.count;
             retainedCustomers.push({
-                ...s,
+                ...c,
                 prevAmount: p.amount,
                 prevCount: p.count,
                 prevProfit: p.profit,
@@ -558,11 +576,6 @@ export function customerSegmentation(
                 countDeltaPct: p.count !== 0 ? (countDelta / Math.abs(p.count)) * 100 : null,
             });
         }
-    }
-
-    const churnedCustomers: CustomerMonthStat[] = [];
-    for (const [code, p] of prev) {
-        if (!cur.has(code)) churnedCustomers.push(p);
     }
 
     newCustomers.sort((a, b) => b.amount - a.amount);
