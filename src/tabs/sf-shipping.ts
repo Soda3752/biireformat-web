@@ -105,7 +105,7 @@ export function renderSfShippingPanel(tab: TabDefinition): HTMLElement {
         <div class="sf-action-filename">
           <label class="app-form-label" for="sf-filename">輸出檔名</label>
           <div class="sf-filename-row">
-            <input id="sf-filename" class="app-form-input" type="text" placeholder="例：1150504台南白先生">
+            <input id="sf-filename" class="app-form-input" type="text" placeholder="例：順風托運單王小明20260511">
             <span class="sf-filename-suffix">.xlsx</span>
           </div>
         </div>
@@ -131,13 +131,34 @@ export function renderSfShippingPanel(tab: TabDefinition): HTMLElement {
     const seqInput = panel.querySelector<HTMLInputElement>('#sf-start-seq')!;
     const filenameInput = panel.querySelector<HTMLInputElement>('#sf-filename')!;
     const downloadBtn = panel.querySelector<HTMLButtonElement>('[data-role="download"]')!;
+    let filenameAutoSync = true;
     const openFavBtn = panel.querySelector<HTMLButtonElement>('[data-role="open-favorites"]')!;
     const toggleFavBtn = panel.querySelector<HTMLButtonElement>('[data-role="toggle-favorite"]')!;
     const favStarEl = panel.querySelector<HTMLElement>('[data-role="fav-star"]')!;
     const favLabelEl = panel.querySelector<HTMLElement>('[data-role="fav-label"]')!;
 
+    function buildDefaultFilename(): string {
+        const name = nameInput.value.trim();
+        const dateStr = dateInput.value.replace(/-/g, '');
+        return `順風托運單${name}${dateStr}`;
+    }
+
+    function updateDefaultFilename(): void {
+        if (filenameAutoSync) {
+            filenameInput.value = buildDefaultFilename();
+        }
+    }
+
+    filenameInput.addEventListener('input', () => {
+        filenameAutoSync = filenameInput.value === buildDefaultFilename();
+    });
+
     // 預設今日
     dateInput.value = toDateInputValue(new Date());
+    updateDefaultFilename();
+
+    nameInput.addEventListener('input', updateDefaultFilename);
+    dateInput.addEventListener('input', updateDefaultFilename);
 
     // 收件人最愛：載入清單 / 加入最愛
     openFavBtn.addEventListener('click', () => {
@@ -146,6 +167,7 @@ export function renderSfShippingPanel(tab: TabDefinition): HTMLElement {
                 nameInput.value = r.name;
                 phoneInput.value = r.phone;
                 addressInput.value = r.address;
+                updateDefaultFilename();
                 refreshFavoriteButton();
             },
         });
