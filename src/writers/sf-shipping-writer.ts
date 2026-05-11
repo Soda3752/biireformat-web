@@ -29,7 +29,7 @@ export interface SfShippingPayload {
     settings: SfShippingSettings;
 }
 
-const TEMPLATE_URL = '/assets/sf_template.xlsx';
+const TEMPLATE_URL = `${import.meta.env.BASE_URL}assets/sf_template.xlsx`;
 const DATA_START_ROW = 3;
 
 /** 欄位 → ExcelJS column number（A=1, B=2, ..., AB=28, BI=61） */
