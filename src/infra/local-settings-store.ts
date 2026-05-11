@@ -130,6 +130,13 @@ export const localSettings = {
 
 export const SETTINGS_EXPORT_VERSION = 1;
 
+/**
+ * 順豐託運單分頁兩個 JSON-based key：
+ * 在 import 時直接以 raw JSON 字串寫回 localStorage，由各自模組驗證 schema。
+ */
+const SF_SHIPPING_SETTINGS_KEY = 'bii.sfShipping.settings.json';
+const SF_FAVORITE_RECEIVERS_KEY = 'bii.sfShipping.favoriteReceivers.json';
+
 export interface SettingsExportPayload {
     version: typeof SETTINGS_EXPORT_VERSION;
     exportedAt: string;
@@ -139,6 +146,8 @@ export interface SettingsExportPayload {
     customerOrderBill: string | null;
     customerOrderOverview: string | null;
     defaultExcludedCustomers: string | null;
+    sfShippingSettings: string | null;
+    sfFavoriteReceivers: string | null;
 }
 
 const EXPORT_KEYS: ReadonlyArray<Exclude<keyof SettingsExportPayload, 'version' | 'exportedAt'>> = [
@@ -148,7 +157,33 @@ const EXPORT_KEYS: ReadonlyArray<Exclude<keyof SettingsExportPayload, 'version' 
     'customerOrderBill',
     'customerOrderOverview',
     'defaultExcludedCustomers',
+    'sfShippingSettings',
+    'sfFavoriteReceivers',
 ];
+
+function readRawKey(key: string): string | null {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function writeRawKey(key: string, value: string): void {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // ignore
+    }
+}
+
+function removeRawKey(key: string): void {
+    try {
+        localStorage.removeItem(key);
+    } catch {
+        // ignore
+    }
+}
 
 export function exportAllSettings(): SettingsExportPayload {
     return {
@@ -160,6 +195,8 @@ export function exportAllSettings(): SettingsExportPayload {
         customerOrderBill: readKey('customerOrderBill'),
         customerOrderOverview: readKey('customerOrderOverview'),
         defaultExcludedCustomers: readKey('defaultExcludedCustomers'),
+        sfShippingSettings: readRawKey(SF_SHIPPING_SETTINGS_KEY),
+        sfFavoriteReceivers: readRawKey(SF_FAVORITE_RECEIVERS_KEY),
     };
 }
 
@@ -189,6 +226,8 @@ export function parseSettingsExportPayload(raw: unknown): SettingsExportPayload 
         customerOrderBill: null,
         customerOrderOverview: null,
         defaultExcludedCustomers: null,
+        sfShippingSettings: null,
+        sfFavoriteReceivers: null,
     };
     for (const key of EXPORT_KEYS) {
         const value = obj[key];
@@ -205,10 +244,16 @@ export function parseSettingsExportPayload(raw: unknown): SettingsExportPayload 
 export function importAllSettings(payload: SettingsExportPayload): void {
     for (const key of EXPORT_KEYS) {
         const value = payload[key];
-        if (typeof value === 'string') {
-            writeKey(key, value);
+        if (key === 'sfShippingSettings') {
+            if (typeof value === 'string') writeRawKey(SF_SHIPPING_SETTINGS_KEY, value);
+            else removeRawKey(SF_SHIPPING_SETTINGS_KEY);
+        } else if (key === 'sfFavoriteReceivers') {
+            if (typeof value === 'string') writeRawKey(SF_FAVORITE_RECEIVERS_KEY, value);
+            else removeRawKey(SF_FAVORITE_RECEIVERS_KEY);
+        } else if (typeof value === 'string') {
+            writeKey(key as SettingsKey, value);
         } else {
-            removeKey(key);
+            removeKey(key as SettingsKey);
         }
     }
 }
@@ -224,12 +269,23 @@ export function summarizeImportPayload(payload: SettingsExportPayload): {
         customerOrderBill: '帳單客戶排序',
         customerOrderOverview: '明細客戶排序',
         defaultExcludedCustomers: '預設排除店家',
+        sfShippingSettings: '順豐託運單設定',
+        sfFavoriteReceivers: '收件人最愛',
     };
     return EXPORT_KEYS.map((key) => {
         const value = payload[key];
         return {
             label: labelMap[key],
-            rowCount: typeof value === 'string' ? countCsvDataRows(value) : null,
+            rowCount:
+                typeof value === 'string'
+                    ? key === 'sfShippingSettings'
+                        ? value.length > 0
+                            ? 1
+                            : 0
+                        : key === 'sfFavoriteReceivers'
+                            ? countJsonArrayItems(value)
+                            : countCsvDataRows(value)
+                    : null,
         };
     });
 }
@@ -242,4 +298,13 @@ function countCsvDataRows(csv: string): number {
         if (lines[i].trim().length > 0) count += 1;
     }
     return count;
+}
+
+function countJsonArrayItems(json: string): number {
+    try {
+        const arr = JSON.parse(json);
+        return Array.isArray(arr) ? arr.length : 0;
+    } catch {
+        return 0;
+    }
 }

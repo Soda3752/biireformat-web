@@ -3281,3 +3281,336 @@ td.cell-price-down {
     color: var(--color-danger);
 }
 
+/* ============================================================
+   順豐託運單分頁
+   ============================================================ */
+
+.sf-shipping-panel .card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+}
+
+.sf-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-4);
+}
+
+.sf-card-header > div {
+    flex: 1;
+}
+
+.sf-card-header .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+}
+
+.sf-section {
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.sf-section-title {
+    margin: 0;
+    font-size: var(--font-size-md);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.sf-order-count {
+    font-weight: var(--font-weight-normal);
+    color: var(--color-text-muted);
+    margin-left: var(--space-1);
+}
+
+.sf-section-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.sf-section-toolbar-actions {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+}
+
+.sf-date-row,
+.sf-seq-row {
+    min-width: 140px;
+}
+
+.sf-receiver-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: var(--space-3);
+}
+
+.sf-receiver-address {
+    grid-column: 1 / -1;
+}
+
+.sf-orders-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.sf-orders-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.sf-orders-table thead th {
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--color-surface-hover);
+    border-bottom: 1px solid var(--color-border);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+
+.sf-orders-table tbody td {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: middle;
+}
+
+.sf-orders-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.sf-orders-index {
+    color: var(--color-text-muted);
+    width: 32px;
+    text-align: center;
+}
+
+.sf-orders-no {
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+
+.sf-cell {
+    width: 100%;
+}
+
+.sf-cell-num {
+    max-width: 88px;
+}
+
+.sf-cell-product {
+    min-width: 120px;
+}
+
+.sf-delete-btn {
+    color: var(--color-danger);
+}
+
+.sf-add-order {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.sf-action-bar {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-4);
+}
+
+.sf-action-filename {
+    flex: 1;
+    min-width: 260px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.sf-filename-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+}
+
+.sf-filename-row .app-form-input {
+    flex: 1;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.sf-filename-suffix {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--space-3);
+    background-color: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-left: none;
+    border-top-right-radius: var(--radius-md);
+    border-bottom-right-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+}
+
+/* 設定面板 dialog 加寬 */
+.sf-settings-modal {
+    width: min(720px, 100%);
+}
+
+.sf-settings-body {
+    gap: var(--space-4);
+}
+
+.sf-settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.sf-settings-group-title {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: var(--space-1);
+}
+
+.sf-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+}
+
+.sf-settings-footer-spacer {
+    flex: 1;
+}
+
+/* 收件人最愛 dialog */
+.sf-fav-modal {
+    width: min(640px, 100%);
+}
+
+.sf-fav-body {
+    gap: var(--space-3);
+}
+
+.sf-fav-toolbar {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.sf-fav-search {
+    flex: 1;
+}
+
+.sf-fav-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.sf-fav-empty {
+    padding: var(--space-6) var(--space-4);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.sf-fav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background-color: var(--color-surface);
+}
+
+.sf-fav-row--editing {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+}
+
+.sf-fav-row-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sf-fav-row-name {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.sf-fav-row-meta {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sf-fav-row-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
+}
+
+.sf-fav-row-delete {
+    color: var(--color-danger);
+}
+
+.sf-fav-edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+}
+
+.sf-fav-edit-address {
+    grid-column: 1 / -1;
+}
+
+/* 收件人區塊操作列 */
+.sf-receiver-actions {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.sf-receiver-actions .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.sf-receiver-actions .btn.sf-fav-saved {
+    color: var(--color-success);
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: var(--font-size-sm);
+}

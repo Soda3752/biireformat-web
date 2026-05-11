@@ -19,6 +19,7 @@ import {renderBillOverviewPanel} from '@/tabs/bill-overview';
 import {renderDeliveryFeePanel} from '@/tabs/delivery-fee';
 import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
+import {renderSfShippingPanel} from '@/tabs/sf-shipping';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
 import {hideCostColumn, isCostColumnRevealed, renderSettingsPanel, revealCostColumn,} from '@/tabs/settings';
@@ -65,6 +66,8 @@ function bootstrap(): void {
       mainHost.appendChild(renderBankNameFormatPanel(tab));
     } else if (tab.id === 'daily') {
       mainHost.appendChild(renderDailyCountPanel(tab));
+    } else if (tab.id === 'sf-shipping') {
+        mainHost.appendChild(renderSfShippingPanel(tab));
     } else if (tab.id === 'analytics') {
         mainHost.appendChild(renderDataAnalyticsPanel(tab));
     } else if (tab.id === 'cross-month-analytics') {
