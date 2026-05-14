@@ -3614,3 +3614,490 @@ td.cell-price-down {
     padding: 4px 10px;
     font-size: var(--font-size-sm);
 }
+
+/* ============================================================
+   生成手填本 (handfill)
+   ============================================================ */
+
+.handfill-panel {
+    display: none;
+}
+
+.handfill-panel.is-active {
+    display: block;
+}
+
+.handfill-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.handfill-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-4);
+}
+
+.handfill-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-hover);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+}
+
+.handfill-toolbar-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.handfill-toolbar-row:last-child {
+    justify-content: space-between;
+}
+
+.handfill-field-line-no {
+    width: 110px;
+}
+
+.handfill-field-line-name {
+    width: 180px;
+}
+
+.handfill-field-year {
+    width: 100px;
+}
+
+.handfill-field-month {
+    width: 100px;
+}
+
+.handfill-line-label {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    color: var(--color-primary);
+    align-self: flex-end;
+    padding-bottom: 6px;
+    min-width: 40px;
+}
+
+.handfill-toolbar-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.handfill-toolbar-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.handfill-save-status {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.handfill-save-status[data-variant="saving"] {
+    color: var(--color-warning);
+}
+
+.handfill-save-status[data-variant="saved"]::before {
+    content: "✓ ";
+    color: var(--color-success);
+}
+
+.handfill-save-status[data-variant="error"] {
+    color: var(--color-danger);
+}
+
+.handfill-viewer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.handfill-cust-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.handfill-cust-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    flex: 1;
+}
+
+.handfill-cust-pager {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.handfill-cust-counter {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    min-width: 60px;
+    text-align: center;
+}
+
+.handfill-cust-toolbar-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--color-border);
+    margin: 0 var(--space-1);
+}
+
+.handfill-cust-list-hint {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.handfill-cust-list-hint-grip {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-text-muted);
+    vertical-align: middle;
+}
+
+/* 依工具列的 data-view-mode 切換子元素可見性 */
+.handfill-cust-toolbar[data-view-mode="list"] [data-mode="card-only"] {
+    display: none;
+}
+
+.handfill-cust-toolbar[data-view-mode="card"] [data-mode="list-only"] {
+    display: none;
+}
+
+.handfill-cust-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.handfill-cust-actions .btn-danger {
+    background: var(--color-danger);
+    color: var(--color-text-inverse);
+    border-color: var(--color-danger);
+}
+
+.handfill-cust-actions .btn-danger:hover:not(:disabled) {
+    background: #b91c1c;
+    border-color: #b91c1c;
+}
+
+.handfill-cust-body {
+    min-height: 200px;
+}
+
+.handfill-empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-8);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+/* 卡片本體 */
+.handfill-card-inner {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.handfill-card-grid {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: var(--space-3);
+}
+
+.handfill-card-name {
+    min-width: 0;
+}
+
+.handfill-card-section {
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-3);
+}
+
+.handfill-card-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.handfill-card-section-title {
+    margin: 0;
+    font-size: var(--font-size-md);
+    color: var(--color-text-primary);
+}
+
+.handfill-card-section-meta {
+    color: var(--color-text-muted);
+    font-weight: normal;
+    font-size: var(--font-size-sm);
+    margin-left: var(--space-1);
+}
+
+.handfill-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.handfill-card-list-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.handfill-card-empty {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    padding: var(--space-2) 0;
+}
+
+.handfill-card-product-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.handfill-card-product-row {
+    display: grid;
+    grid-template-columns: 32px 1fr 120px auto;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.handfill-product-idx {
+    text-align: right;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.handfill-product-name {
+    min-width: 0;
+}
+
+.handfill-product-price {
+    min-width: 0;
+}
+
+/* 列表模式 */
+.handfill-cust-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.handfill-cust-list-item {
+    display: grid;
+    grid-template-columns: 28px 36px 80px 180px 1fr 80px;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    transition: background var(--motion-fast), border-color var(--motion-fast),
+    box-shadow var(--motion-fast), transform var(--motion-fast);
+    position: relative;
+    user-select: none;
+}
+
+.handfill-cust-list-item:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+}
+
+.handfill-cust-list-item:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+
+.handfill-cust-list-item.is-active {
+    background: var(--color-primary-soft);
+    border-color: var(--color-primary);
+}
+
+.handfill-cust-list-item.is-dragging {
+    opacity: 0.5;
+    transform: scale(0.99);
+}
+
+.handfill-cust-list-item.is-drop-above::before,
+.handfill-cust-list-item.is-drop-below::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--color-primary);
+    border-radius: 1px;
+    pointer-events: none;
+}
+
+.handfill-cust-list-item.is-drop-above::before {
+    top: -2px;
+}
+
+.handfill-cust-list-item.is-drop-below::after {
+    bottom: -2px;
+}
+
+.handfill-cust-list-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    cursor: grab;
+}
+
+.handfill-cust-list-handle:active {
+    cursor: grabbing;
+}
+
+.handfill-cust-list-handle svg {
+    pointer-events: none;
+}
+
+.handfill-cust-list-seq {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    font-size: var(--font-size-xs);
+}
+
+.handfill-cust-list-id {
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.handfill-cust-list-name {
+    color: var(--color-text-primary);
+    font-weight: 500;
+}
+
+.handfill-cust-list-products {
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.handfill-cust-list-meta {
+    color: var(--color-text-muted);
+    text-align: right;
+}
+
+/* 歷史紀錄對話框 */
+.handfill-history-modal {
+    width: min(640px, 90vw);
+    max-height: 80vh;
+}
+
+.handfill-history-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.handfill-history-toolbar {
+    padding-bottom: var(--space-2);
+}
+
+.handfill-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.handfill-history-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.handfill-history-group-title {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    padding: 0 var(--space-2);
+}
+
+.handfill-history-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    transition: background var(--motion-fast);
+}
+
+.handfill-history-row.is-active {
+    background: var(--color-primary-soft);
+    border-color: var(--color-primary);
+}
+
+.handfill-history-row:hover {
+    background: var(--color-surface-hover);
+}
+
+.handfill-history-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.handfill-history-row-title {
+    color: var(--color-text-primary);
+    font-weight: 500;
+}
+
+.handfill-history-row-meta {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.handfill-history-row-actions {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.handfill-history-empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-6);
+}

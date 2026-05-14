@@ -20,6 +20,7 @@ export type IconName =
     | 'grip'
     | 'chevron-up'
     | 'chevron-down'
+    | 'chevron-left'
     | 'row-insert-above'
     | 'row-insert-below'
     | 'maximize'
@@ -62,6 +63,7 @@ const PATHS: Record<IconName, string> = {
         '<circle cx="9" cy="6" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="18" r="1.2"/>',
     'chevron-up': '<polyline points="18 15 12 9 6 15"/>',
     'chevron-down': '<polyline points="6 9 12 15 18 9"/>',
+    'chevron-left': '<polyline points="15 18 9 12 15 6"/>',
     // 加號在上、行線在下：在「目前列上方」插入
     'row-insert-above':
         '<line x1="12" y1="3" x2="12" y2="11"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="4" y1="17" x2="20" y2="17"/>',
