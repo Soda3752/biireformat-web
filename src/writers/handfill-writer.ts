@@ -27,12 +27,14 @@ const TITLE_FONT_PT = 20;       // 範本：400 POI = 20pt
 const CONTENT_FONT_PT = 12;     // 範本：240 POI = 12pt
 const ROW_HEIGHT_PT = 15.8;     // 配合縮減邊距，讓 36 列填滿 A4 橫向可印區域
 
-// 欄寬（轉自範本 POI / 256，保留小數）
-const COL_WIDTHS_UPPER = [14.4, 14.4, 4.4, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.75, 10];
-const COL_WIDTHS_LOWER = [14.4, 14.4, 4.4, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.25, 6.75, 10];
+// 欄寬：A4 橫向 0.05" 邊距時可印寬約 1108 px。
+// 留 ~29 px 緩衝避免實際渲染時超出單頁（標楷體字寬可能略大於估算值）。
+const COL_WIDTHS_UPPER = [19, 14, 4.4, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 5.7, 7.5, 9.5];
+const COL_WIDTHS_LOWER = [19, 14, 4.4, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 7.5, 9.5];
 
 const HEADER_ROW_COUNT = 2;             // 每頁欄位標頭 2 列（「客戶名稱/品名/單/...」+ 日期列）
 const TITLE_ROW_COUNT_FIRST = 2;        // 第一頁多 2 列（線別 + 年月）
+const TOP_BLANK_ROW_COUNT = 2;          // 每頁頂端預留 2 列空白
 // A4 橫向可印列數（14.5pt × 36 = 522pt < 538pt 可印高）
 const A4_LANDSCAPE_USABLE_ROWS = 36;
 
@@ -93,29 +95,28 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
         sheet.getColumn(i + 1).width = w;
     });
 
-    // 2. 列印設定（A4 橫向，縮放至 1 頁寬、高度不限以保留手動分頁）
-    // 邊距壓到最小，讓 36 列 × 15.8pt = 569pt 能完整使用 8.27" - 0.3" = 574pt 可印區
+    // 2. 列印設定（A4 橫向）
+    // 不使用 fitToPage：欄寬加總 ≈ 758pt 已小於可印寬 805pt，自然能單頁顯示。
+    // 啟用 fitToPage 反而會做隱式縮放，連帶把列高一起縮小，造成下方留白。
     sheet.pageSetup = {
         paperSize: PAPER_A4,
         orientation: 'landscape',
-        fitToPage: true,
-        fitToWidth: 1,
-        fitToHeight: 0,
         margins: {
-            left: 0.25, right: 0.25,
+            left: 0.05, right: 0.05,
             top: 0.15, bottom: 0.15,
             header: 0.05, footer: 0.05,
         },
         horizontalCentered: true,
     };
 
-    // 3. 寫入：標題 + 欄頭 + 客戶區塊（含 page break）
+    // 3. 寫入：頂端空白 + 標題 + 欄頭 + 客戶區塊（含 page break）
     let currentRow = 1;
+    currentRow += TOP_BLANK_ROW_COUNT;
     currentRow = writeTitle(sheet, book, spec, currentRow);
     currentRow = writeColumnHeader(sheet, spec, currentRow);
 
-    const PAGE_1_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TITLE_ROW_COUNT_FIRST - HEADER_ROW_COUNT;
-    const PAGE_OTHER_BUDGET = A4_LANDSCAPE_USABLE_ROWS - HEADER_ROW_COUNT;
+    const PAGE_1_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TOP_BLANK_ROW_COUNT - TITLE_ROW_COUNT_FIRST - HEADER_ROW_COUNT;
+    const PAGE_OTHER_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TOP_BLANK_ROW_COUNT - HEADER_ROW_COUNT;
 
     let customerIdx = 0;
     let pageIdx = 0;
@@ -131,6 +132,7 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
 
         if (customerIdx < book.customers.length) {
             addPageBreakAfter(sheet, currentRow - 1);
+            currentRow += TOP_BLANK_ROW_COUNT;
             currentRow = writeColumnHeader(sheet, spec, currentRow);
         }
         pageIdx++;
@@ -142,8 +144,12 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
         sheet.getRow(r).height = ROW_HEIGHT_PT;
     }
 
-    // 5. 凍結窗格：第 4 列以上凍結（標題 + 欄頭）
-    sheet.views = [{state: 'frozen', xSplit: 0, ySplit: 4}];
+    // 5. 凍結窗格：凍結頂端空白 + 標題 + 欄頭
+    sheet.views = [{
+        state: 'frozen',
+        xSplit: 0,
+        ySplit: TOP_BLANK_ROW_COUNT + TITLE_ROW_COUNT_FIRST + HEADER_ROW_COUNT
+    }];
 }
 
 /* ====================== 區塊 helper ======================= */
@@ -178,15 +184,16 @@ function writeTitle(
         setCell(sheet, startRow, 20, halfSuffix, titleStyle);
         mergeRange(sheet, startRow, 20, startRow + 1, 20);
     } else {
-        // 下 sheet: 多一欄
+        // 下 sheet: 對齊上 sheet，「月下」落在總計欄 (col 21)，整體向右一欄
+        // 年份合併 col 17:18（單欄寬度 5.5 不足以容納 20pt 三位數年份，會顯示 ##）
         setCell(sheet, startRow, 17, book.year, titleStyle);
-        mergeRange(sheet, startRow, 17, startRow + 1, 17);
-        setCell(sheet, startRow, 18, '年', titleStyle);
-        mergeRange(sheet, startRow, 18, startRow + 1, 18);
-        setCell(sheet, startRow, 19, book.month, titleStyle);
+        mergeRange(sheet, startRow, 17, startRow + 1, 18);
+        setCell(sheet, startRow, 19, '年', titleStyle);
         mergeRange(sheet, startRow, 19, startRow + 1, 19);
-        setCell(sheet, startRow, 20, halfSuffix, titleStyle);
+        setCell(sheet, startRow, 20, book.month, titleStyle);
         mergeRange(sheet, startRow, 20, startRow + 1, 20);
+        setCell(sheet, startRow, 21, halfSuffix, titleStyle);
+        mergeRange(sheet, startRow, 21, startRow + 1, 21);
     }
 
     return startRow + 2;
@@ -212,9 +219,27 @@ function writeColumnHeader(sheet: ExcelJS.Worksheet, spec: SheetSpec, startRow: 
     setCell(sheet, r2, 2, '', headerStyle);
     mergeRange(sheet, r1, 2, r2, 2);
 
-    // 單價 (col 3, 上下各一字)
-    setCell(sheet, r1, 3, '單', headerStyle);
-    setCell(sheet, r2, 3, '價', headerStyle);
+    // 單價 (col 3, 上下各一字；移除兩格中間的水平框線)
+    const unitTopStyle = buildStyle({
+        font: {name: KAI_FONT, size: CONTENT_FONT_PT, bold: true},
+        align: 'center',
+    });
+    unitTopStyle.border = {
+        top: {style: 'thin', color: {argb: ARGB_BLACK}},
+        left: {style: 'thin', color: {argb: ARGB_BLACK}},
+        right: {style: 'thin', color: {argb: ARGB_BLACK}},
+    };
+    const unitBottomStyle = buildStyle({
+        font: {name: KAI_FONT, size: CONTENT_FONT_PT, bold: true},
+        align: 'center',
+    });
+    unitBottomStyle.border = {
+        bottom: {style: 'thin', color: {argb: ARGB_BLACK}},
+        left: {style: 'thin', color: {argb: ARGB_BLACK}},
+        right: {style: 'thin', color: {argb: ARGB_BLACK}},
+    };
+    setCell(sheet, r1, 3, '單', unitTopStyle);
+    setCell(sheet, r2, 3, '價', unitBottomStyle);
 
     // 訂購單日數量 標籤 (col 4~end-2，橫向合併 r1)
     setCell(sheet, r1, 4, '訂購單日數量', headerStyle);
