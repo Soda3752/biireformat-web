@@ -34,7 +34,8 @@ const COL_WIDTHS_LOWER = [19, 14, 4.4, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5.3, 5
 
 const HEADER_ROW_COUNT = 2;             // 每頁欄位標頭 2 列（「客戶名稱/品名/單/...」+ 日期列）
 const TITLE_ROW_COUNT_FIRST = 2;        // 第一頁多 2 列（線別 + 年月）
-const TOP_BLANK_ROW_COUNT = 2;          // 每頁頂端預留 2 列空白
+const TOP_BLANK_ROW_COUNT_FIRST = 0;    // 第一頁頂端不留空白，讓 4 客戶（32 列）能塞進 36 列預算
+const TOP_BLANK_ROW_COUNT = 2;          // 第 2 頁起頂端預留 2 列空白
 // A4 橫向可印列數（14.5pt × 36 = 522pt < 538pt 可印高）
 const A4_LANDSCAPE_USABLE_ROWS = 36;
 
@@ -111,11 +112,11 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
 
     // 3. 寫入：頂端空白 + 標題 + 欄頭 + 客戶區塊（含 page break）
     let currentRow = 1;
-    currentRow += TOP_BLANK_ROW_COUNT;
+    currentRow += TOP_BLANK_ROW_COUNT_FIRST;
     currentRow = writeTitle(sheet, book, spec, currentRow);
     currentRow = writeColumnHeader(sheet, spec, currentRow);
 
-    const PAGE_1_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TOP_BLANK_ROW_COUNT - TITLE_ROW_COUNT_FIRST - HEADER_ROW_COUNT;
+    const PAGE_1_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TOP_BLANK_ROW_COUNT_FIRST - TITLE_ROW_COUNT_FIRST - HEADER_ROW_COUNT;
     const PAGE_OTHER_BUDGET = A4_LANDSCAPE_USABLE_ROWS - TOP_BLANK_ROW_COUNT - HEADER_ROW_COUNT;
 
     let customerIdx = 0;
@@ -148,7 +149,7 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
     sheet.views = [{
         state: 'frozen',
         xSplit: 0,
-        ySplit: TOP_BLANK_ROW_COUNT + TITLE_ROW_COUNT_FIRST + HEADER_ROW_COUNT
+        ySplit: TOP_BLANK_ROW_COUNT_FIRST + TITLE_ROW_COUNT_FIRST + HEADER_ROW_COUNT
     }];
 }
 
