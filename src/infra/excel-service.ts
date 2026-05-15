@@ -5,7 +5,7 @@ import ExcelJS from 'exceljs';
  * 同時包含 POI 單位（1/20 pt、1/256 char）與 ExcelJS 單位（pt、char）的換算。
  */
 
-export const KAI_FONT = '標楷體';
+export const KAI_FONT = '楷體-簡';
 
 /** POI 1/20 pt → ExcelJS pt */
 export const poiFontSize = (poi: number): number => poi / 20;
