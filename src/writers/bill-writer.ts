@@ -16,7 +16,13 @@
 
 import ExcelJS from 'exceljs';
 
-import {createWorkbook, setColumnWidthPoi, setupPrintSetting, workbookToBlob,} from '@/infra/excel-service';
+import {
+  createWorkbook,
+  type PrintSettingOptions,
+  setColumnWidthPoi,
+  setupPrintSetting,
+  workbookToBlob,
+} from '@/infra/excel-service';
 
 import {
   CENTER_LINE_WIDTH_POI,
@@ -38,6 +44,18 @@ import {
 
 import type {Bill} from '@/domain/models/bill';
 import type {CustomerModel} from '@/domain/models/customer-model';
+
+const BILL_PRINT_SETTINGS: PrintSettingOptions = {
+    landscape: true,
+    scale: 80,
+    horizontalCentered: true,
+    verticalCentered: true,
+    margins: {
+        left: 0, right: 0,
+        top: 0, bottom: 0,
+        header: 0, footer: 0,
+    },
+};
 
 const FULL_MONTH_MAX_ROW = 19;
 const FULL_MONTH_FIRST_RANGE: ReadonlyArray<number> = Array.from({ length: 15 }, (_, i) => i + 1);
@@ -117,7 +135,7 @@ export class BillWriter {
 
       const wb = createWorkbook();
       const ws = wb.addWorksheet(this.getSheetName(linePrefix));
-      setupPrintSetting(ws);
+        setupPrintSetting(ws, BILL_PRINT_SETTINGS);
       this.setupHalfMonthColumns(ws);
 
       this.writeCustomers(ws, halfNonCash, 'half');
@@ -139,7 +157,7 @@ export class BillWriter {
 
     const wb = createWorkbook();
     const ws = wb.addWorksheet('月結');
-    setupPrintSetting(ws);
+      setupPrintSetting(ws, BILL_PRINT_SETTINGS);
     this.setupFullMonthColumns(ws);
 
     this.writeCustomers(ws, monthly, 'full');
@@ -159,7 +177,7 @@ export class BillWriter {
 
     const wb = createWorkbook();
     const ws = wb.addWorksheet('現金');
-    setupPrintSetting(ws);
+      setupPrintSetting(ws, BILL_PRINT_SETTINGS);
     this.setupHalfMonthColumns(ws);
 
     this.writeCustomers(ws, cash, 'half');

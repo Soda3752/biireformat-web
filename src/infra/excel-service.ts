@@ -110,12 +110,25 @@ export const buildStyle = (cfg: CellStyleConfig): Partial<ExcelJS.Style> => {
    Sheet 操作 helper
    ======================================================================== */
 
+export interface PrintMargins {
+  left?: number;
+  right?: number;
+  top?: number;
+  bottom?: number;
+  header?: number;
+  footer?: number;
+}
+
 export interface PrintSettingOptions {
   paperSize?: number;
   landscape?: boolean;
   fitToPage?: boolean;
   fitWidth?: number;
   fitHeight?: number;
+  scale?: number;
+  horizontalCentered?: boolean;
+  verticalCentered?: boolean;
+  margins?: PrintMargins;
 }
 
 /** 對應 SheetExtension.setUpPrintSetting()：A5 橫向、fitToPage */
@@ -123,14 +136,29 @@ export const setupPrintSetting = (
   sheet: ExcelJS.Worksheet,
   options: PrintSettingOptions = {}
 ): void => {
-  sheet.pageSetup = {
+  const useScale = typeof options.scale === 'number';
+  const pageSetup: Partial<ExcelJS.PageSetup> = {
     ...sheet.pageSetup,
     paperSize: options.paperSize ?? PAPER_A5,
     orientation: options.landscape === false ? 'portrait' : 'landscape',
-    fitToPage: options.fitToPage ?? true,
+    fitToPage: useScale ? false : (options.fitToPage ?? true),
     fitToWidth: options.fitWidth ?? 1,
     fitToHeight: options.fitHeight ?? 0,
   };
+  if (useScale) pageSetup.scale = options.scale;
+  if (options.horizontalCentered !== undefined) pageSetup.horizontalCentered = options.horizontalCentered;
+  if (options.verticalCentered !== undefined) pageSetup.verticalCentered = options.verticalCentered;
+  if (options.margins) {
+    pageSetup.margins = {
+      left: options.margins.left ?? 0,
+      right: options.margins.right ?? 0,
+      top: options.margins.top ?? 0,
+      bottom: options.margins.bottom ?? 0,
+      header: options.margins.header ?? 0,
+      footer: options.margins.footer ?? 0,
+    };
+  }
+  sheet.pageSetup = pageSetup;
 };
 
 /**
