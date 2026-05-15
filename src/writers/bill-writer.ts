@@ -219,8 +219,8 @@ export class BillWriter {
     createHeader(ws, max);
       createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
       createDateRangeRow(ws, this.displayDateRange);
-      createProductRowBySlots(ws, customer.productList, this.halfMonthSlots);
-      createTotalRowBySlots(ws, customer, max, this.halfMonthSlots);
+    const range = createProductRowBySlots(ws, customer.productList, this.halfMonthSlots);
+    createTotalRowBySlots(ws, customer, max, this.halfMonthSlots, range ? [range] : []);
     createFooter(ws, max);
   }
 
@@ -232,16 +232,19 @@ export class BillWriter {
 
     // 上半月：日期 1..15，maxDate=16
     createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16);
-    createProductRow(ws, customer.productList, FULL_MONTH_FIRST_RANGE, 16);
+    const upperRange = createProductRow(ws, customer.productList, FULL_MONTH_FIRST_RANGE, 16);
 
     // 中間空白列
     ws.addRow([]);
 
     // 下半月：日期 16..31，maxDate=16
     createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16);
-    createProductRow(ws, customer.productList, FULL_MONTH_SECOND_RANGE, 16);
+    const lowerRange = createProductRow(ws, customer.productList, FULL_MONTH_SECOND_RANGE, 16);
 
-    createTotalRow(ws, customer, max);
+    const ranges = [upperRange, lowerRange].filter(
+        (r): r is NonNullable<typeof r> => r !== null
+    );
+    createTotalRow(ws, customer, max, ranges);
     createFooter(ws, max);
   }
 

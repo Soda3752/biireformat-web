@@ -31,7 +31,7 @@ import {getItemIndex} from '@/domain/sorting-list';
 export const TITLE_SIZE_POI = 400;
 export const FONT_SIZE_POI = 300;
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
-export const ROW_HEIGHT_POI = 500;
+export const ROW_HEIGHT_POI = 440;
 
 export const FIRST_LINE_WIDTH_POI = 15 * 256;
 export const CENTER_LINE_WIDTH_POI = 6 * 256;
@@ -98,6 +98,76 @@ const styles = {
       align: 'center',
     }),
 };
+
+/**
+ * 將商品列的「數量」欄改為 Excel 公式：=SUM(該列日期欄)。
+ * 日期欄從第 2 欄到「數量」前一欄；空白格 SUM 視為 0，正確忽略。
+ */
+function setQtyAsFormula(
+    row: ExcelJS.Row,
+    qtyColIdx: number,
+    result: number
+): void {
+    const firstDayAddr = row.getCell(2).address;
+    const lastDayAddr = row.getCell(qtyColIdx - 1).address;
+    row.getCell(qtyColIdx).value = {
+        formula: `SUM(${firstDayAddr}:${lastDayAddr})`,
+        result,
+    };
+}
+
+/**
+ * 將商品列的「合計」欄改為 Excel 公式：=數量*單價（同列前兩格）。
+ * `result` 是預先算好的數值，作為公式快取值，讓尚未重新計算的檢視也能正確顯示。
+ */
+function setTotalAsFormula(
+    row: ExcelJS.Row,
+    totalColIdx: number,
+    result: number
+): void {
+    const qtyAddr = row.getCell(totalColIdx - 2).address;
+    const priceAddr = row.getCell(totalColIdx - 1).address;
+    row.getCell(totalColIdx).value = {
+        formula: `${qtyAddr}*${priceAddr}`,
+        result,
+    };
+}
+
+/** 將數字欄位 (1-based) 轉為 Excel 欄位字母（A、B、…AA…）。 */
+function columnLetter(n: number): string {
+    let s = '';
+    while (n > 0) {
+        const m = (n - 1) % 26;
+        s = String.fromCharCode(65 + m) + s;
+        n = Math.floor((n - 1) / 26);
+    }
+    return s;
+}
+
+/**
+ * 將「總計」欄改為 Excel 公式：=ROUNDUP(SUM(合計欄各區段), 0)。
+ * `productRanges` 可一段或多段（全月結帳單上下半各一段）。
+ * `result` 是 Math.ceil 後的快取值，讓未重新計算的檢視仍顯示正確金額。
+ */
+function applySumRoundUpFormula(
+    row: ExcelJS.Row,
+    totalColIdx: number,
+    productRanges: ReadonlyArray<ProductRowRange>,
+    result: number
+): void {
+    const ranges = productRanges.filter((r) => r.firstRow > 0 && r.lastRow >= r.firstRow);
+    if (ranges.length === 0) return;
+    const refs = ranges
+        .map((r) => {
+            const col = columnLetter(r.totalColIdx);
+            return `${col}${r.firstRow}:${col}${r.lastRow}`;
+        })
+        .join(',');
+    row.getCell(totalColIdx).value = {
+        formula: `ROUNDUP(SUM(${refs}),0)`,
+        result,
+    };
+}
 
 /* ============================================================
    區塊建構：對應 SheetExtension.* helpers
@@ -202,6 +272,16 @@ export function createDateRangeRow(
   setRowHeightPoi(row, ROW_HEIGHT_POI);
 }
 
+/** 商品列寫入後回傳的範圍，供總計列以 SUM 公式參照。 */
+export interface ProductRowRange {
+    /** 商品列在 sheet 中的起始 row number（1-based） */
+    firstRow: number;
+    /** 商品列在 sheet 中的結束 row number（1-based，含） */
+    lastRow: number;
+    /** 「合計」欄的 column index（1-based），等於 cells 陣列長度 */
+    totalColIdx: number;
+}
+
 /**
  * 商品資料列（沿用桌面版邏輯：以 day 比對，無月份概念）。
  * 用於非帳單分頁（overview / delivery-fee 等）。
@@ -211,10 +291,14 @@ export function createProductRow(
   productList: ReadonlyArray<Product>,
   dateRange: ReadonlyArray<number>,
   maxDate = 0
-): void {
+): ProductRowRange | null {
   const cellStyle = styles.cellWithBorder();
 
   const sorted = [...productList].sort((a, b) => getItemIndex(a.name) - getItemIndex(b.name));
+
+    let firstRow = 0;
+    let lastRow = 0;
+    let totalColIdx = 0;
 
   for (const product of sorted) {
     const cells: StyledCell[] = [[product.name, cellStyle]];
@@ -229,15 +313,25 @@ export function createProductRow(
       for (let i = 0; i < pad; i++) cells.push(['', cellStyle]);
     }
 
+      const cachedTotal = product.getDateRangePrice(dateRange);
+      const cachedCount = product.getDateRangeCount(dateRange);
     cells.push(
-      [product.getDateRangeCount(dateRange), cellStyle],
+        [cachedCount, cellStyle],
       [product.price, cellStyle],
-      [product.getDateRangePrice(dateRange), cellStyle]
+        [cachedTotal, cellStyle]
     );
 
     const row = writeMixedRow(sheet, cells, cellStyle);
     setRowHeightPoi(row, ROW_HEIGHT_POI);
+      setQtyAsFormula(row, cells.length - 2, cachedCount);
+      setTotalAsFormula(row, cells.length, cachedTotal);
+
+      if (firstRow === 0) firstRow = row.number;
+      lastRow = row.number;
+      totalColIdx = cells.length;
   }
+
+    return firstRow === 0 ? null : {firstRow, lastRow, totalColIdx};
 }
 
 /**
@@ -259,11 +353,15 @@ export function createProductRowBySlots(
     productList: ReadonlyArray<Product>,
     slots: ReadonlyArray<DateSlot>,
     maxDate = 0
-): void {
+): ProductRowRange | null {
     const cellStyle = styles.cellWithBorder();
 
     const sorted = [...productList].sort((a, b) => getItemIndex(a.name) - getItemIndex(b.name));
     const sources = slots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
+
+    let firstRow = 0;
+    let lastRow = 0;
+    let totalColIdx = 0;
 
     for (const product of sorted) {
         const cells: StyledCell[] = [[product.name, cellStyle]];
@@ -278,15 +376,25 @@ export function createProductRowBySlots(
             for (let i = 0; i < pad; i++) cells.push(['', cellStyle]);
         }
 
+        const cachedTotal = product.getPriceForDates(sources);
+        const cachedCount = product.getCountForDates(sources);
         cells.push(
-            [product.getCountForDates(sources), cellStyle],
+            [cachedCount, cellStyle],
             [product.price, cellStyle],
-            [product.getPriceForDates(sources), cellStyle]
+            [cachedTotal, cellStyle]
         );
 
         const row = writeMixedRow(sheet, cells, cellStyle);
         setRowHeightPoi(row, ROW_HEIGHT_POI);
+        setQtyAsFormula(row, cells.length - 2, cachedCount);
+        setTotalAsFormula(row, cells.length, cachedTotal);
+
+        if (firstRow === 0) firstRow = row.number;
+        lastRow = row.number;
+        totalColIdx = cells.length;
     }
+
+    return firstRow === 0 ? null : {firstRow, lastRow, totalColIdx};
 }
 
 /**
@@ -299,15 +407,18 @@ export function createProductRowBySlots(
 export function createTotalRow(
   sheet: ExcelJS.Worksheet,
   customer: CustomerModel,
-  rowMaxSize: number
+  rowMaxSize: number,
+  productRanges: ReadonlyArray<ProductRowRange> = []
 ): void {
   const redStyle = styles.redTotal();
+    const cachedTotal = Math.ceil(customer.getTotalPrice());
 
   const totalCells: StyledCell[] = [];
   for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
-  totalCells.push(['總計', redStyle], [customer.getTotalPrice(), redStyle]);
+    totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
   const totalRow = writeMixedRow(sheet, totalCells, redStyle);
   setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
+    applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
   if (customer.isNeedTex) {
     const taxCells: StyledCell[] = [];
@@ -331,16 +442,19 @@ export function createTotalRowBySlots(
     sheet: ExcelJS.Worksheet,
     customer: CustomerModel,
     rowMaxSize: number,
-    slots: ReadonlyArray<DateSlot>
+    slots: ReadonlyArray<DateSlot>,
+    productRanges: ReadonlyArray<ProductRowRange> = []
 ): void {
     const redStyle = styles.redTotal();
     const sources = slots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
+    const cachedTotal = Math.ceil(customer.getTotalPriceForDates(sources));
 
     const totalCells: StyledCell[] = [];
     for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
-    totalCells.push(['總計', redStyle], [customer.getTotalPriceForDates(sources), redStyle]);
+    totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
     const totalRow = writeMixedRow(sheet, totalCells, redStyle);
     setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
+    applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
     if (customer.isNeedTex) {
         const taxCells: StyledCell[] = [];
