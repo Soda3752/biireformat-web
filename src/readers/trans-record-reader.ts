@@ -13,10 +13,143 @@ import Papa from 'papaparse';
  */
 export const parseTransRecord = async (file: File): Promise<string[][]> => {
   const lower = file.name.toLowerCase();
-  if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
-    return parseTransRecordXlsx(file);
-  }
-  return parseTransRecordCsv(file);
+    const rows = (lower.endsWith('.xlsx') || lower.endsWith('.xls'))
+        ? await parseTransRecordXlsx(file)
+        : await parseTransRecordCsv(file);
+
+    if (isPostOfficeFormat(rows)) {
+        return normalizePostOffice(rows);
+    }
+    return rows;
+};
+
+/**
+ * 郵局 CSV 兼容層
+ *
+ * 郵局存摺明細 CSV 的格式特徵：
+ *   - 前 6 列為 metadata（含「6個月內交易明細」與存摺帳號）
+ *   - 標題列：交易日期 / 沖銷記號 / 摘要 / 提款金額 / 存款金額 / 備註（共 6 欄 + 3 空欄）
+ *   - 每個欄位值前綴 \t、日期為民國年含時間（115/05/12 05:02:45）、金額帶 .00
+ *
+ * 與標準 9 欄銀行 CSV（日期, 摘要, 幣別, 支出金額, 存入金額, 餘額, 備註, 轉出入帳號, 註記）
+ * 欄位數與順序皆不同，下游 bank-match-service 取「最後一個非空欄」當配對目標、
+ * 取 raw[4] 當存入金額，因此這裡把郵局 6 欄重新映射到標準 9 欄：
+ *
+ *   郵局「備註」（含對方帳號末五碼或對方銀行/姓名）→ 標準「註記」（最後一欄、配對目標）
+ *   郵局「提款金額」→ 標準「支出金額」(index 3)
+ *   郵局「存款金額」→ 標準「存入金額」(index 4)
+ *   日期轉西元只留日期、金額去 .00、欄前 \t 一律剝除
+ *
+ * 「續上一筆」列保留為獨立列，因為它常含帳號末五碼或對方銀行名，可命中配對。
+ */
+
+const POST_OFFICE_TITLE = '6個月內交易明細';
+const POST_OFFICE_HEADER = ['交易日期', '沖銷記號', '摘要', '提款金額', '存款金額', '備註'];
+const STANDARD_HEADER = ['日期', '摘要', '幣別', '支出金額', '存入金額', '餘額', '備註', '轉出入帳號', '註記'];
+
+const stripLeadingTab = (s: string): string => s.replace(/^\t+/, '');
+
+const cleanCell = (s: string | undefined): string => stripLeadingTab(s ?? '').trim();
+
+const findPostOfficeHeaderIndex = (rows: ReadonlyArray<ReadonlyArray<string>>): number => {
+    const scanLimit = Math.min(rows.length, 20);
+    for (let i = 0; i < scanLimit; i++) {
+        const row = rows[i];
+        if (POST_OFFICE_HEADER.every((token, j) => cleanCell(row[j]) === token)) {
+            return i;
+        }
+    }
+    return -1;
+};
+
+const isPostOfficeFormat = (rows: ReadonlyArray<ReadonlyArray<string>>): boolean => {
+    if (rows.length === 0) return false;
+    if (findPostOfficeHeaderIndex(rows) >= 0) return true;
+    // 後備偵測：第一列含「6個月內交易明細」
+    const firstRowTokens = rows[0].map((c) => cleanCell(c));
+    return firstRowTokens.some((c) => c.includes(POST_OFFICE_TITLE));
+};
+
+/** 民國年 `115/05/12 05:02:45` → 西元 `2026/5/12`；非預期格式則回原字串。 */
+const convertRocDate = (raw: string): string => {
+    const m = raw.match(/^(\d{2,3})\/(\d{1,2})\/(\d{1,2})/);
+    if (!m) return raw;
+    const year = parseInt(m[1], 10) + 1911;
+    const month = parseInt(m[2], 10);
+    const day = parseInt(m[3], 10);
+    return `${year}/${month}/${day}`;
+};
+
+/** `1419.00` → `1419`；空白或非數字維持原樣（空字串）。 */
+const cleanAmount = (raw: string): string => {
+    if (raw === '') return '';
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return raw;
+    return Number.isInteger(n) ? String(n) : String(n);
+};
+
+/**
+ * 對帳只關心入帳款項，所以郵局明細的處理規則：
+ *   1. 主行：存入金額為「非空、非 0」的列，輸出為標準 9 欄
+ *   2. 補充行：「續上一筆 / 續上一行」（金額通常 0.00），其備註合進前一筆主行的「備註」欄
+ *      並 append 到主行尾端作為配對候選
+ *   3. 其他列（提款、手續費、所有 deposit 空白或 0 的非補充列）一律忽略
+ */
+const SUPPLEMENT_SUMMARIES = new Set(['續上一筆', '續上一行']);
+
+const isMeaningfulDeposit = (amount: string): boolean => {
+    if (amount === '') return false;
+    const n = Number(amount);
+    return Number.isFinite(n) && n !== 0;
+};
+
+const normalizePostOffice = (rows: ReadonlyArray<ReadonlyArray<string>>): string[][] => {
+    const headerIdx = findPostOfficeHeaderIndex(rows);
+    if (headerIdx < 0) return rows.map((r) => [...r]);
+
+    const out: string[][] = [STANDARD_HEADER.slice()];
+    let current: string[] | null = null;
+    let supplements: string[] = [];
+
+    const flush = () => {
+        if (current) {
+            if (supplements.length > 0) {
+                current[6] = supplements.join('、');
+                for (const s of supplements) current.push(s);
+            }
+            out.push(current);
+        }
+        current = null;
+        supplements = [];
+    };
+
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+        const cells = rows[i].map((c) => cleanCell(c));
+        if (cells.every((c) => c === '')) continue;
+
+        const summary = cells[2] ?? '';
+        const note = cells[5] ?? '';
+
+        if (SUPPLEMENT_SUMMARIES.has(summary)) {
+            if (current !== null && note !== '') supplements.push(note);
+            continue;
+        }
+
+        const deposit = cleanAmount(cells[4] ?? '');
+        if (!isMeaningfulDeposit(deposit)) {
+            // 非入帳列（提款、手續費、存入為 0 但非補充行的雜列）：丟棄
+            flush();
+            continue;
+        }
+
+        const date = convertRocDate(cells[0] ?? '');
+        const withdraw = cleanAmount(cells[3] ?? '');
+
+        flush();
+        current = [date, summary, 'TWD', withdraw, deposit, '', '', '-', note];
+    }
+    flush();
+    return out;
 };
 
 const parseTransRecordCsv = async (file: File): Promise<string[][]> => {
