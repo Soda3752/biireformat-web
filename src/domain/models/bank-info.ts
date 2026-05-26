@@ -7,6 +7,8 @@
  */
 export interface BankInfo {
   readonly customerName: string;
+  /** 設定頁紀錄的店家編號；舊資料或未填寫時為空字串。不參與比對 / 去重邏輯。 */
+  readonly storeCode: string;
   readonly customerLine: string;
   readonly lastFiveDigit: string;
 }

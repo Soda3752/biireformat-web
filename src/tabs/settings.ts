@@ -68,6 +68,7 @@ interface DailyRow {
 
 interface LastFiveRow {
     customerName: string;
+    storeCode: string;
     customerLine: string;
     lastFiveDigit: string;
 }
@@ -1212,13 +1213,14 @@ function bindLastFivePane(panel: HTMLElement): void {
             buildEditableTable({
                 headers: LAST_FIVE_HEADER,
                 rows,
-                rowToCells: (row) => [row.customerName, row.customerLine, row.lastFiveDigit],
+                rowToCells: (row) => [row.customerName, row.storeCode, row.customerLine, row.lastFiveDigit],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
                     if (!r) return;
                     if (colIdx === 0) r.customerName = value;
-                    else if (colIdx === 1) r.customerLine = value;
-                    else if (colIdx === 2) r.lastFiveDigit = value;
+                    else if (colIdx === 1) r.storeCode = value;
+                    else if (colIdx === 2) r.customerLine = value;
+                    else if (colIdx === 3) r.lastFiveDigit = value;
                     persist();
                 },
                 onDeleteRow: (rowIdx) => {
@@ -1232,12 +1234,12 @@ function bindLastFivePane(panel: HTMLElement): void {
                     persist();
                 },
                 onInsertAbove: (rowIdx) => {
-                    rows.splice(rowIdx, 0, {customerName: '', customerLine: '', lastFiveDigit: ''});
+                    rows.splice(rowIdx, 0, emptyLastFiveRow());
                     renderTable();
                     persist();
                 },
                 onInsertBelow: (rowIdx) => {
-                    rows.splice(rowIdx + 1, 0, {customerName: '', customerLine: '', lastFiveDigit: ''});
+                    rows.splice(rowIdx + 1, 0, emptyLastFiveRow());
                     renderTable();
                     persist();
                 },
@@ -1251,7 +1253,7 @@ function bindLastFivePane(panel: HTMLElement): void {
     renderTable();
 
     addBtn.addEventListener('click', () => {
-        rows.push({customerName: '', customerLine: '', lastFiveDigit: ''});
+        rows.push(emptyLastFiveRow());
         renderTable();
         persist();
     });
@@ -1318,16 +1320,21 @@ function loadLastFiveRows(): LastFiveRow[] {
     return bankInfosToRows(parseBankInfoCsv(overridden));
 }
 
+function emptyLastFiveRow(): LastFiveRow {
+    return {customerName: '', storeCode: '', customerLine: '', lastFiveDigit: ''};
+}
+
 function bankInfoToRow(info: BankInfo): LastFiveRow {
     return {
         customerName: info.customerName,
+        storeCode: info.storeCode,
         customerLine: info.customerLine,
         lastFiveDigit: info.lastFiveDigit,
     };
 }
 
 function bankInfosToRows(infos: BankInfo[]): LastFiveRow[] {
-    // 去重（與 BankInfoReader 對齊）
+    // 去重（與 BankInfoReader 對齊；storeCode 不參與比對）
     const out: LastFiveRow[] = [];
     for (const info of infos) {
         if (info.lastFiveDigit.length === 0) continue;
@@ -1345,6 +1352,7 @@ function bankInfosToRows(infos: BankInfo[]): LastFiveRow[] {
 function serializeLastFiveCsv(rows: LastFiveRow[]): string {
     const infos: BankInfo[] = rows.map((r) => ({
         customerName: r.customerName,
+        storeCode: r.storeCode,
         customerLine: r.customerLine,
         lastFiveDigit: r.lastFiveDigit,
     }));
@@ -1365,11 +1373,12 @@ async function buildLastFiveXlsxBlob(rows: LastFiveRow[]): Promise<Blob> {
     const ws = wb.addWorksheet('末五碼對照表');
     ws.addRow(LAST_FIVE_HEADER);
     for (const r of rows) {
-        ws.addRow([r.customerName, r.customerLine, r.lastFiveDigit]);
+        ws.addRow([r.customerName, r.storeCode, r.customerLine, r.lastFiveDigit]);
     }
     ws.getColumn(1).width = 18;
     ws.getColumn(2).width = 12;
-    ws.getColumn(3).width = 14;
+    ws.getColumn(3).width = 12;
+    ws.getColumn(4).width = 14;
     const buf = await wb.xlsx.writeBuffer();
     return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

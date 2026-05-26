@@ -151,7 +151,7 @@ export function openBankAddDialog(options: BankAddDialogOptions): void {
             return;
         }
 
-        const newInfo: BankInfo = {customerName, customerLine, lastFiveDigit};
+        const newInfo: BankInfo = {customerName, storeCode: '', customerLine, lastFiveDigit};
 
         try {
             saveBtn.disabled = true;
