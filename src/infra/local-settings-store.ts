@@ -264,7 +264,7 @@ export function summarizeImportPayload(payload: SettingsExportPayload): {
 }[] {
     const labelMap: Record<typeof EXPORT_KEYS[number], string> = {
         cargoSort: '帳單排序',
-        dailyReportList: '品項分類',
+        dailyReportList: '單日數量',
         lastFiveDigit: '末五碼',
         customerOrderBill: '帳單客戶排序',
         customerOrderOverview: '明細客戶排序',

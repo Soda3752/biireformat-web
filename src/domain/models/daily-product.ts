@@ -1,7 +1,7 @@
 /**
  * 對應桌面版 src/main/kotlin/dailyCountStatistics/model/Product.kt
  *
- * `costRaw` 為設定頁「品項分類」第 4 欄的原始字串。
+ * `costRaw` 為設定頁「單日數量」第 4 欄的原始字串。
  * 空字串代表使用者尚未填入成本（數據分析頁會在下方提示）。
  */
 export interface DailyProduct {

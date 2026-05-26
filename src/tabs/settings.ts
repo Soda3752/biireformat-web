@@ -1,7 +1,7 @@
 /**
  * 設定分頁：管理 cargo_sort.csv 與 daily_report_list.csv 的本地覆寫。
  *
- * - 內部子分頁：「帳單排序」 / 「品項分類」
+ * - 內部子分頁：「帳單排序」 / 「單日數量」
  * - 每個子分頁支援：表格內編輯、新增列、刪除列、匯入 CSV、匯出 CSV
  * - 編輯 / 匯入後立即寫入 localStorage 並 invalidate 對應的 loader 快取
  * - 匯出格式與內建 CSV 相同
@@ -154,7 +154,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
         <div class="settings-card-header-titles">
           <h1 class="card-title">設定</h1>
           <p class="card-subtitle">
-            管理「帳單排序（cargo_sort）」與「品項分類（daily_report_list）」兩份資料。
+            管理「帳單排序（cargo_sort）」與「單日數量（daily_report_list）」兩份資料。
           </p>
         </div>
         <div class="settings-global-actions">
@@ -170,7 +170,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
 
       <nav class="settings-subnav" role="tablist" aria-label="設定子分頁">
         <button type="button" class="settings-subnav-item is-active" data-subtab="cargo" role="tab" aria-selected="true">帳單排序</button>
-        <button type="button" class="settings-subnav-item" data-subtab="daily" role="tab" aria-selected="false">品項分類</button>
+        <button type="button" class="settings-subnav-item" data-subtab="daily" role="tab" aria-selected="false">單日數量</button>
         <button type="button" class="settings-subnav-item" data-subtab="bill-customer" role="tab" aria-selected="false">帳單客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="overview-customer" role="tab" aria-selected="false">明細客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="lastfive" role="tab" aria-selected="false">末五碼</button>
@@ -694,7 +694,7 @@ async function buildCargoXlsxBlob(rows: CargoRow[]): Promise<Blob> {
 }
 
 // ============================================================================
-// 品項分類 (daily_report_list)
+// 單日數量 (daily_report_list)
 // ============================================================================
 
 function bindDailyPane(panel: HTMLElement): void {
@@ -839,7 +839,7 @@ function bindDailyPane(panel: HTMLElement): void {
             renderTable();
             showToast({
                 variant: 'success',
-                title: '品項分類已匯入',
+                title: '單日數量已匯入',
                 message: `${file.name}（${rows.length} 筆）`,
             });
         } catch (err) {

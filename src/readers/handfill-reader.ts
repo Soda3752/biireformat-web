@@ -159,9 +159,12 @@ function parseCustomers(matrix: Matrix, headerRows: Set<number>, dataStartRow: n
     const lastDataRow = matrix.length - 1;
 
     // 客戶區塊起始：col 0 是 3~5 位數字
+    // 注意：writer 把欄頭兩列做了直向 merge，ExcelJS 讀回時兩列 col0 都是「客戶名稱」，
+    // 因此 headerRows 會同時包含 r 與 r+1。dataStartRow 已指向第一個客戶 ID 列，
+    // 不能再用 headerRows.has(r - 1) 當條件，否則每頁第一個客戶會被誤跳。
     const starts: number[] = [];
     for (let r = dataStartRow; r <= lastDataRow; r++) {
-        if (headerRows.has(r) || headerRows.has(r - 1)) continue;
+        if (headerRows.has(r)) continue;
         const c0 = (matrix[r]?.[0] ?? '').trim();
         if (isCustomerIdLike(c0)) {
             starts.push(r);
@@ -179,6 +182,11 @@ function parseCustomers(matrix: Matrix, headerRows: Set<number>, dataStartRow: n
                 break;
             }
         }
+        // 修剪尾端整列空白：writer 在頁尾的 page-break 前可能留下不屬於本客戶的空白列，
+        // 若不修剪會讓 layoutCol0 邏輯把電話位置算錯（誤判成休息日）。
+        while (endRowExclusive > startRow + 1 && isRowBlank(matrix[endRowExclusive - 1])) {
+            endRowExclusive--;
+        }
         customers.push(parseCustomerBlock(matrix, startRow, endRowExclusive));
     }
 
@@ -190,6 +198,18 @@ function isCustomerIdLike(s: string): boolean {
     return /^\d{3,5}$/.test(s.trim());
 }
 
+function isRowBlank(row: Cell[] | undefined): boolean {
+    if (!row) return true;
+    return !(row[0] ?? '').trim() && !(row[1] ?? '').trim() && !(row[2] ?? '').trim();
+}
+
+function looksLikePhone(s: string): boolean {
+    const trimmed = s.trim();
+    if (!trimmed) return false;
+    const digits = trimmed.replace(/-/g, '');
+    return /^\d{7,15}$/.test(digits);
+}
+
 function parseCustomerBlock(matrix: Matrix, startRow: number, endRowExclusive: number): HandfillCustomer {
     const cust: HandfillCustomer = {
         id: genId('cust-'),
@@ -198,6 +218,7 @@ function parseCustomerBlock(matrix: Matrix, startRow: number, endRowExclusive: n
         products: [],
         restNotes: [],
         phones: [],
+        manualSort: false,
     };
 
     const rows = endRowExclusive - startRow;
@@ -226,32 +247,17 @@ function parseCustomerBlock(matrix: Matrix, startRow: number, endRowExclusive: n
         cust.products.push({name: '', unitPrice: undefined});
     }
 
-    // col 0 的其他列 → 休息日 + 電話
-    // 標準佈局：col0[0]=ID, [1]=名稱, [2]=空, [3~5]=休息日, [6]=電話1, [7]=電話2
-    const col0Lines: Array<{ idx: number; text: string }> = [];
-    for (let r = startRow; r < endRowExclusive; r++) {
-        col0Lines.push({
-            idx: r - startRow,
-            text: (matrix[r]?.[0] ?? '').trim(),
-        });
-    }
-
-    if (col0Lines.length >= 8) {
-        const lastIdx = col0Lines.length - 1;
-        const secondLastIdx = col0Lines.length - 2;
-        for (let i = 2; i < col0Lines.length; i++) {
-            const {text} = col0Lines[i];
-            if (!text) continue;
-            if (i === lastIdx || i === secondLastIdx) {
-                cust.phones.push(text);
-            } else {
-                cust.restNotes.push(text);
-            }
-        }
-    } else {
-        for (let i = 2; i < col0Lines.length; i++) {
-            const {text} = col0Lines[i];
-            if (text) cust.restNotes.push(text);
+    // col 0 的其他列：以內容樣式判斷而非位置。
+    // 原本「最後兩列＝電話」的位置邏輯只在 blockRows==8 時穩定；當客戶區塊被 trim 後
+    // 不足 8 列、或電話位置因 writer 演算法變動而非最末列時，會把電話誤讀為休息日。
+    // 改用 looksLikePhone：純數字（可含 dash）且 7~15 位數 → 電話，其餘 → 休息日。
+    for (let r = startRow + 2; r < endRowExclusive; r++) {
+        const text = (matrix[r]?.[0] ?? '').trim();
+        if (!text) continue;
+        if (looksLikePhone(text)) {
+            cust.phones.push(text);
+        } else {
+            cust.restNotes.push(text);
         }
     }
 

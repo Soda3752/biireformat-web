@@ -60,8 +60,15 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
 
     <div class="handfill-card-section">
       <header class="handfill-card-section-header">
-        <h3 class="handfill-card-section-title">品名清單 <span class="handfill-card-section-meta" data-role="product-count">(0)</span></h3>
+        <h3 class="handfill-card-section-title">
+          品名清單
+          <span class="handfill-card-section-meta" data-role="product-count">(0)</span>
+          <span class="handfill-manual-sort-badge" data-role="manual-sort-badge" hidden>手動排序</span>
+        </h3>
         <div class="handfill-card-section-actions">
+          <button type="button" class="btn btn-secondary btn-sm" data-role="restore-auto-sort" hidden>
+            ${icon('chevron-down', 12)}<span>還原自動排序</span>
+          </button>
           <button type="button" class="btn btn-secondary btn-sm" data-role="insert-blank-product">
             ${icon('row-insert-above', 12)}<span>插入空白行</span>
           </button>
@@ -84,6 +91,8 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
     const addPhoneBtn = card.querySelector<HTMLButtonElement>('[data-role="add-phone"]')!;
     const addProductBtn = card.querySelector<HTMLButtonElement>('[data-role="add-product"]')!;
     const insertBlankProductBtn = card.querySelector<HTMLButtonElement>('[data-role="insert-blank-product"]')!;
+    const restoreAutoSortBtn = card.querySelector<HTMLButtonElement>('[data-role="restore-auto-sort"]')!;
+    const manualSortBadge = card.querySelector<HTMLElement>('[data-role="manual-sort-badge"]')!;
 
     function notify(): void {
         opts.onChange(cloneCustomer(cust));
@@ -187,6 +196,21 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         .join('');
     card.appendChild(datalistEl);
 
+    function syncSortUI(): void {
+        const isManual = cust.manualSort === true;
+        restoreAutoSortBtn.hidden = !isManual;
+        manualSortBadge.hidden = !isManual;
+    }
+
+    // 拖曳排序狀態：來源列索引（null 表示沒有正在拖曳）
+    let dragSrcIdx: number | null = null;
+
+    function clearDropIndicators(): void {
+        productList.querySelectorAll('.drop-above, .drop-below').forEach((el) => {
+            el.classList.remove('drop-above', 'drop-below');
+        });
+    }
+
     function renderProductList(): void {
         productList.innerHTML = '';
         productCountEl.textContent = `(${cust.products.filter((p) => p.name.trim()).length})`;
@@ -197,15 +221,42 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         cust.products.forEach((prod, idx) => {
             const row = document.createElement('div');
             row.className = 'handfill-card-product-row';
+            row.dataset.idx = String(idx);
             row.innerHTML = `
+        <button type="button" class="handfill-product-handle" data-role="drag-handle" aria-label="拖曳排序" title="拖曳排序">${icon('grip', 14)}</button>
         <span class="handfill-product-idx">${idx + 1}.</span>
         <input type="text" class="app-form-input handfill-product-name" list="${datalistId}" value="${escapeAttr(prod.name)}" placeholder="品名（可從建議選或手填）" autocomplete="off">
         <input type="number" class="app-form-input handfill-product-price" value="${prod.unitPrice ?? ''}" placeholder="單價" step="0.01">
-        <button type="button" class="btn btn-icon btn-secondary" aria-label="刪除">${icon('close', 14)}</button>
+        <button type="button" class="btn btn-icon btn-secondary handfill-product-delete" aria-label="刪除">${icon('close', 14)}</button>
       `;
+            const handleBtn = row.querySelector<HTMLButtonElement>('[data-role="drag-handle"]')!;
             const nameInp = row.querySelector<HTMLInputElement>('.handfill-product-name')!;
             const priceInp = row.querySelector<HTMLInputElement>('.handfill-product-price')!;
-            const delBtn = row.querySelector<HTMLButtonElement>('button')!;
+            const delBtn = row.querySelector<HTMLButtonElement>('.handfill-product-delete')!;
+
+            // 拖曳把手：mousedown 才把 row 變為 draggable，避免使用者選取 input 文字時誤觸
+            handleBtn.addEventListener('mousedown', () => {
+                row.draggable = true;
+            });
+            // 把手只負責觸發 drag，禁止 click 動作（避免 button default 行為）
+            handleBtn.addEventListener('click', (e) => e.preventDefault());
+
+            row.addEventListener('dragstart', (e) => {
+                if (!row.draggable) return;
+                dragSrcIdx = idx;
+                row.classList.add('dragging');
+                if (e.dataTransfer) {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', String(idx));
+                }
+            });
+            row.addEventListener('dragend', () => {
+                row.classList.remove('dragging');
+                row.draggable = false;
+                dragSrcIdx = null;
+                clearDropIndicators();
+            });
+
             // input：每次鍵入皆同步資料，確保自動儲存不漏；不重繪也不重排
             nameInp.addEventListener('input', () => {
                 cust.products[idx].name = nameInp.value;
@@ -213,12 +264,13 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
                 notify();
             });
             // change：使用者「確認」輸入（blur 或選 datalist 建議）時依排序表重排
+            // 但若已進入手動排序模式（cust.manualSort=true），則保留手動順序，不再自動重排
             nameInp.addEventListener('change', () => {
                 cust.products[idx].name = nameInp.value;
-                if (opts.cargoNames.length > 0) {
+                if (!cust.manualSort && opts.cargoNames.length > 0) {
                     sortProductsByCargoOrder(cust.products, opts.cargoNames);
+                    renderProductList();
                 }
-                renderProductList();
                 notify();
             });
             priceInp.addEventListener('input', () => {
@@ -245,15 +297,78 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
 
     insertBlankProductBtn.addEventListener('click', () => {
         cust.products.unshift({name: '', unitPrice: undefined});
+        // 「插入空白行」是排版意圖，視同手動排序，避免後續 nameInput change 把空白行沖到末端
+        cust.manualSort = true;
         renderProductList();
+        syncSortUI();
         notify();
         const first = productList.querySelector<HTMLInputElement>('.handfill-card-product-row:first-child .handfill-product-name');
         first?.focus();
     });
 
+    restoreAutoSortBtn.addEventListener('click', () => {
+        cust.manualSort = false;
+        if (opts.cargoNames.length > 0) {
+            sortProductsByCargoOrder(cust.products, opts.cargoNames);
+        }
+        renderProductList();
+        syncSortUI();
+        notify();
+    });
+
+    // productList 層級的 D&D listener：只綁一次，不隨 renderProductList 重複綁定
+    productList.addEventListener('dragover', (e) => {
+        if (dragSrcIdx === null) return;
+        e.preventDefault();
+        const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('.handfill-card-product-row');
+        if (!target || !productList.contains(target)) return;
+        clearDropIndicators();
+        const rect = target.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        target.classList.add(e.clientY < midY ? 'drop-above' : 'drop-below');
+    });
+
+    productList.addEventListener('dragleave', (e) => {
+        // 真正離開整個 list 容器時才清掉指示
+        if (e.target === productList) {
+            clearDropIndicators();
+        }
+    });
+
+    productList.addEventListener('drop', (e) => {
+        if (dragSrcIdx === null) return;
+        e.preventDefault();
+        const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('.handfill-card-product-row');
+        if (!target || !productList.contains(target)) {
+            clearDropIndicators();
+            return;
+        }
+        const targetIdx = parseInt(target.dataset.idx ?? '-1', 10);
+        if (targetIdx < 0) {
+            clearDropIndicators();
+            return;
+        }
+        const rect = target.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const insertAfter = e.clientY >= midY;
+        const fromIdx = dragSrcIdx;
+        let toIdx = insertAfter ? targetIdx + 1 : targetIdx;
+        // 從原位置移除後，若 fromIdx < toIdx，目標位置會往前縮 1
+        if (fromIdx < toIdx) toIdx -= 1;
+        clearDropIndicators();
+        if (fromIdx === toIdx) return;
+        const [moved] = cust.products.splice(fromIdx, 1);
+        cust.products.splice(toIdx, 0, moved);
+        cust.manualSort = true;
+        renderProductList();
+        syncSortUI();
+        notify();
+    });
+
     renderRestList();
     renderPhoneList();
     renderProductList();
+    syncSortUI();
 
     return card;
 }
@@ -266,6 +381,7 @@ function cloneCustomer(c: HandfillCustomer): HandfillCustomer {
         products: c.products.map((p): HandfillProduct => ({name: p.name, unitPrice: p.unitPrice})),
         restNotes: [...c.restNotes],
         phones: [...c.phones],
+        manualSort: c.manualSort === true,
     };
 }
 

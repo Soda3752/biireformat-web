@@ -176,7 +176,7 @@ function bindHiddenTabUnlock(
             showToast({
                 variant: 'success',
                 title: '已解鎖隱藏設定',
-                message: '「品項分類」現在會顯示「成本」欄位',
+                message: '「單日數量」現在會顯示「成本」欄位',
             });
         }
     });

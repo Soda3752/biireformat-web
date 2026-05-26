@@ -21,6 +21,13 @@ export interface HandfillCustomer {
     products: HandfillProduct[];
     restNotes: string[];
     phones: string[];
+    /**
+     * 是否已由使用者手動排序過品名清單。
+     * - false（預設）：品名於 change 事件時依 cargo_sort 自動重排。
+     * - true：保留使用者手動順序，change 不再自動重排，直到按「還原自動排序」。
+     * 既有 localStorage 資料可能不存在此欄位，讀取時視為 false。
+     */
+    manualSort?: boolean;
 }
 
 export interface HandfillBook {
@@ -68,6 +75,7 @@ export function createEmptyCustomer(): HandfillCustomer {
         products: [{name: '', unitPrice: undefined}],
         restNotes: [],
         phones: ['', ''],
+        manualSort: false,
     };
 }
 

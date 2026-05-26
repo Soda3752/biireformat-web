@@ -169,7 +169,7 @@ async function persistNewMapping(existing: DailyRow[], entry: DailyRow): Promise
     const csv = serializeDailyCsv(next);
     localSettings.setDailyReportList(csv);
     invalidateCategoryMap();
-    // 同時清 daily-report 快取並通知訂閱者（例：設定頁品項分類分頁即時同步）
+    // 同時清 daily-report 快取並通知訂閱者（例：設定頁單日數量分頁即時同步）
     notifyDailyReportChanged();
 }
 
