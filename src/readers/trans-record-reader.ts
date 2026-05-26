@@ -159,7 +159,10 @@ const parseTransRecordCsv = async (file: File): Promise<string[][]> => {
   const result = Papa.parse<string[]>(text, {
     header: false,
     skipEmptyLines: 'greedy',
-    transform: (value) => (typeof value === 'string' ? value : String(value ?? '')),
+      transform: (value) => {
+          const s = typeof value === 'string' ? value : String(value ?? '');
+          return stripExcelTextWrap(s);
+      },
   });
 
   if (result.errors.length > 0) {
@@ -170,6 +173,20 @@ const parseTransRecordCsv = async (file: File): Promise<string[][]> => {
   }
 
   return (result.data as string[][]).filter((row) => Array.isArray(row));
+};
+
+/**
+ * 剝除 Excel 強制文字格式包裹：`="000109450**0954*"` → `000109450**0954*`
+ *
+ * 部分網路銀行（例：PCMS 開頭的對帳單）為了讓 Excel 不要把帳號開頭 0 吃掉，
+ * 會把欄位輸出成 `="..."` 字面形式。PapaParse 不會自動拆這層，
+ * 導致註記欄塞滿 `=`、`"` 等非數字字元，後續末五碼比對直接失敗。
+ *
+ * 只處理「完整以 `="` 開頭並以 `"` 結尾」的字串；中間含換行也保留（s 旗標）。
+ */
+const stripExcelTextWrap = (s: string): string => {
+    if (s.length < 3 || !s.startsWith('="') || !s.endsWith('"')) return s;
+    return s.slice(2, -1);
 };
 
 const parseTransRecordXlsx = async (file: File): Promise<string[][]> => {
