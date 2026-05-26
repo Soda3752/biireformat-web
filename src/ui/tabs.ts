@@ -13,6 +13,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: 'overview', label: '明細', icon: 'list', hash: '#overview' },
   { id: 'delivery', label: '代送費', icon: 'truck', hash: '#delivery' },
   { id: 'bank', label: '對帳', icon: 'bank', hash: '#bank' },
+    {id: 'bank-v2', label: '對帳 2.0', icon: 'bank', hash: '#bank-v2'},
     {id: 'daily', label: '單日數量', icon: 'clipboard-list', hash: '#daily'},
     {id: 'handfill', label: '生成手填本', icon: 'document', hash: '#handfill'},
     {id: 'sf-shipping', label: '順豐託運單', icon: 'truck', hash: '#sf-shipping'},
