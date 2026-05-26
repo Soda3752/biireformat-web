@@ -61,9 +61,14 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
     <div class="handfill-card-section">
       <header class="handfill-card-section-header">
         <h3 class="handfill-card-section-title">品名清單 <span class="handfill-card-section-meta" data-role="product-count">(0)</span></h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-role="add-product">
-          ${icon('plus', 12)}<span>新增品名</span>
-        </button>
+        <div class="handfill-card-section-actions">
+          <button type="button" class="btn btn-secondary btn-sm" data-role="insert-blank-product">
+            ${icon('row-insert-above', 12)}<span>插入空白行</span>
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" data-role="add-product">
+            ${icon('plus', 12)}<span>新增品名</span>
+          </button>
+        </div>
       </header>
       <div class="handfill-card-product-list" data-role="product-list"></div>
     </div>
@@ -78,6 +83,7 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
     const addRestBtn = card.querySelector<HTMLButtonElement>('[data-role="add-rest"]')!;
     const addPhoneBtn = card.querySelector<HTMLButtonElement>('[data-role="add-phone"]')!;
     const addProductBtn = card.querySelector<HTMLButtonElement>('[data-role="add-product"]')!;
+    const insertBlankProductBtn = card.querySelector<HTMLButtonElement>('[data-role="insert-blank-product"]')!;
 
     function notify(): void {
         opts.onChange(cloneCustomer(cust));
@@ -235,6 +241,14 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         notify();
         const last = productList.querySelector<HTMLInputElement>('.handfill-card-product-row:last-child .handfill-product-name');
         last?.focus();
+    });
+
+    insertBlankProductBtn.addEventListener('click', () => {
+        cust.products.unshift({name: '', unitPrice: undefined});
+        renderProductList();
+        notify();
+        const first = productList.querySelector<HTMLInputElement>('.handfill-card-product-row:first-child .handfill-product-name');
+        first?.focus();
     });
 
     renderRestList();

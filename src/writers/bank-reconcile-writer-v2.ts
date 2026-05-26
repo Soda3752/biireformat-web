@@ -34,6 +34,7 @@ const ARGB_STATUS_MATCHED = 'FFD8F2DF';
 const ARGB_STATUS_UNPAID = 'FFFADBD8';
 const ARGB_STATUS_PARTIAL = 'FFFFF4D6';
 const ARGB_STATUS_OVERPAID = 'FFE8DAEF';
+const ARGB_HYPERLINK = 'FF1A56DB';
 
 const HEADER_STYLE = buildStyle({
     font: {bold: true, color: ARGB_HEADER_FG, size: 12},
@@ -66,14 +67,15 @@ export interface ReconcileFile {
 
 export async function writeReconcileWorkbook(result: ReconcileResult): Promise<ReconcileFile> {
     const wb = createWorkbook();
+    const rawRowIndex = buildRawRowIndex(result.rawRows);
 
     const customerSheet = wb.addWorksheet(SHEET_CUSTOMER);
-    writeCustomerSection(customerSheet, result.customers);
+    writeCustomerSection(customerSheet, result.customers, rawRowIndex);
     customerSheet.views = [{state: 'frozen', ySplit: 1}];
     setCustomerColumnWidths(customerSheet);
 
     const manualSheet = wb.addWorksheet(SHEET_MANUAL);
-    writeManualReviewSection(manualSheet, result.manualReviewItems);
+    writeManualReviewSection(manualSheet, result.manualReviewItems, rawRowIndex);
     manualSheet.views = [{state: 'frozen', ySplit: 1}];
     setManualColumnWidths(manualSheet);
 
@@ -86,6 +88,21 @@ export async function writeReconcileWorkbook(result: ReconcileResult): Promise<R
         filename: buildReconcileFilename(result),
         blob: await workbookToBlob(wb),
     };
+}
+
+type RawRowIndex = ReadonlyMap<number, number>;
+
+function buildRawRowIndex(rows: ReadonlyArray<BankRowMatch>): RawRowIndex {
+    // raw sheet 第 1 列為表頭，第 i 筆資料對應 row number = i + 2
+    const m = new Map<number, number>();
+    rows.forEach((r, i) => {
+        m.set(r.fileLineNumber, i + 2);
+    });
+    return m;
+}
+
+function rawHyperlink(rowNumber: number): string {
+    return `#'${SHEET_RAW}'!A${rowNumber}`;
 }
 
 export function buildReconcileFilename(result: ReconcileResult): string {
@@ -101,6 +118,7 @@ export function buildReconcileFilename(result: ReconcileResult): string {
 function writeCustomerSection(
     sheet: ExcelJS.Worksheet,
     customers: ReadonlyArray<CustomerReconcileRow>,
+    rawRowIndex: RawRowIndex,
 ): void {
     const headerRow = sheet.addRow([...CUSTOMER_HEADER]);
     headerRow.eachCell((cell) => {
@@ -113,34 +131,67 @@ function writeCustomerSection(
         (r): r is VisibleCustomerReconcileRow => r.status !== 'unpaid',
     );
     for (const r of visibleCustomers) {
-        const receiptText = formatReceiptCell(r.matchedRows);
-        const row = sheet.addRow([
-            r.customerCode,
-            r.customerName,
-            r.customerLine,
-            formatPayMode(r),
-            r.receivable,
-            r.received,
-            r.diff,
-            statusLabel(r.status),
-            receiptText,
-        ]);
+        writeCustomerRowGroup(sheet, r, rawRowIndex);
+    }
+}
 
-        const isNa = r.status === 'na' || r.isCashUser;
-        row.eachCell({includeEmpty: true}, (cell, colNumber) => {
+function writeCustomerRowGroup(
+    sheet: ExcelJS.Worksheet,
+    r: VisibleCustomerReconcileRow,
+    rawRowIndex: RawRowIndex,
+): void {
+    const isNa = r.status === 'na' || r.isCashUser;
+    const matched = r.matchedRows;
+    const rowsCount = Math.max(1, matched.length);
+    let groupStartRow = 0;
+
+    for (let i = 0; i < rowsCount; i++) {
+        const m: ReconcileMatchedRow | undefined = matched[i];
+        const isFirst = i === 0;
+        const dataRow = sheet.addRow([
+            isFirst ? r.customerCode : '',
+            isFirst ? r.customerName : '',
+            isFirst ? r.customerLine : '',
+            isFirst ? formatPayMode(r) : '',
+            isFirst ? r.receivable : '',
+            isFirst ? r.received : '',
+            isFirst ? r.diff : '',
+            isFirst ? statusLabel(r.status) : '',
+            null,
+        ]);
+        if (isFirst) groupStartRow = dataRow.number;
+
+        const detailCell = dataRow.getCell(9);
+        let hasHyperlink = false;
+        if (m) {
+            const text = formatReceiptLine(m, m.crossMonth);
+            const target = rawRowIndex.get(m.fileLineNumber);
+            if (target !== undefined) {
+                detailCell.value = {text, hyperlink: rawHyperlink(target)};
+                hasHyperlink = true;
+            } else {
+                detailCell.value = text;
+            }
+        } else {
+            detailCell.value = '';
+        }
+
+        dataRow.eachCell({includeEmpty: true}, (cell, colNumber) => {
             cell.style = buildStyle({font: {size: 11}, align: {vertical: 'middle'}});
             cell.border = thinBorderAll();
             if (colNumber === 5 || colNumber === 6 || colNumber === 7) {
                 cell.alignment = {...cell.alignment, horizontal: 'right'};
                 cell.numFmt = '#,##0';
-                if (colNumber === 7 && r.diff !== 0) {
+                if (colNumber === 7 && isFirst && r.diff !== 0) {
                     cell.font = {...cell.font, bold: true, color: {argb: r.diff < 0 ? 'FFC23E3E' : 'FF8E44AD'}};
                 }
             } else if (colNumber === 8) {
                 cell.alignment = {...cell.alignment, horizontal: 'center'};
-                cell.font = {...cell.font, bold: true, color: {argb: statusColor(r.status)}};
+                if (isFirst) {
+                    cell.font = {...cell.font, bold: true, color: {argb: statusColor(r.status)}};
+                }
             } else if (colNumber === 9) {
-                cell.alignment = {...cell.alignment, horizontal: 'left', vertical: 'top', wrapText: true};
+                cell.alignment = {...cell.alignment, horizontal: 'left', vertical: 'middle'};
                 cell.font = {...cell.font, size: 10, color: {argb: 'FF4B5563'}};
             } else if (colNumber === 1 || colNumber === 3 || colNumber === 4) {
                 cell.alignment = {...cell.alignment, horizontal: 'center'};
@@ -149,16 +200,21 @@ function writeCustomerSection(
             if (isNa) {
                 cell.fill = solidFill(ARGB_NA_BG);
                 cell.font = {...cell.font, color: {argb: 'FF8B95A1'}};
-            } else if (colNumber === 8) {
+            } else if (colNumber === 8 && isFirst) {
                 cell.fill = solidFill(statusBgColor(r.status));
+            }
+
+            if (colNumber === 9 && hasHyperlink) {
+                cell.font = {...cell.font, color: {argb: ARGB_HYPERLINK}, underline: 'single'};
             }
         });
     }
-}
 
-function formatReceiptCell(rows: ReadonlyArray<ReconcileMatchedRow>): string {
-    if (rows.length === 0) return '';
-    return rows.map((r) => formatReceiptLine(r, r.crossMonth)).join('\n');
+    if (rowsCount > 1 && groupStartRow > 0) {
+        for (let c = 1; c <= 8; c++) {
+            sheet.mergeCells(groupStartRow, c, groupStartRow + rowsCount - 1, c);
+        }
+    }
 }
 
 function formatReceiptLine(row: BankRowMatch, crossMonth = false): string {
@@ -171,6 +227,7 @@ function formatReceiptLine(row: BankRowMatch, crossMonth = false): string {
 function writeManualReviewSection(
     sheet: ExcelJS.Worksheet,
     items: ReadonlyArray<ManualReviewItem>,
+    rawRowIndex: RawRowIndex,
 ): void {
     const headerRow = sheet.addRow([...MANUAL_HEADER]);
     headerRow.eachCell((cell) => {
@@ -196,15 +253,23 @@ function writeManualReviewSection(
             }).join('、')
             : '(無)';
 
-        const row = sheet.addRow([
+        const dataRow = sheet.addRow([
             MANUAL_REASON_LABEL[item.reason] ?? item.reason,
-            formatReceiptLine(item.row),
+            null,
             item.row.summary,
             parseAmount(item.row.deposit),
             candidate,
             buildManualReason(item),
         ]);
-        row.eachCell({includeEmpty: true}, (cell, colNumber) => {
+
+        const receiptText = formatReceiptLine(item.row);
+        const target = rawRowIndex.get(item.row.fileLineNumber);
+        const hasHyperlink = target !== undefined;
+        dataRow.getCell(2).value = hasHyperlink
+            ? {text: receiptText, hyperlink: rawHyperlink(target!)}
+            : receiptText;
+
+        dataRow.eachCell({includeEmpty: true}, (cell, colNumber) => {
             cell.style = buildStyle({font: {size: 11}, align: {vertical: 'middle'}});
             cell.border = thinBorderAll();
             cell.fill = solidFill(ARGB_STATUS_PARTIAL);
@@ -216,6 +281,9 @@ function writeManualReviewSection(
             } else if (colNumber === 2) {
                 cell.alignment = {...cell.alignment, horizontal: 'left'};
                 cell.font = {...cell.font, size: 10, color: {argb: 'FF4B5563'}};
+                if (hasHyperlink) {
+                    cell.font = {...cell.font, color: {argb: ARGB_HYPERLINK}, underline: 'single'};
+                }
             }
         });
     }
