@@ -2,7 +2,7 @@
  * 對帳 2.0 Excel 輸出
  *
  * 1 張 sheet 含 3 個區塊：
- *  1. 客戶對帳表（主表）
+ *  1. 客戶對帳表（主表，未收狀態的客戶不輸出）
  *  2. 需人工複核（多重匹配 / 未對應 / 未設 storeCode）
  *  3. 原始交易明細
  *
@@ -15,6 +15,7 @@ import {buildStyle, createWorkbook, workbookToBlob} from '@/infra/excel-service'
 import type {
     CustomerReconcileRow,
     ManualReviewItem,
+    ReconcileMatchedRow,
     ReconcileResult,
     ReconcileStatus,
 } from '@/domain/bank-reconcile-service';
@@ -115,7 +116,7 @@ function writeTitle(sheet: ExcelJS.Worksheet, result: ReconcileResult): void {
     titleRow.height = 22;
 
     const s = result.summary;
-    const summary = `應收合計 ${formatMoney(s.totalReceivable)}　／　已收合計 ${formatMoney(s.totalReceived)}　／　差額 ${formatMoney(s.totalDiff)}　／　已配對 ${s.matchedCount} 戶　／　未收 ${s.unpaidCount} 戶　／　部分 ${s.partialCount} 戶　／　超收 ${s.overpaidCount} 戶　／　待覆核 ${s.manualReviewCount} 筆`;
+    const summary = `應收合計 ${formatMoney(s.totalReceivable)}　／　已收合計 ${formatMoney(s.totalReceived)}　／　差額 ${formatMoney(s.totalDiff)}　／　已配對 ${s.matchedCount} 戶　／　部分 ${s.partialCount} 戶　／　超收 ${s.overpaidCount} 戶　／　待覆核 ${s.manualReviewCount} 筆`;
     const summaryRow = sheet.addRow([summary]);
     summaryRow.getCell(1).style = SUMMARY_STYLE;
     summaryRow.height = 18;
@@ -135,7 +136,10 @@ function writeCustomerSection(
     });
     headerRow.height = 22;
 
-    for (const r of customers) {
+    const visibleCustomers = customers.filter(
+        (r): r is VisibleCustomerReconcileRow => r.status !== 'unpaid',
+    );
+    for (const r of visibleCustomers) {
         const receiptText = formatReceiptCell(r.matchedRows);
         const row = sheet.addRow([
             r.customerCode,
@@ -179,15 +183,16 @@ function writeCustomerSection(
     }
 }
 
-function formatReceiptCell(rows: ReadonlyArray<BankRowMatch>): string {
+function formatReceiptCell(rows: ReadonlyArray<ReconcileMatchedRow>): string {
     if (rows.length === 0) return '';
-    return rows.map(formatReceiptLine).join('\n');
+    return rows.map((r) => formatReceiptLine(r, r.crossMonth)).join('\n');
 }
 
-function formatReceiptLine(row: BankRowMatch): string {
+function formatReceiptLine(row: BankRowMatch, crossMonth = false): string {
     const date = (row.date ?? '').trim() || '—';
     const account = (row.account ?? '').trim();
-    return account ? `${date}  #${account}` : date;
+    const base = account ? `${date}  #${account}` : date;
+    return crossMonth ? `${base} (跨月)` : base;
 }
 
 function writeManualReviewSection(
@@ -297,12 +302,14 @@ function buildManualReason(item: ManualReviewItem): string {
     }
 }
 
-function statusLabel(s: ReconcileStatus): string {
+type VisibleReconcileStatus = Exclude<ReconcileStatus, 'unpaid'>;
+
+type VisibleCustomerReconcileRow = CustomerReconcileRow & { status: VisibleReconcileStatus };
+
+function statusLabel(s: VisibleReconcileStatus): string {
     switch (s) {
         case 'matched':
             return '✓ 已收';
-        case 'unpaid':
-            return '✗ 未收';
         case 'partial':
             return '⚠ 部分';
         case 'overpaid':
@@ -312,12 +319,10 @@ function statusLabel(s: ReconcileStatus): string {
     }
 }
 
-function statusColor(s: ReconcileStatus): string {
+function statusColor(s: VisibleReconcileStatus): string {
     switch (s) {
         case 'matched':
             return 'FF1F8A4C';
-        case 'unpaid':
-            return 'FFC23E3E';
         case 'partial':
             return 'FF8B6914';
         case 'overpaid':
@@ -327,12 +332,10 @@ function statusColor(s: ReconcileStatus): string {
     }
 }
 
-function statusBgColor(s: ReconcileStatus): string {
+function statusBgColor(s: VisibleReconcileStatus): string {
     switch (s) {
         case 'matched':
             return ARGB_STATUS_MATCHED;
-        case 'unpaid':
-            return ARGB_STATUS_UNPAID;
         case 'partial':
             return ARGB_STATUS_PARTIAL;
         case 'overpaid':

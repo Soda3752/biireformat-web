@@ -16,7 +16,7 @@ import type {BankMatchResult, BankRowMatch} from '@/domain/bank-match-service';
 import {matchTransRecord} from '@/domain/bank-match-service';
 import {processBillFile} from '@/domain/process-bill';
 import type {ReconcileResult} from '@/domain/bank-reconcile-service';
-import {reconcileByCustomer} from '@/domain/bank-reconcile-service';
+import {DEFAULT_FEE_TOLERANCE, reconcileByCustomer} from '@/domain/bank-reconcile-service';
 import type {BankInfo} from '@/domain/models/bank-info';
 import type {Bill} from '@/domain/models/bill';
 import {localSettings} from '@/infra/local-settings-store';
@@ -46,6 +46,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
       <div class="notice-banner" data-role="notice-banner" hidden></div>
 
+      <div class="reconcile-options">
+        <label class="reconcile-options-field">
+          <span class="reconcile-options-label">手續費容差 (元)</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            class="reconcile-options-input"
+            data-role="fee-tolerance"
+          />
+          <span class="reconcile-options-hint">用於濾掉跨月匯款：每位客戶取「金額最接近應收且差額 ≤ 此值」那筆當本月款，其餘列標記為「跨月」。</span>
+        </label>
+      </div>
+
       <div class="reconcile-dropzones" data-role="dropzones">
         <div data-role="bill-slot"></div>
         <div class="reconcile-trans-slot">
@@ -71,12 +85,23 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         rows: string[][];
     }
 
+    const FEE_TOLERANCE_KEY = 'bii.reconcile.feeTolerance';
+
+    const readStoredFeeTolerance = (): number => {
+        const raw = localStorage.getItem(FEE_TOLERANCE_KEY);
+        if (raw === null) return DEFAULT_FEE_TOLERANCE;
+        const n = Number(raw);
+        return Number.isFinite(n) && n >= 0 ? n : DEFAULT_FEE_TOLERANCE;
+    };
+
     let bill: Bill | null = null;
     let billFileName: string | null = null;
     const transFiles: TransFileEntry[] = [];
     let lastResult: ReconcileResult | null = null;
+    let feeTolerance = readStoredFeeTolerance();
 
     const banner = panel.querySelector<HTMLElement>('[data-role="notice-banner"]')!;
+    const feeToleranceInput = panel.querySelector<HTMLInputElement>('[data-role="fee-tolerance"]')!;
     const billSlot = panel.querySelector<HTMLElement>('[data-role="bill-slot"]')!;
     const transSlot = panel.querySelector<HTMLElement>('[data-role="trans-slot"]')!;
     const transListEl = panel.querySelector<HTMLElement>('[data-role="trans-list"]')!;
@@ -246,7 +271,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
         const infos = getBankInfos();
         const bankResult = matchAllTransFiles(transFiles, infos);
-        lastResult = reconcileByCustomer(bill, bankResult, infos);
+        lastResult = reconcileByCustomer(bill, bankResult, infos, {feeTolerance});
         previewTable.setData(lastResult);
         refreshOverall();
     };
@@ -287,6 +312,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     };
 
     resetBtn.addEventListener('click', reset);
+
+    feeToleranceInput.value = String(feeTolerance);
+    feeToleranceInput.addEventListener('change', () => {
+        const raw = feeToleranceInput.value.trim();
+        const n = raw === '' ? DEFAULT_FEE_TOLERANCE : Number(raw);
+        const next = Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_FEE_TOLERANCE;
+        feeTolerance = next;
+        feeToleranceInput.value = String(next);
+        localStorage.setItem(FEE_TOLERANCE_KEY, String(next));
+        rebuildReconcile();
+    });
 
     exportBtn.addEventListener('click', async () => {
         if (!lastResult) return;

@@ -4104,6 +4104,46 @@ td.cell-price-down {
 
 /* ========== 對帳 2.0 分頁 ========== */
 
+.reconcile-options {
+    margin-bottom: var(--space-3);
+}
+
+.reconcile-options-field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.reconcile-options-label {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.reconcile-options-input {
+    width: 80px;
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+}
+
+.reconcile-options-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-soft, rgba(62, 95, 138, 0.18));
+}
+
+.reconcile-options-hint {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    flex: 1 1 240px;
+}
+
 .reconcile-dropzones {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -4349,6 +4389,112 @@ td.cell-price-down {
     display: none;
 }
 
+.reconcile-status-filter {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-2);
+}
+
+.reconcile-status-filter[hidden] {
+    display: none;
+}
+
+.reconcile-status-filter-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.reconcile-status-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.reconcile-status-filter-chip:hover {
+    border-color: var(--color-text-muted);
+}
+
+.reconcile-status-filter-check {
+    font-size: 11px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.reconcile-status-filter-chip.is-active .reconcile-status-filter-check {
+    opacity: 1;
+}
+
+.reconcile-status-filter-chip[data-status="matched"].is-active {
+    background: #D8F2DF;
+    border-color: #1F8A4C;
+    color: #1F8A4C;
+}
+
+.reconcile-status-filter-chip[data-status="partial"].is-active {
+    background: #FFF4D6;
+    border-color: #8B6914;
+    color: #8B6914;
+}
+
+.reconcile-status-filter-chip[data-status="overpaid"].is-active {
+    background: #E8DAEF;
+    border-color: #8E44AD;
+    color: #8E44AD;
+}
+
+.reconcile-status-filter-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--color-border);
+    margin: 0 var(--space-1);
+}
+
+.reconcile-line-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.reconcile-line-filter-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.reconcile-line-filter-select {
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xs);
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.reconcile-line-filter-select:hover {
+    border-color: var(--color-text-muted);
+}
+
+.reconcile-line-filter-select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-soft, rgba(62, 95, 138, 0.18));
+}
+
 .reconcile-search-bar {
   position: relative;
   display: flex;
@@ -4577,6 +4723,16 @@ td.cell-price-down {
 
 .reconcile-receipt-empty {
     color: var(--color-text-muted);
+}
+
+.reconcile-receipt-item.is-cross-month {
+    opacity: 0.55;
+}
+
+.reconcile-receipt-cross-month {
+    color: var(--color-text-muted);
+    font-size: 10px;
+    font-style: italic;
 }
 
 .reconcile-raw-info {

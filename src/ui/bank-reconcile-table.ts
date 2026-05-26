@@ -12,6 +12,7 @@ import type {
     CustomerReconcileRow,
     ManualReviewCandidate,
     ManualReviewItem,
+    ReconcileMatchedRow,
     ReconcileResult,
     ReconcileStatus,
 } from '@/domain/bank-reconcile-service';
@@ -66,6 +67,25 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
       </div>
 
       <div class="reconcile-tab-panel" data-role="panel-customer" role="tabpanel">
+        <div class="reconcile-status-filter" data-role="status-filter" hidden>
+          <span class="reconcile-status-filter-label">狀態篩選：</span>
+          <button type="button" class="reconcile-status-filter-chip is-active" data-status="matched" aria-pressed="true">
+            <span class="reconcile-status-filter-check">✓</span>已收
+          </button>
+          <button type="button" class="reconcile-status-filter-chip is-active" data-status="partial" aria-pressed="true">
+            <span class="reconcile-status-filter-check">✓</span>部分
+          </button>
+          <button type="button" class="reconcile-status-filter-chip is-active" data-status="overpaid" aria-pressed="true">
+            <span class="reconcile-status-filter-check">✓</span>超收
+          </button>
+          <span class="reconcile-status-filter-divider" aria-hidden="true"></span>
+          <label class="reconcile-line-filter">
+            <span class="reconcile-line-filter-label">線別：</span>
+            <select class="reconcile-line-filter-select" data-role="line-filter">
+              <option value="all">全部</option>
+            </select>
+          </label>
+        </div>
         <div class="reconcile-search-bar">
           <input type="search" class="reconcile-search-input" data-role="search-customer"
                  placeholder="搜尋客戶編號或名稱..." autocomplete="off">
@@ -125,6 +145,16 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     const manualSearchInput = element.querySelector<HTMLInputElement>('[data-role="search-manual"]')!;
     const customerSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-customer-clear"]')!;
     const manualSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-manual-clear"]')!;
+    const statusFilterEl = element.querySelector<HTMLElement>('[data-role="status-filter"]')!;
+    const lineFilterSelect = element.querySelector<HTMLSelectElement>('[data-role="line-filter"]')!;
+
+    type MatchedFilterKey = 'matched' | 'partial' | 'overpaid';
+    const matchedStatusFilter: Record<MatchedFilterKey, boolean> = {
+        matched: true,
+        partial: true,
+        overpaid: true,
+    };
+    let matchedLineFilter = 'all';
 
     let activeTab: TabKey = DEFAULT_TAB;
     let lastResult: ReconcileResult | null = null;
@@ -170,14 +200,27 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         const showCustomer = activeTab === 'matched' || activeTab === 'unmatched';
         customerPanel.hidden = !showCustomer;
         manualPanel.hidden = activeTab !== 'manual';
+        statusFilterEl.hidden = activeTab !== 'matched';
 
         if ((activeTab === 'matched' || activeTab === 'unmatched') && lastResult) {
-            const baseRows = activeTab === 'matched'
+            const rawRows = activeTab === 'matched'
                 ? lastResult.customers.filter((c) => c.received > 0)
                 : lastResult.customers.filter((c) => c.received === 0);
+            const noStatusSelected = activeTab === 'matched'
+                && !matchedStatusFilter.matched
+                && !matchedStatusFilter.partial
+                && !matchedStatusFilter.overpaid;
+            let baseRows = activeTab === 'matched'
+                ? rawRows.filter((c) => isMatchedFilterKey(c.status) && matchedStatusFilter[c.status])
+                : rawRows;
+            if (activeTab === 'matched' && matchedLineFilter !== 'all') {
+                baseRows = baseRows.filter((c) => (c.customerCode ?? '').charAt(0) === matchedLineFilter);
+            }
             const query = queries[activeTab];
             const rows = filterCustomers(baseRows, query);
-            const emptyText = buildCustomerEmptyText(activeTab, baseRows.length, query);
+            const emptyText = noStatusSelected
+                ? '請至少勾選一個狀態'
+                : buildCustomerEmptyText(activeTab, baseRows.length, query);
             renderCustomers(customerTbody, rows, lastHeader, emptyText);
 
             customerSearchInput.value = query;
@@ -201,6 +244,51 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     for (const btn of tabsEl.querySelectorAll<HTMLButtonElement>('.reconcile-tab')) {
         btn.addEventListener('click', () => setActiveTab(btn.dataset.tab as TabKey));
     }
+
+    for (const chip of statusFilterEl.querySelectorAll<HTMLButtonElement>('.reconcile-status-filter-chip')) {
+        chip.addEventListener('click', () => {
+            const key = chip.dataset.status as MatchedFilterKey | undefined;
+            if (!key || !(key in matchedStatusFilter)) return;
+            const next = !matchedStatusFilter[key];
+            matchedStatusFilter[key] = next;
+            chip.classList.toggle('is-active', next);
+            chip.setAttribute('aria-pressed', next ? 'true' : 'false');
+            refreshPanels();
+        });
+    }
+
+    lineFilterSelect.addEventListener('change', () => {
+        matchedLineFilter = lineFilterSelect.value || 'all';
+        refreshPanels();
+    });
+
+    const refreshLineFilterOptions = () => {
+        const lines = new Set<string>();
+        if (lastResult) {
+            for (const c of lastResult.customers) {
+                if (c.received > 0) {
+                    const first = (c.customerCode ?? '').charAt(0);
+                    if (first) lines.add(first);
+                }
+            }
+        }
+        const sorted = [...lines].sort();
+        lineFilterSelect.innerHTML = '';
+        const all = document.createElement('option');
+        all.value = 'all';
+        all.textContent = '全部';
+        lineFilterSelect.appendChild(all);
+        for (const l of sorted) {
+            const opt = document.createElement('option');
+            opt.value = l;
+            opt.textContent = `第${l}線`;
+            lineFilterSelect.appendChild(opt);
+        }
+        if (matchedLineFilter !== 'all' && !lines.has(matchedLineFilter)) {
+            matchedLineFilter = 'all';
+        }
+        lineFilterSelect.value = matchedLineFilter;
+    };
 
     customerSearchInput.addEventListener('input', () => {
         if (activeTab !== 'matched' && activeTab !== 'unmatched') return;
@@ -233,6 +321,7 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         lastHeader = pickHeader(result.bankHeader);
         renderSummary(summaryEl, result);
         refreshBadges();
+        refreshLineFilterOptions();
         refreshTabState();
         refreshPanels();
         element.hidden = false;
@@ -252,6 +341,16 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         manualSearchInput.value = '';
         customerSearchClear.hidden = true;
         manualSearchClear.hidden = true;
+        matchedStatusFilter.matched = true;
+        matchedStatusFilter.partial = true;
+        matchedStatusFilter.overpaid = true;
+        for (const chip of statusFilterEl.querySelectorAll<HTMLButtonElement>('.reconcile-status-filter-chip')) {
+            chip.classList.add('is-active');
+            chip.setAttribute('aria-pressed', 'true');
+        }
+        matchedLineFilter = 'all';
+        lineFilterSelect.innerHTML = '<option value="all">全部</option>';
+        lineFilterSelect.value = 'all';
         for (const t of TAB_DEFS) {
             const badge = element.querySelector<HTMLElement>(`[data-role="badge-${t.key}"]`);
             if (badge) badge.textContent = '0';
@@ -260,6 +359,10 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     };
 
     return {element, setData, clear};
+}
+
+function isMatchedFilterKey(s: ReconcileStatus): s is 'matched' | 'partial' | 'overpaid' {
+    return s === 'matched' || s === 'partial' || s === 'overpaid';
 }
 
 function renderSummary(host: HTMLElement, result: ReconcileResult): void {
@@ -314,7 +417,10 @@ function renderCustomers(
     tbody.appendChild(fragment);
 }
 
-function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>, header: ReadonlyArray<string>): HTMLElement {
+function buildReceiptsCell(
+    rows: ReadonlyArray<BankRowMatch | ReconcileMatchedRow>,
+    header: ReadonlyArray<string>,
+): HTMLElement {
     const cell = document.createElement('td');
     cell.className = 'col-receipts';
     if (rows.length === 0) {
@@ -328,8 +434,10 @@ function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>, header: ReadonlyAr
     const list = document.createElement('ul');
     list.className = 'reconcile-receipt-list';
     for (const row of rows) {
+        const isCrossMonth = (row as ReconcileMatchedRow).crossMonth === true;
         const item = document.createElement('li');
         item.className = 'reconcile-receipt-item';
+        if (isCrossMonth) item.classList.add('is-cross-month');
 
         const date = document.createElement('span');
         date.className = 'reconcile-receipt-date';
@@ -342,6 +450,13 @@ function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>, header: ReadonlyAr
             acc.className = 'reconcile-receipt-account';
             acc.textContent = `#${account}`;
             item.appendChild(acc);
+        }
+
+        if (isCrossMonth) {
+            const tag = document.createElement('span');
+            tag.className = 'reconcile-receipt-cross-month';
+            tag.textContent = '(跨月)';
+            item.appendChild(tag);
         }
 
         item.appendChild(buildRawRowInfoIcon(row, header));

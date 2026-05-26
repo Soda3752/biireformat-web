@@ -23,6 +23,11 @@ export type ReconcileStatus = 'matched' | 'unpaid' | 'partial' | 'overpaid' | 'n
 
 export type ManualReviewReason = 'multi-match' | 'no-store-code' | 'unmatched';
 
+export interface ReconcileMatchedRow extends BankRowMatch {
+    /** 跨月旗標：true 表示該列被「金額容差篩選」排除、不計入 received，但仍保留供顯示。 */
+    crossMonth: boolean;
+}
+
 export interface CustomerReconcileRow {
     customerCode: string;
     customerName: string;
@@ -34,7 +39,23 @@ export interface CustomerReconcileRow {
     received: number;
     diff: number;
     status: ReconcileStatus;
-    matchedRows: BankRowMatch[];
+    matchedRows: ReconcileMatchedRow[];
+}
+
+/**
+ * 銀行手續費容差預設值（元）。
+ *
+ * 場景：銀行對帳單可能包含跨月入帳（同 storeCode 上月匯款），導致應為 matched 的客戶被累加成 overpaid。
+ * 處理規則：對每位客戶的 matchedRows
+ *  1. 若存在某筆 (receivable - deposit) 在 [0, feeTolerance] 內 → 取「|receivable - deposit| 最小」那筆當本月款；
+ *     其餘列標記 crossMonth=true，不計入 received。
+ *  2. 若無任何列落在容差內 → 退回原本「全部累加」邏輯（保留分期付款、部分付款的語意）。
+ */
+export const DEFAULT_FEE_TOLERANCE = 15;
+
+export interface ReconcileOptions {
+    /** 銀行手續費容差（元）。預設 15。 */
+    feeTolerance: number;
 }
 
 export interface ManualReviewCandidate {
@@ -78,9 +99,9 @@ export function reconcileByCustomer(
     bill: Bill,
     bankResult: BankMatchResult,
     _bankInfos: ReadonlyArray<BankInfo>,
+    options: ReconcileOptions = {feeTolerance: DEFAULT_FEE_TOLERANCE},
 ): ReconcileResult {
-    // 以 storeCode 為鍵，累加 deposit
-    const receivedByCode = new Map<string, number>();
+    // 以 storeCode 為鍵，收集所有對應到該客戶的銀行列（先不累加，留給 buildCustomerRow 做跨月篩選）
     const matchedRowsByCode = new Map<string, BankRowMatch[]>();
     const manualReviewItems: ManualReviewItem[] = [];
 
@@ -121,15 +142,14 @@ export function reconcileByCustomer(
             continue;
         }
 
-        const amount = parseDeposit(row.deposit);
-        receivedByCode.set(code, (receivedByCode.get(code) ?? 0) + amount);
         const list = matchedRowsByCode.get(code);
         if (list) list.push(row);
         else matchedRowsByCode.set(code, [row]);
     }
 
+    const feeTolerance = Math.max(0, options.feeTolerance);
     const customers: CustomerReconcileRow[] = bill.customerModels.map((c) =>
-        buildCustomerRow(c, receivedByCode.get(c.code) ?? 0, matchedRowsByCode.get(c.code) ?? []),
+        buildCustomerRow(c, matchedRowsByCode.get(c.code) ?? [], feeTolerance),
     );
 
     return {
@@ -144,10 +164,11 @@ export function reconcileByCustomer(
 
 function buildCustomerRow(
     c: CustomerModel,
-    received: number,
-    matchedRows: BankRowMatch[],
+    bankRows: ReadonlyArray<BankRowMatch>,
+    feeTolerance: number,
 ): CustomerReconcileRow {
     const receivable = c.isNeedTex ? c.getAfterTexSum() : c.getTotalPrice();
+    const {received, matchedRows} = applyFeeToleranceFilter(receivable, bankRows, feeTolerance);
     const diff = received - receivable;
     return {
         customerCode: c.code,
@@ -161,6 +182,50 @@ function buildCustomerRow(
         diff,
         status: computeStatus(receivable, received),
         matchedRows,
+    };
+}
+
+/**
+ * 用「金額最接近應收 + 容差內」規則挑出當月匹配款，其餘列標跨月。
+ *
+ * - bestIdx：rows 中 (receivable - deposit) ∈ [0, feeTolerance] 且 |receivable - deposit| 最小的索引。
+ *   tie-breaker：金額相同時取索引較後者（在合併多份對帳單時通常是日期較新的）。
+ * - 若 bestIdx 存在：received = rows[bestIdx].deposit，其他列 crossMonth=true。
+ * - 若不存在（如分期付款 500+500、無人匹配等情境）：received = 全部 deposit 加總，所有列 crossMonth=false。
+ */
+function applyFeeToleranceFilter(
+    receivable: number,
+    rows: ReadonlyArray<BankRowMatch>,
+    feeTolerance: number,
+): { received: number; matchedRows: ReconcileMatchedRow[] } {
+    if (rows.length === 0) {
+        return {received: 0, matchedRows: []};
+    }
+
+    let bestIdx = -1;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < rows.length; i++) {
+        const deposit = parseDeposit(rows[i].deposit);
+        const delta = receivable - deposit;
+        if (delta < 0 || delta > feeTolerance) continue;
+        if (delta <= bestDelta) {
+            bestDelta = delta;
+            bestIdx = i;
+        }
+    }
+
+    if (bestIdx === -1) {
+        const received = rows.reduce((sum, r) => sum + parseDeposit(r.deposit), 0);
+        return {
+            received,
+            matchedRows: rows.map((r) => ({...r, crossMonth: false})),
+        };
+    }
+
+    const received = parseDeposit(rows[bestIdx].deposit);
+    return {
+        received,
+        matchedRows: rows.map((r, i) => ({...r, crossMonth: i !== bestIdx})),
     };
 }
 
