@@ -90,9 +90,12 @@ export function openBankEditDialog(options: BankEditDialogOptions): void {
           <div class="app-form-hint">純數字會反向比對隱碼（含 *）；中文則前綴比對。</div>
         </div>
       </div>
-      <footer class="app-modal-footer">
-        <button type="button" class="btn btn-secondary" data-role="cancel">取消</button>
-        <button type="button" class="btn btn-primary" data-role="save">儲存並重比對</button>
+      <footer class="app-modal-footer bank-edit-footer">
+        <button type="button" class="btn btn-danger-outline" data-role="delete">刪除這筆</button>
+        <div class="bank-edit-footer-actions">
+          <button type="button" class="btn btn-secondary" data-role="cancel">取消</button>
+          <button type="button" class="btn btn-primary" data-role="save">儲存並重比對</button>
+        </div>
       </footer>
     `;
 
@@ -107,6 +110,7 @@ export function openBankEditDialog(options: BankEditDialogOptions): void {
     const closeBtn = dialog.querySelector<HTMLButtonElement>('[data-role="close"]')!;
     const cancelBtn = dialog.querySelector<HTMLButtonElement>('[data-role="cancel"]')!;
     const saveBtn = dialog.querySelector<HTMLButtonElement>('[data-role="save"]')!;
+    const deleteBtn = dialog.querySelector<HTMLButtonElement>('[data-role="delete"]')!;
 
     hintEl.textContent = formatHint(options);
     customerInput.value = options.targetInfo.customerName;
@@ -135,6 +139,44 @@ export function openBankEditDialog(options: BankEditDialogOptions): void {
     });
     closeBtn.addEventListener('click', close);
     cancelBtn.addEventListener('click', close);
+
+    deleteBtn.addEventListener('click', async () => {
+        const target = options.targetInfo;
+        const label = `${target.customerName}${target.customerLine ? ` / ${target.customerLine}` : ''}　#${target.lastFiveDigit}`;
+        const ok = window.confirm(`確定要刪除這筆末五碼設定嗎？\n\n${label}\n\n此操作無法復原。`);
+        if (!ok) return;
+
+        try {
+            deleteBtn.disabled = true;
+            saveBtn.disabled = true;
+            const result = persistDelete(target);
+            if (result === 'not-found') {
+                showToast({
+                    variant: 'error',
+                    title: '找不到原始紀錄',
+                    message: '末五碼對照表可能已被其他流程改動，請重新開啟對話框',
+                });
+                close();
+                return;
+            }
+            showToast({
+                variant: 'success',
+                title: '已刪除末五碼',
+                message: label,
+            });
+            close();
+            await options.onSaved?.();
+        } catch (err) {
+            console.error('[bank-edit-dialog] delete failed', err);
+            showToast({
+                variant: 'error',
+                title: '刪除失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+            deleteBtn.disabled = false;
+            saveBtn.disabled = false;
+        }
+    });
 
     saveBtn.addEventListener('click', async () => {
         const customerName = customerInput.value.trim();
@@ -198,6 +240,19 @@ export function openBankEditDialog(options: BankEditDialogOptions): void {
 }
 
 type PersistResult = 'ok' | 'duplicate' | 'not-found';
+type DeleteResult = 'ok' | 'not-found';
+
+function persistDelete(target: BankInfo): DeleteResult {
+    const current = loadBankInfos();
+    const idx = current.findIndex((info) => equalsBankInfo(info, target));
+    if (idx < 0) return 'not-found';
+    const next = current.slice();
+    next.splice(idx, 1);
+    const csv = serializeBankInfoCsv(next);
+    localSettings.setLastFiveDigit(csv);
+    invalidateBankInfos();
+    return 'ok';
+}
 
 function persistReplace(target: BankInfo, next: BankInfo): PersistResult {
     const current = loadBankInfos();

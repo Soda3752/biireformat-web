@@ -4597,3 +4597,35 @@ td.cell-price-down {
     height: auto;
     min-height: 0;
 }
+
+/* 編輯 dialog footer：左側放刪除、右側放取消/儲存 */
+.bank-edit-footer {
+  justify-content: space-between;
+}
+
+.bank-edit-footer-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 危險動作 outline button（刪除等） */
+.btn-danger-outline {
+  background: transparent;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--color-danger);
+  color: var(--color-primary-text);
+}
+
+.btn-danger-outline:focus-visible {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
+}
+
+.btn-danger-outline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
