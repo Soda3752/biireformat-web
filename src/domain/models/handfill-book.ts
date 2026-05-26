@@ -41,6 +41,13 @@ export interface HandfillBook {
     updatedAt: number;
 }
 
+/**
+ * 隱藏 metadata 分頁名稱。
+ * Writer 寫出 .xlsx 時會額外加一個 veryHidden 分頁，A1 存整本 HandfillBook 的 JSON，
+ * Reader 讀回時若該分頁存在則直接還原，繞過版面分析的不確定性。
+ */
+export const HANDFILL_MANIFEST_SHEET = '_handfill_meta';
+
 const LINE_CN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 
 /** 將線別編號轉為中文括號標示，例 1 → "(一)"。超過 10 顯示原數字。 */

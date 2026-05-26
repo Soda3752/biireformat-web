@@ -20,7 +20,12 @@ import {
     mergeRange,
     PAPER_A4,
 } from '@/infra/excel-service';
-import {type HandfillBook, type HandfillCustomer, lineFullName,} from '@/domain/models/handfill-book';
+import {
+    HANDFILL_MANIFEST_SHEET,
+    type HandfillBook,
+    type HandfillCustomer,
+    lineFullName,
+} from '@/domain/models/handfill-book';
 
 /* ====================== 樣式常數 ======================= */
 const TITLE_FONT_PT = 20;       // 範本：400 POI = 20pt
@@ -80,7 +85,20 @@ export async function buildHandfillWorkbook(book: HandfillBook): Promise<ExcelJS
     const wb = createWorkbook();
     writeSheet(wb, book, SHEET_UPPER);
     writeSheet(wb, book, SHEET_LOWER);
+    writeManifest(wb, book);
     return wb;
+}
+
+/**
+ * 寫入隱藏 metadata 分頁，A1 存整本 book 的 JSON。
+ * 設為 veryHidden 讓使用者無法透過 Excel「取消隱藏」選單看到，避免誤改造成資料/manifest 不同步。
+ * Reader 讀檔時優先讀此分頁，繞過版面分析的不確定性。
+ */
+function writeManifest(wb: ExcelJS.Workbook, book: HandfillBook): void {
+    const sheet = wb.addWorksheet(HANDFILL_MANIFEST_SHEET, {
+        state: 'veryHidden',
+    });
+    sheet.getCell(1, 1).value = JSON.stringify(book);
 }
 
 /* ====================== Sheet 寫入 ======================= */

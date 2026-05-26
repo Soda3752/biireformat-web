@@ -2,13 +2,14 @@
  * 「生成手填本」.xlsx / .xls 匯入解析器。
  *
  * 解析流程：
- *   1. 依副檔名選擇後端：
+ *   1. .xlsx 路徑：先嘗試讀 `_handfill_meta` 隱藏分頁（web app 寫出的檔案會帶），
+ *      該分頁的 A1 是整本 HandfillBook 的 JSON，可直接還原。
+ *   2. 找不到 manifest 時 fallback 到版面分析：
  *        - .xlsx → ExcelJS
  *        - .xls  → SheetJS (xlsx) 社群版（dynamic import，僅在需要時載入）
- *   2. 將「上」分頁（或第一個分頁）讀為 2D 字串矩陣
- *   3. 套用共用解析邏輯抽出 HandfillBook
+ *   3. 將「上」分頁（或第一個分頁）讀為 2D 字串矩陣，套用共用邏輯抽出 HandfillBook
  *
- * 預期內容對應範本 `1.彰化.xls`：
+ * 版面分析預期對應範本 `1.彰化.xls`：
  *   - 標題列：(線別)名稱 / 民國年 / 月份
  *   - 欄位標頭列含「客戶名稱」「品名」字串
  *   - 客戶區塊：col 0 = ID / 名稱 / 休息日 / 電話；col 1 = 品名；col 2 = 單價
@@ -16,7 +17,14 @@
 
 import ExcelJS from 'exceljs';
 
-import {createEmptyBook, genId, type HandfillBook, type HandfillCustomer,} from '@/domain/models/handfill-book';
+import {
+    createEmptyBook,
+    genId,
+    HANDFILL_MANIFEST_SHEET,
+    type HandfillBook,
+    type HandfillCustomer,
+    type HandfillProduct,
+} from '@/domain/models/handfill-book';
 
 type Cell = string;
 type Matrix = Cell[][];   // matrix[rowIdx][colIdx]，0-indexed
@@ -25,24 +33,77 @@ type Matrix = Cell[][];   // matrix[rowIdx][colIdx]，0-indexed
 
 export async function readHandfillBook(file: File): Promise<HandfillBook> {
     const fname = file.name.toLowerCase();
-    let matrix: Matrix;
+
     if (fname.endsWith('.xls')) {
-        matrix = await loadMatrixFromXls(file);
-    } else {
-        // 預設走 ExcelJS（.xlsx / 未知副檔名）
-        matrix = await loadMatrixFromXlsx(file);
+        // 舊範本檔（.xls）一律走版面分析
+        return parseMatrix(await loadMatrixFromXls(file));
     }
-    return parseMatrix(matrix);
+
+    // .xlsx：先嘗試讀隱藏 manifest，沒有再 fallback 到版面分析
+    const wb = await loadXlsxWorkbook(file);
+    const fromManifest = tryReadManifest(wb);
+    if (fromManifest) return fromManifest;
+    return parseMatrix(buildMatrixFromWorkbook(wb));
 }
 
-/* ====================== ExcelJS (.xlsx) 適配 ======================= */
+/* ====================== Manifest 讀取 ======================= */
 
-async function loadMatrixFromXlsx(file: File): Promise<Matrix> {
+async function loadXlsxWorkbook(file: File): Promise<ExcelJS.Workbook> {
     const buffer = await file.arrayBuffer();
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
+    return wb;
+}
 
-    const sheet = wb.getWorksheet('上') ?? wb.worksheets[0];
+function tryReadManifest(wb: ExcelJS.Workbook): HandfillBook | null {
+    const sheet = wb.getWorksheet(HANDFILL_MANIFEST_SHEET);
+    if (!sheet) return null;
+    const raw = textOfExcelJs(sheet.getCell(1, 1).value);
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object') return null;
+        const p = parsed as Partial<HandfillBook>;
+        if (!Array.isArray(p.customers)) return null;
+        return normalizeBook(p);
+    } catch {
+        return null;
+    }
+}
+
+/** 補齊欄位、保證型別正確，避免 manifest 缺欄位時下游 UI 出錯。 */
+function normalizeBook(raw: Partial<HandfillBook>): HandfillBook {
+    const base = createEmptyBook();
+    const customers: HandfillCustomer[] = (raw.customers ?? []).map((c) => {
+        const phones = Array.isArray(c.phones) ? [...c.phones] : [];
+        while (phones.length < 2) phones.push('');
+        const products: HandfillProduct[] = Array.isArray(c.products) && c.products.length > 0
+            ? c.products.map((p) => ({name: p.name ?? '', unitPrice: p.unitPrice}))
+            : [{name: '', unitPrice: undefined}];
+        return {
+            id: c.id ?? genId('cust-'),
+            customerId: c.customerId ?? '',
+            customerName: c.customerName ?? '',
+            products,
+            restNotes: Array.isArray(c.restNotes) ? [...c.restNotes] : [],
+            phones,
+            manualSort: c.manualSort ?? false,
+        };
+    });
+    return {
+        ...base,
+        ...raw,
+        id: raw.id ?? base.id,
+        customers,
+    };
+}
+
+/* ====================== ExcelJS (.xlsx) 版面分析 ======================= */
+
+function buildMatrixFromWorkbook(wb: ExcelJS.Workbook): Matrix {
+    // 跳過 manifest sheet，取「上」分頁；沒有則取第一個非 manifest 分頁
+    const sheet = wb.getWorksheet('上')
+        ?? wb.worksheets.find((s) => s.name !== HANDFILL_MANIFEST_SHEET);
     if (!sheet) throw new Error('找不到資料分頁');
 
     const matrix: Matrix = [];
