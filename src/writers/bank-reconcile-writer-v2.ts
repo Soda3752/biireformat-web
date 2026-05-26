@@ -1,12 +1,12 @@
 /**
  * 對帳 2.0 Excel 輸出
  *
- * 1 張 sheet 含 3 個區塊：
- *  1. 客戶對帳表（主表，未收狀態的客戶不輸出）
+ * 1 個檔案含 3 張工作表：
+ *  1. 對帳匯總（客戶主表，未收狀態的客戶不輸出）
  *  2. 需人工複核（多重匹配 / 未對應 / 未設 storeCode）
  *  3. 原始交易明細
  *
- * 區塊之間留 2 行空白。狀態欄依 ReconcileStatus 套底色；現金客戶整列灰底淡化。
+ * 各 sheet 從表頭開始、獨立凍結首列與欄寬。狀態欄依 ReconcileStatus 套底色；現金客戶整列灰底淡化。
  */
 
 import type ExcelJS from 'exceljs';
@@ -21,14 +21,13 @@ import type {
 } from '@/domain/bank-reconcile-service';
 import type {BankRowMatch} from '@/domain/bank-match-service';
 
-const SHEET_NAME = '對帳匯總';
+const SHEET_CUSTOMER = '對帳匯總';
+const SHEET_MANUAL = '需人工複核';
+const SHEET_RAW = '原始交易明細';
 const FILE_END_FIX = '.xlsx';
-
-const SECTION_BLANK_ROWS = 2;
 
 const ARGB_HEADER_BG = 'FF3E5F8A';
 const ARGB_HEADER_FG = 'FFFFFFFF';
-const ARGB_TITLE_FG = 'FF1F2937';
 const ARGB_BORDER = 'FFD0D7DE';
 const ARGB_NA_BG = 'FFF1F3F5';
 const ARGB_STATUS_MATCHED = 'FFD8F2DF';
@@ -40,16 +39,6 @@ const HEADER_STYLE = buildStyle({
     font: {bold: true, color: ARGB_HEADER_FG, size: 12},
     fill: ARGB_HEADER_BG,
     align: 'center',
-});
-
-const SECTION_TITLE_STYLE = buildStyle({
-    font: {bold: true, size: 14, color: ARGB_TITLE_FG},
-    align: 'left',
-});
-
-const SUMMARY_STYLE = buildStyle({
-    font: {size: 11, color: 'FF4B5563'},
-    align: 'left',
 });
 
 const CUSTOMER_HEADER = [
@@ -77,21 +66,21 @@ export interface ReconcileFile {
 
 export async function writeReconcileWorkbook(result: ReconcileResult): Promise<ReconcileFile> {
     const wb = createWorkbook();
-    const sheet = wb.addWorksheet(SHEET_NAME);
 
-    writeTitle(sheet, result);
-    writeBlankRows(sheet, 1);
+    const customerSheet = wb.addWorksheet(SHEET_CUSTOMER);
+    writeCustomerSection(customerSheet, result.customers);
+    customerSheet.views = [{state: 'frozen', ySplit: 1}];
+    setCustomerColumnWidths(customerSheet);
 
-    writeCustomerSection(sheet, result.customers);
-    writeBlankRows(sheet, SECTION_BLANK_ROWS);
+    const manualSheet = wb.addWorksheet(SHEET_MANUAL);
+    writeManualReviewSection(manualSheet, result.manualReviewItems);
+    manualSheet.views = [{state: 'frozen', ySplit: 1}];
+    setManualColumnWidths(manualSheet);
 
-    writeManualReviewSection(sheet, result.manualReviewItems);
-    writeBlankRows(sheet, SECTION_BLANK_ROWS);
-
-    writeRawSection(sheet, result.rawRows);
-
-    sheet.views = [{state: 'frozen', ySplit: 2}];
-    setColumnWidths(sheet);
+    const rawSheet = wb.addWorksheet(SHEET_RAW);
+    writeRawSection(rawSheet, result.rawRows);
+    rawSheet.views = [{state: 'frozen', ySplit: 1}];
+    setRawColumnWidths(rawSheet);
 
     return {
         filename: buildReconcileFilename(result),
@@ -109,26 +98,10 @@ export function buildReconcileFilename(result: ReconcileResult): string {
     return `對帳匯總_${yyyy}${mm}${dd}${FILE_END_FIX}`;
 }
 
-function writeTitle(sheet: ExcelJS.Worksheet, result: ReconcileResult): void {
-    const month = result.bill.billDateInfo?.month ?? '';
-    const titleRow = sheet.addRow([`${month}月_對帳匯總`]);
-    titleRow.getCell(1).style = SECTION_TITLE_STYLE;
-    titleRow.height = 22;
-
-    const s = result.summary;
-    const summary = `應收合計 ${formatMoney(s.totalReceivable)}　／　已收合計 ${formatMoney(s.totalReceived)}　／　差額 ${formatMoney(s.totalDiff)}　／　已配對 ${s.matchedCount} 戶　／　部分 ${s.partialCount} 戶　／　超收 ${s.overpaidCount} 戶　／　待覆核 ${s.manualReviewCount} 筆`;
-    const summaryRow = sheet.addRow([summary]);
-    summaryRow.getCell(1).style = SUMMARY_STYLE;
-    summaryRow.height = 18;
-}
-
 function writeCustomerSection(
     sheet: ExcelJS.Worksheet,
     customers: ReadonlyArray<CustomerReconcileRow>,
 ): void {
-    const sectionRow = sheet.addRow(['◤ 客戶對帳表']);
-    sectionRow.getCell(1).style = SECTION_TITLE_STYLE;
-
     const headerRow = sheet.addRow([...CUSTOMER_HEADER]);
     headerRow.eachCell((cell) => {
         cell.style = HEADER_STYLE;
@@ -199,9 +172,6 @@ function writeManualReviewSection(
     sheet: ExcelJS.Worksheet,
     items: ReadonlyArray<ManualReviewItem>,
 ): void {
-    const sectionRow = sheet.addRow([`◤ 需人工複核（${items.length} 筆）`]);
-    sectionRow.getCell(1).style = SECTION_TITLE_STYLE;
-
     const headerRow = sheet.addRow([...MANUAL_HEADER]);
     headerRow.eachCell((cell) => {
         cell.style = HEADER_STYLE;
@@ -255,9 +225,6 @@ function writeRawSection(
     sheet: ExcelJS.Worksheet,
     rows: ReadonlyArray<BankRowMatch>,
 ): void {
-    const sectionRow = sheet.addRow([`◤ 原始交易明細（${rows.length} 筆）`]);
-    sectionRow.getCell(1).style = SECTION_TITLE_STYLE;
-
     const headerRow = sheet.addRow([...RAW_HEADER]);
     headerRow.eachCell((cell) => {
         cell.style = HEADER_STYLE;
@@ -353,10 +320,6 @@ function formatPayMode(r: CustomerReconcileRow): string {
     return s || '—';
 }
 
-function formatMoney(n: number): string {
-    return n.toLocaleString('zh-TW');
-}
-
 function parseAmount(raw: string): number | string {
     const s = String(raw ?? '').replace(/,/g, '').trim();
     if (s === '') return '';
@@ -381,15 +344,23 @@ function solidFill(argb: string): ExcelJS.FillPattern {
     };
 }
 
-function writeBlankRows(sheet: ExcelJS.Worksheet, count: number): void {
-    for (let i = 0; i < count; i++) sheet.addRow([]);
-}
-
-function setColumnWidths(sheet: ExcelJS.Worksheet): void {
-    // 主表寬度為主基準（9 欄）：編號 / 客戶 / 線別 / 模式 / 應收 / 已收 / 差額 / 狀態 / 匯款詳情
-    // 同 sheet 含其他區塊（5 欄 / 6 欄），最寬欄沿用 9 欄基準
-    const widths = [10, 20, 8, 8, 14, 14, 14, 12, 32];
+function applyWidths(sheet: ExcelJS.Worksheet, widths: ReadonlyArray<number>): void {
     widths.forEach((w, i) => {
         sheet.getColumn(i + 1).width = w;
     });
+}
+
+function setCustomerColumnWidths(sheet: ExcelJS.Worksheet): void {
+    // 編號 / 客戶 / 線別 / 模式 / 應收 / 已收 / 差額 / 狀態 / 匯款詳情
+    applyWidths(sheet, [10, 20, 8, 8, 14, 14, 14, 12, 32]);
+}
+
+function setManualColumnWidths(sheet: ExcelJS.Worksheet): void {
+    // 類型 / 匯款詳情 / 摘要 / 存入 / 配對候選 / 原因
+    applyWidths(sheet, [12, 22, 28, 12, 28, 28]);
+}
+
+function setRawColumnWidths(sheet: ExcelJS.Worksheet): void {
+    // 日期 / 摘要 / 存入 / 配對來源 / 對應客戶
+    applyWidths(sheet, [12, 30, 14, 14, 32]);
 }

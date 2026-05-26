@@ -68,17 +68,19 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
 
       <div class="reconcile-tab-panel" data-role="panel-customer" role="tabpanel">
         <div class="reconcile-status-filter" data-role="status-filter" hidden>
-          <span class="reconcile-status-filter-label">狀態篩選：</span>
-          <button type="button" class="reconcile-status-filter-chip is-active" data-status="matched" aria-pressed="true">
-            <span class="reconcile-status-filter-check">✓</span>已收
-          </button>
-          <button type="button" class="reconcile-status-filter-chip is-active" data-status="partial" aria-pressed="true">
-            <span class="reconcile-status-filter-check">✓</span>部分
-          </button>
-          <button type="button" class="reconcile-status-filter-chip is-active" data-status="overpaid" aria-pressed="true">
-            <span class="reconcile-status-filter-check">✓</span>超收
-          </button>
-          <span class="reconcile-status-filter-divider" aria-hidden="true"></span>
+          <div class="reconcile-status-chips" data-role="status-chips">
+            <span class="reconcile-status-filter-label">狀態篩選：</span>
+            <button type="button" class="reconcile-status-filter-chip is-active" data-status="matched" aria-pressed="true">
+              <span class="reconcile-status-filter-check">✓</span>已收
+            </button>
+            <button type="button" class="reconcile-status-filter-chip is-active" data-status="partial" aria-pressed="true">
+              <span class="reconcile-status-filter-check">✓</span>部分
+            </button>
+            <button type="button" class="reconcile-status-filter-chip is-active" data-status="overpaid" aria-pressed="true">
+              <span class="reconcile-status-filter-check">✓</span>超收
+            </button>
+            <span class="reconcile-status-filter-divider" aria-hidden="true"></span>
+          </div>
           <label class="reconcile-line-filter">
             <span class="reconcile-line-filter-label">線別：</span>
             <select class="reconcile-line-filter-select" data-role="line-filter">
@@ -146,6 +148,7 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     const customerSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-customer-clear"]')!;
     const manualSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-manual-clear"]')!;
     const statusFilterEl = element.querySelector<HTMLElement>('[data-role="status-filter"]')!;
+    const statusChipsEl = element.querySelector<HTMLElement>('[data-role="status-chips"]')!;
     const lineFilterSelect = element.querySelector<HTMLSelectElement>('[data-role="line-filter"]')!;
 
     type MatchedFilterKey = 'matched' | 'partial' | 'overpaid';
@@ -154,7 +157,7 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         partial: true,
         overpaid: true,
     };
-    let matchedLineFilter = 'all';
+    let lineFilter = 'all';
 
     let activeTab: TabKey = DEFAULT_TAB;
     let lastResult: ReconcileResult | null = null;
@@ -200,7 +203,8 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         const showCustomer = activeTab === 'matched' || activeTab === 'unmatched';
         customerPanel.hidden = !showCustomer;
         manualPanel.hidden = activeTab !== 'manual';
-        statusFilterEl.hidden = activeTab !== 'matched';
+        statusFilterEl.hidden = !showCustomer;
+        statusChipsEl.hidden = activeTab !== 'matched';
 
         if ((activeTab === 'matched' || activeTab === 'unmatched') && lastResult) {
             const rawRows = activeTab === 'matched'
@@ -213,8 +217,8 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
             let baseRows = activeTab === 'matched'
                 ? rawRows.filter((c) => isMatchedFilterKey(c.status) && matchedStatusFilter[c.status])
                 : rawRows;
-            if (activeTab === 'matched' && matchedLineFilter !== 'all') {
-                baseRows = baseRows.filter((c) => (c.customerCode ?? '').charAt(0) === matchedLineFilter);
+            if (lineFilter !== 'all') {
+                baseRows = baseRows.filter((c) => (c.customerCode ?? '').charAt(0) === lineFilter);
             }
             const query = queries[activeTab];
             const rows = filterCustomers(baseRows, query);
@@ -258,7 +262,7 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     }
 
     lineFilterSelect.addEventListener('change', () => {
-        matchedLineFilter = lineFilterSelect.value || 'all';
+        lineFilter = lineFilterSelect.value || 'all';
         refreshPanels();
     });
 
@@ -266,10 +270,8 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         const lines = new Set<string>();
         if (lastResult) {
             for (const c of lastResult.customers) {
-                if (c.received > 0) {
-                    const first = (c.customerCode ?? '').charAt(0);
-                    if (first) lines.add(first);
-                }
+                const first = (c.customerCode ?? '').charAt(0);
+                if (first) lines.add(first);
             }
         }
         const sorted = [...lines].sort();
@@ -284,10 +286,10 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
             opt.textContent = `第${l}線`;
             lineFilterSelect.appendChild(opt);
         }
-        if (matchedLineFilter !== 'all' && !lines.has(matchedLineFilter)) {
-            matchedLineFilter = 'all';
+        if (lineFilter !== 'all' && !lines.has(lineFilter)) {
+            lineFilter = 'all';
         }
-        lineFilterSelect.value = matchedLineFilter;
+        lineFilterSelect.value = lineFilter;
     };
 
     customerSearchInput.addEventListener('input', () => {
@@ -348,7 +350,7 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
             chip.classList.add('is-active');
             chip.setAttribute('aria-pressed', 'true');
         }
-        matchedLineFilter = 'all';
+        lineFilter = 'all';
         lineFilterSelect.innerHTML = '<option value="all">全部</option>';
         lineFilterSelect.value = 'all';
         for (const t of TAB_DEFS) {
