@@ -12,11 +12,12 @@
 import {saveAs} from 'file-saver';
 
 import {getBankInfos, loadBankInfos} from '@/domain/bank-info-loader';
-import type {BankRowMatch} from '@/domain/bank-match-service';
+import type {BankMatchResult, BankRowMatch} from '@/domain/bank-match-service';
 import {matchTransRecord} from '@/domain/bank-match-service';
 import {processBillFile} from '@/domain/process-bill';
 import type {ReconcileResult} from '@/domain/bank-reconcile-service';
 import {reconcileByCustomer} from '@/domain/bank-reconcile-service';
+import type {BankInfo} from '@/domain/models/bank-info';
 import type {Bill} from '@/domain/models/bill';
 import {localSettings} from '@/infra/local-settings-store';
 import {parseTransRecord} from '@/readers/trans-record-reader';
@@ -39,13 +40,19 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">對帳匯總 2.0</h1>
         <p class="card-subtitle">
-          同時上傳「帳單 .xlsx」與「銀行對帳單 .csv / .xlsx」，依設定頁的「末五碼對照表（含店家編號）」交叉核對每位客戶的應收與已收。
+          同時上傳「帳單 .xlsx」與「銀行對帳單 .csv / .xlsx（可多檔）」，依設定頁的「末五碼對照表（含店家編號）」交叉核對每位客戶的應收與已收。
         </p>
       </header>
 
       <div class="notice-banner" data-role="notice-banner" hidden></div>
 
-      <div class="reconcile-dropzones" data-role="dropzones"></div>
+      <div class="reconcile-dropzones" data-role="dropzones">
+        <div data-role="bill-slot"></div>
+        <div class="reconcile-trans-slot">
+          <div data-role="trans-slot"></div>
+          <div class="reconcile-trans-list" data-role="trans-list" hidden></div>
+        </div>
+      </div>
 
       <div data-role="preview-host"></div>
 
@@ -59,14 +66,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     </div>
   `;
 
+    interface TransFileEntry {
+        name: string;
+        rows: string[][];
+    }
+
     let bill: Bill | null = null;
     let billFileName: string | null = null;
-    let transRecord: string[][] | null = null;
-    let transFileName: string | null = null;
+    const transFiles: TransFileEntry[] = [];
     let lastResult: ReconcileResult | null = null;
 
     const banner = panel.querySelector<HTMLElement>('[data-role="notice-banner"]')!;
-    const dropzonesHost = panel.querySelector<HTMLElement>('[data-role="dropzones"]')!;
+    const billSlot = panel.querySelector<HTMLElement>('[data-role="bill-slot"]')!;
+    const transSlot = panel.querySelector<HTMLElement>('[data-role="trans-slot"]')!;
+    const transListEl = panel.querySelector<HTMLElement>('[data-role="trans-list"]')!;
     const previewHost = panel.querySelector<HTMLElement>('[data-role="preview-host"]')!;
     const overallStatus = panel.querySelector<HTMLElement>('[data-role="overall-status"]')!;
     const exportBtn = panel.querySelector<HTMLButtonElement>('[data-role="export"]')!;
@@ -127,30 +140,82 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     const transZone = createDropZone({
         title: '銀行對帳單',
-        hint: '拖曳或點擊上傳 .csv（支援 Big5 / UTF-8）或 .xlsx',
+        hint: '拖曳或點擊上傳（可多檔）.csv（Big5 / UTF-8）或 .xlsx',
         accept: '.csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        multiple: true,
         onFile: async (file) => {
+            if (transFiles.some((f) => f.name === file.name)) {
+                showToast({
+                    variant: 'info',
+                    title: '已存在相同檔名',
+                    message: `${file.name} 已在清單中，跳過。`,
+                });
+                return;
+            }
             try {
                 const parsed = await parseTransRecord(file);
-                transRecord = parsed;
-                transFileName = file.name;
-                transZone.setStatus('loaded', `${file.name}　共 ${parsed.length} 筆`);
+                transFiles.push({name: file.name, rows: parsed});
+                renderTransList();
                 rebuildReconcile();
             } catch (err) {
-                transRecord = null;
-                transFileName = null;
-                lastResult = null;
-                previewTable.clear();
                 const message = err instanceof Error ? err.message : '讀取失敗';
-                transZone.setStatus('error', message);
-                refreshOverall();
-                throw err;
+                showToast({
+                    variant: 'error',
+                    title: `${file.name} 讀取失敗`,
+                    message,
+                });
+                console.error(err);
             }
         },
     });
 
-    dropzonesHost.appendChild(billZone.element);
-    dropzonesHost.appendChild(transZone.element);
+    billSlot.appendChild(billZone.element);
+    transSlot.appendChild(transZone.element);
+
+    const renderTransList = () => {
+        if (transFiles.length === 0) {
+            transListEl.hidden = true;
+            transListEl.innerHTML = '';
+            return;
+        }
+        transListEl.hidden = false;
+        transListEl.innerHTML = '';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'reconcile-trans-list-title';
+        titleEl.textContent = `已上傳 ${transFiles.length} 個`;
+        transListEl.appendChild(titleEl);
+
+        for (const entry of transFiles) {
+            const item = document.createElement('div');
+            item.className = 'reconcile-trans-list-item';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'reconcile-trans-list-name';
+            nameEl.textContent = entry.name;
+
+            const metaEl = document.createElement('span');
+            metaEl.className = 'reconcile-trans-list-meta';
+            metaEl.textContent = `${entry.rows.length} 筆`;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'reconcile-trans-list-remove';
+            removeBtn.setAttribute('aria-label', `移除 ${entry.name}`);
+            removeBtn.textContent = '✕';
+            removeBtn.addEventListener('click', () => {
+                const idx = transFiles.indexOf(entry);
+                if (idx >= 0) transFiles.splice(idx, 1);
+                renderTransList();
+                rebuildReconcile();
+            });
+
+            item.appendChild(nameEl);
+            item.appendChild(metaEl);
+            item.appendChild(removeBtn);
+            transListEl.appendChild(item);
+        }
+    };
 
     loadBankInfos();
 
@@ -173,14 +238,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     };
 
     const rebuildReconcile = () => {
-        if (bill === null || transRecord === null) {
+        if (bill === null || transFiles.length === 0) {
             lastResult = null;
             previewTable.clear();
             refreshOverall();
             return;
         }
         const infos = getBankInfos();
-        const bankResult = matchTransRecord(transRecord, infos);
+        const bankResult = matchAllTransFiles(transFiles, infos);
         lastResult = reconcileByCustomer(bill, bankResult, infos);
         previewTable.setData(lastResult);
         refreshOverall();
@@ -189,18 +254,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const refreshOverall = () => {
         refreshBanner();
         const infos = getBankInfos();
-        const ready = bill !== null && transRecord !== null && infos.length > 0;
+        const hasTrans = transFiles.length > 0;
+        const ready = bill !== null && hasTrans && infos.length > 0;
         exportBtn.disabled = !ready;
 
         if (ready && lastResult) {
             const s = lastResult.summary;
             const warn = s.manualReviewCount > 0 ? `　／　待覆核 ${s.manualReviewCount} 筆` : '';
-            overallStatus.textContent = `已就緒　客戶 ${s.customerCount} 間（已配對 ${s.matchedCount}）${warn}`;
-        } else if (bill === null && transRecord === null) {
+            const transInfo = transFiles.length > 1 ? `（對帳單 ${transFiles.length} 份）` : '';
+            overallStatus.textContent = `已就緒${transInfo}　客戶 ${s.customerCount} 間（已配對 ${s.matchedCount}）${warn}`;
+        } else if (bill === null && !hasTrans) {
             overallStatus.textContent = '請上傳帳單與銀行對帳單';
         } else if (bill === null) {
-            overallStatus.textContent = `尚缺帳單　已上傳對帳單：${transFileName ?? ''}`;
-        } else if (transRecord === null) {
+            overallStatus.textContent = `尚缺帳單　已上傳對帳單 ${transFiles.length} 份`;
+        } else if (!hasTrans) {
             overallStatus.textContent = `尚缺銀行對帳單　已上傳帳單：${billFileName ?? ''}`;
         } else if (infos.length === 0) {
             overallStatus.textContent = '尚缺末五碼對照表（請至設定頁建立）';
@@ -210,12 +277,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const reset = () => {
         bill = null;
         billFileName = null;
-        transRecord = null;
-        transFileName = null;
+        transFiles.length = 0;
         lastResult = null;
         previewTable.clear();
         billZone.reset();
         transZone.reset();
+        renderTransList();
         refreshOverall();
     };
 
@@ -254,4 +321,37 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     refreshOverall();
 
     return panel;
+}
+
+/**
+ * 將多份對帳單分別比對後合併為單一 BankMatchResult：
+ *  - 每筆 row 標記 sourceFile（供 tooltip 顯示來源）
+ *  - rowIndex 重新編號為合併後的順序索引
+ *  - fileLineNumber 維持各自檔案內的真實行號
+ *  - header 取第一份非空者，作為 popover 欄位名稱備援
+ */
+function matchAllTransFiles(
+    files: ReadonlyArray<{ name: string; rows: string[][] }>,
+    infos: ReadonlyArray<BankInfo>,
+): BankMatchResult {
+    const mergedRows: BankRowMatch[] = [];
+    let header: string[] | null = null;
+    let matched = 0;
+    let unmatched = 0;
+
+    for (const file of files) {
+        const result = matchTransRecord(file.rows, infos);
+        if (header === null && result.header) header = result.header;
+        matched += result.matchedCount;
+        unmatched += result.unmatchedCount;
+        for (const row of result.rows) {
+            mergedRows.push({
+                ...row,
+                rowIndex: mergedRows.length,
+                sourceFile: file.name,
+            });
+        }
+    }
+
+    return {header, rows: mergedRows, matchedCount: matched, unmatchedCount: unmatched};
 }

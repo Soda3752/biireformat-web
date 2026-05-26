@@ -588,7 +588,8 @@ function showRawRowPopover(anchor: HTMLElement, row: BankRowMatch, header: Reado
     const titleEl = document.createElement('div');
     titleEl.className = 'reconcile-raw-popover-title';
     const fileLine = row.fileLineNumber > 0 ? row.fileLineNumber : (row.rowIndex + 2);
-    titleEl.textContent = `銀行對帳單 第 ${fileLine} 行`;
+    const source = row.sourceFile ? `${row.sourceFile}　` : '';
+    titleEl.textContent = `${source}銀行對帳單 第 ${fileLine} 行`;
     pop.appendChild(titleEl);
 
     const table = document.createElement('table');

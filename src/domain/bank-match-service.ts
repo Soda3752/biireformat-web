@@ -17,6 +17,8 @@ export interface BankRowMatch {
     rowIndex: number;
     /** CSV 檔案 1-based 絕對行號，含 header（用於 UI tooltip 對照原始檔案）。 */
     fileLineNumber: number;
+    /** 來源檔案名稱；多檔合併時填入，單檔可省略。 */
+    sourceFile?: string;
     raw: string[];
     trimmed: string[];
     date: string;

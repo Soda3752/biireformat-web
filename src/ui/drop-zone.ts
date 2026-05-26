@@ -1,9 +1,15 @@
-import { icon } from './icons';
+import {icon} from './icons';
 
 export interface DropZoneOptions {
   title: string;
   hint?: string;
   accept?: string;
+    /**
+     * 是否允許一次拖入多個檔案。預設 false。
+     * 開啟後：input 加上 multiple、drag/drop 與 picker 會依序對每個檔呼叫 onFile，
+     * 並且不會把 dropzone 自身切到 loaded/error 狀態（由外層自管清單）。
+     */
+    multiple?: boolean;
   onFile: (file: File) => Promise<void> | void;
 }
 
@@ -57,9 +63,12 @@ export function createDropZone(options: DropZoneOptions): DropZoneController {
     });
   };
 
+    const multiple = options.multiple === true;
+
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = accept;
+    if (multiple) fileInput.multiple = true;
   root.appendChild(fileInput);
 
   const triggerPick = () => fileInput.click();
@@ -73,9 +82,9 @@ export function createDropZone(options: DropZoneOptions): DropZoneController {
   });
 
   fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (file) handleFile(file);
+      const files = Array.from(fileInput.files ?? []);
     fileInput.value = '';
+      if (files.length > 0) void handleFiles(files);
   });
 
   root.addEventListener('dragover', (e) => {
@@ -86,11 +95,26 @@ export function createDropZone(options: DropZoneOptions): DropZoneController {
   root.addEventListener('drop', (e) => {
     e.preventDefault();
     root.classList.remove('is-dragover');
-    const file = e.dataTransfer?.files?.[0];
-    if (file) handleFile(file);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length > 0) void handleFiles(files);
   });
 
-  const handleFile = async (file: File) => {
+    const handleFiles = async (files: File[]) => {
+        if (multiple) {
+            for (const file of files) {
+                try {
+                    await options.onFile(file);
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+            return;
+        }
+        const file = files[0];
+        if (file) await handleSingle(file);
+    };
+
+    const handleSingle = async (file: File) => {
     try {
       await options.onFile(file);
     } catch (err) {
