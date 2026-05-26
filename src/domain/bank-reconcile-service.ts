@@ -69,6 +69,8 @@ export interface ReconcileResult {
     customers: CustomerReconcileRow[];
     manualReviewItems: ManualReviewItem[];
     rawRows: BankRowMatch[];
+    /** 銀行 CSV 標題列（如有），用於 UI tooltip 對照欄位名。 */
+    bankHeader: string[] | null;
     summary: ReconcileSummary;
 }
 
@@ -135,6 +137,7 @@ export function reconcileByCustomer(
         customers,
         manualReviewItems,
         rawRows: [...bankResult.rows],
+        bankHeader: bankResult.header,
         summary: buildSummary(customers, manualReviewItems),
     };
 }

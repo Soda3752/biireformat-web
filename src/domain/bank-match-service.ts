@@ -15,6 +15,8 @@ import {isSameAccount} from '@/domain/models/bank-info';
 
 export interface BankRowMatch {
     rowIndex: number;
+    /** CSV 檔案 1-based 絕對行號，含 header（用於 UI tooltip 對照原始檔案）。 */
+    fileLineNumber: number;
     raw: string[];
     trimmed: string[];
     date: string;
@@ -107,6 +109,7 @@ export const matchTransRecord = (
         if (matches.length > 0) matchedCount++;
         rows.push({
             rowIndex: i - startIdx,
+            fileLineNumber: i + 1,
             raw,
             trimmed,
             date: (raw[0] ?? '').trim(),

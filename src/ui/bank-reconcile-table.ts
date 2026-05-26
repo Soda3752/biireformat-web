@@ -40,6 +40,14 @@ const TAB_DEFS: ReadonlyArray<{ key: TabKey; label: string }> = [
 
 const DEFAULT_TAB: TabKey = 'matched';
 
+/**
+ * 銀行 CSV 預期欄位順序（與 trans-record-reader / bank-name-writer 對齊）。
+ * 當原始 CSV 缺 header 時做為 tooltip 欄位名稱備援。
+ */
+const DEFAULT_BANK_HEADER: ReadonlyArray<string> = [
+    '日期', '摘要', '幣別', '支出金額', '存入金額', '餘額', '備註', '轉出入帳號', '註記',
+];
+
 export function createBankReconcileTable(options: BankReconcileTableOptions): BankReconcileTableHandle {
     const element = document.createElement('section');
     element.className = 'reconcile-preview';
@@ -58,6 +66,11 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
       </div>
 
       <div class="reconcile-tab-panel" data-role="panel-customer" role="tabpanel">
+        <div class="reconcile-search-bar">
+          <input type="search" class="reconcile-search-input" data-role="search-customer"
+                 placeholder="搜尋客戶編號或名稱..." autocomplete="off">
+          <button type="button" class="reconcile-search-clear" data-role="search-customer-clear" aria-label="清除搜尋" hidden>✕</button>
+        </div>
         <div class="reconcile-scroll">
           <table class="reconcile-table">
             <thead>
@@ -79,6 +92,11 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
       </div>
 
       <div class="reconcile-tab-panel" data-role="panel-manual" role="tabpanel" hidden>
+        <div class="reconcile-search-bar">
+          <input type="search" class="reconcile-search-input" data-role="search-manual"
+                 placeholder="搜尋客戶編號或名稱..." autocomplete="off">
+          <button type="button" class="reconcile-search-clear" data-role="search-manual-clear" aria-label="清除搜尋" hidden>✕</button>
+        </div>
         <div class="reconcile-scroll">
           <table class="reconcile-table reconcile-manual-table">
             <thead>
@@ -103,9 +121,15 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
     const manualPanel = element.querySelector<HTMLElement>('[data-role="panel-manual"]')!;
     const customerTbody = element.querySelector<HTMLElement>('[data-role="customer-tbody"]')!;
     const manualTbody = element.querySelector<HTMLElement>('[data-role="manual-tbody"]')!;
+    const customerSearchInput = element.querySelector<HTMLInputElement>('[data-role="search-customer"]')!;
+    const manualSearchInput = element.querySelector<HTMLInputElement>('[data-role="search-manual"]')!;
+    const customerSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-customer-clear"]')!;
+    const manualSearchClear = element.querySelector<HTMLButtonElement>('[data-role="search-manual-clear"]')!;
 
     let activeTab: TabKey = DEFAULT_TAB;
     let lastResult: ReconcileResult | null = null;
+    let lastHeader: ReadonlyArray<string> = DEFAULT_BANK_HEADER;
+    const queries: Record<TabKey, string> = {matched: '', unmatched: '', manual: ''};
 
     const setActiveTab = (next: TabKey) => {
         activeTab = next;
@@ -147,21 +171,30 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         customerPanel.hidden = !showCustomer;
         manualPanel.hidden = activeTab !== 'manual';
 
-        if (showCustomer && lastResult) {
-            const rows = activeTab === 'matched'
+        if ((activeTab === 'matched' || activeTab === 'unmatched') && lastResult) {
+            const baseRows = activeTab === 'matched'
                 ? lastResult.customers.filter((c) => c.received > 0)
                 : lastResult.customers.filter((c) => c.received === 0);
-            const emptyText = activeTab === 'matched'
-                ? '尚無已匹配客戶'
-                : '所有客戶都有匯款';
-            renderCustomers(customerTbody, rows, emptyText);
+            const query = queries[activeTab];
+            const rows = filterCustomers(baseRows, query);
+            const emptyText = buildCustomerEmptyText(activeTab, baseRows.length, query);
+            renderCustomers(customerTbody, rows, lastHeader, emptyText);
+
+            customerSearchInput.value = query;
+            customerSearchClear.hidden = query === '';
         }
 
         if (activeTab === 'manual' && lastResult) {
+            const query = queries.manual;
+            const items = filterManual(lastResult.manualReviewItems, query);
             renderManual(
-                manualTbody, lastResult.manualReviewItems,
+                manualTbody, items, lastHeader,
                 options.onAddClick, options.onCandidateClick,
+                buildManualEmptyText(lastResult.manualReviewItems.length, query),
             );
+
+            manualSearchInput.value = query;
+            manualSearchClear.hidden = query === '';
         }
     };
 
@@ -169,8 +202,35 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
         btn.addEventListener('click', () => setActiveTab(btn.dataset.tab as TabKey));
     }
 
+    customerSearchInput.addEventListener('input', () => {
+        if (activeTab !== 'matched' && activeTab !== 'unmatched') return;
+        queries[activeTab] = customerSearchInput.value;
+        refreshPanels();
+    });
+
+    manualSearchInput.addEventListener('input', () => {
+        queries.manual = manualSearchInput.value;
+        refreshPanels();
+    });
+
+    customerSearchClear.addEventListener('click', () => {
+        if (activeTab !== 'matched' && activeTab !== 'unmatched') return;
+        queries[activeTab] = '';
+        customerSearchInput.value = '';
+        customerSearchInput.focus();
+        refreshPanels();
+    });
+
+    manualSearchClear.addEventListener('click', () => {
+        queries.manual = '';
+        manualSearchInput.value = '';
+        manualSearchInput.focus();
+        refreshPanels();
+    });
+
     const setData = (result: ReconcileResult) => {
         lastResult = result;
+        lastHeader = pickHeader(result.bankHeader);
         renderSummary(summaryEl, result);
         refreshBadges();
         refreshTabState();
@@ -180,9 +240,18 @@ export function createBankReconcileTable(options: BankReconcileTableOptions): Ba
 
     const clear = () => {
         lastResult = null;
+        lastHeader = DEFAULT_BANK_HEADER;
+        hideRawRowPopover();
         summaryEl.innerHTML = '';
         customerTbody.innerHTML = '';
         manualTbody.innerHTML = '';
+        queries.matched = '';
+        queries.unmatched = '';
+        queries.manual = '';
+        customerSearchInput.value = '';
+        manualSearchInput.value = '';
+        customerSearchClear.hidden = true;
+        manualSearchClear.hidden = true;
         for (const t of TAB_DEFS) {
             const badge = element.querySelector<HTMLElement>(`[data-role="badge-${t.key}"]`);
             if (badge) badge.textContent = '0';
@@ -206,6 +275,7 @@ function renderSummary(host: HTMLElement, result: ReconcileResult): void {
 function renderCustomers(
     tbody: HTMLElement,
     rows: ReadonlyArray<CustomerReconcileRow>,
+    header: ReadonlyArray<string>,
     emptyText = '無資料',
 ): void {
     tbody.innerHTML = '';
@@ -237,14 +307,14 @@ function renderCustomers(
         statusTd.appendChild(buildStatusPill(r.status));
         tr.appendChild(statusTd);
 
-        tr.appendChild(buildReceiptsCell(r.matchedRows));
+        tr.appendChild(buildReceiptsCell(r.matchedRows, header));
 
         fragment.appendChild(tr);
     }
     tbody.appendChild(fragment);
 }
 
-function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>): HTMLElement {
+function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>, header: ReadonlyArray<string>): HTMLElement {
     const cell = document.createElement('td');
     cell.className = 'col-receipts';
     if (rows.length === 0) {
@@ -274,6 +344,8 @@ function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>): HTMLElement {
             item.appendChild(acc);
         }
 
+        item.appendChild(buildRawRowInfoIcon(row, header));
+
         list.appendChild(item);
     }
     cell.appendChild(list);
@@ -283,12 +355,14 @@ function buildReceiptsCell(rows: ReadonlyArray<BankRowMatch>): HTMLElement {
 function renderManual(
     tbody: HTMLElement,
     items: ReadonlyArray<ManualReviewItem>,
+    header: ReadonlyArray<string>,
     onAddClick: (row: BankRowMatch) => void,
     onCandidateClick: (candidate: ManualReviewCandidate, item: ManualReviewItem) => void,
+    emptyText = '沒有需要人工處理的交易',
 ): void {
     tbody.innerHTML = '';
     if (items.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="reconcile-empty">沒有需要人工處理的交易</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="reconcile-empty">${emptyText}</td></tr>`;
         return;
     }
 
@@ -302,7 +376,7 @@ function renderManual(
         typeTd.textContent = reasonLabel(item.reason);
         tr.appendChild(typeTd);
 
-        tr.appendChild(buildReceiptsCell([item.row]));
+        tr.appendChild(buildReceiptsCell([item.row], header));
         tr.appendChild(td('col-summary', item.row.summary));
         tr.appendChild(td('col-money', item.row.deposit || '—'));
 
@@ -428,4 +502,175 @@ function td(className: string, text: string): HTMLElement {
     el.className = className;
     el.textContent = text;
     return el;
+}
+
+function filterCustomers(
+    rows: ReadonlyArray<CustomerReconcileRow>,
+    query: string,
+): CustomerReconcileRow[] {
+    const q = query.trim().toLowerCase();
+    if (q === '') return [...rows];
+    return rows.filter((c) =>
+        c.customerCode.toLowerCase().includes(q) ||
+        c.customerName.toLowerCase().includes(q),
+    );
+}
+
+function filterManual(
+    items: ReadonlyArray<ManualReviewItem>,
+    query: string,
+): ManualReviewItem[] {
+    const q = query.trim().toLowerCase();
+    if (q === '') return [...items];
+    return items.filter((item) =>
+        item.candidates.some((c) =>
+            c.storeCode.toLowerCase().includes(q) ||
+            c.customerName.toLowerCase().includes(q),
+        ),
+    );
+}
+
+function buildCustomerEmptyText(tab: 'matched' | 'unmatched', baseCount: number, query: string): string {
+    const trimmed = query.trim();
+    if (trimmed !== '' && baseCount > 0) return `找不到符合「${trimmed}」的客戶`;
+    return tab === 'matched' ? '尚無已匹配客戶' : '所有客戶都有匯款';
+}
+
+function buildManualEmptyText(baseCount: number, query: string): string {
+    const trimmed = query.trim();
+    if (trimmed !== '' && baseCount > 0) return `找不到符合「${trimmed}」的交易`;
+    return '沒有需要人工處理的交易';
+}
+
+function pickHeader(headerFromResult: ReadonlyArray<string> | null | undefined): ReadonlyArray<string> {
+    if (!headerFromResult || headerFromResult.length === 0) return DEFAULT_BANK_HEADER;
+    return headerFromResult;
+}
+
+// --- Raw row tooltip (滑過 ⓘ 顯示銀行對帳單原始欄位) -------------------------
+
+let rawRowPopoverEl: HTMLElement | null = null;
+let rawRowPopoverAnchor: HTMLElement | null = null;
+let rawRowScrollHandlerBound = false;
+
+function ensureRawRowPopover(): HTMLElement {
+    if (rawRowPopoverEl) return rawRowPopoverEl;
+    const el = document.createElement('div');
+    el.className = 'reconcile-raw-popover';
+    el.setAttribute('role', 'tooltip');
+    el.hidden = true;
+    document.body.appendChild(el);
+    rawRowPopoverEl = el;
+
+    if (!rawRowScrollHandlerBound) {
+        // 任何 scroll/resize 都直接收起，避免 popover 與 anchor 錯位。
+        const dismiss = () => hideRawRowPopover();
+        window.addEventListener('scroll', dismiss, true);
+        window.addEventListener('resize', dismiss);
+        rawRowScrollHandlerBound = true;
+    }
+    return el;
+}
+
+function hideRawRowPopover(): void {
+    rawRowPopoverAnchor = null;
+    if (rawRowPopoverEl) {
+        rawRowPopoverEl.hidden = true;
+        rawRowPopoverEl.innerHTML = '';
+    }
+}
+
+function showRawRowPopover(anchor: HTMLElement, row: BankRowMatch, header: ReadonlyArray<string>): void {
+    const pop = ensureRawRowPopover();
+    rawRowPopoverAnchor = anchor;
+    pop.innerHTML = '';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'reconcile-raw-popover-title';
+    const fileLine = row.fileLineNumber > 0 ? row.fileLineNumber : (row.rowIndex + 2);
+    titleEl.textContent = `銀行對帳單 第 ${fileLine} 行`;
+    pop.appendChild(titleEl);
+
+    const table = document.createElement('table');
+    table.className = 'reconcile-raw-popover-table';
+    const tbody = document.createElement('tbody');
+    const total = Math.max(header.length, row.raw.length, DEFAULT_BANK_HEADER.length);
+    for (let i = 0; i < total; i++) {
+        const labelText = header[i] ?? DEFAULT_BANK_HEADER[i] ?? `欄${i + 1}`;
+        const valueText = (row.raw[i] ?? '').toString();
+        const trEl = document.createElement('tr');
+        const th = document.createElement('th');
+        th.textContent = labelText;
+        const valTd = document.createElement('td');
+        const trimmed = valueText.trim();
+        if (trimmed === '') {
+            valTd.className = 'is-empty';
+            valTd.textContent = '—';
+        } else {
+            valTd.textContent = valueText;
+        }
+        trEl.appendChild(th);
+        trEl.appendChild(valTd);
+        tbody.appendChild(trEl);
+    }
+    table.appendChild(tbody);
+    pop.appendChild(table);
+
+    pop.hidden = false;
+    positionRawRowPopover(anchor, pop);
+}
+
+function positionRawRowPopover(anchor: HTMLElement, pop: HTMLElement): void {
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    pop.style.left = '0px';
+    pop.style.top = '0px';
+    const popRect = pop.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // 預設貼右側，超出右邊界則改貼左側
+    let left = rect.right + margin;
+    if (left + popRect.width > vw - margin) {
+        left = rect.left - margin - popRect.width;
+    }
+    if (left < margin) left = margin;
+
+    let top = rect.top;
+    if (top + popRect.height > vh - margin) {
+        top = vh - margin - popRect.height;
+    }
+    if (top < margin) top = margin;
+
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+}
+
+function buildRawRowInfoIcon(row: BankRowMatch, header: ReadonlyArray<string>): HTMLElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'reconcile-raw-info';
+    btn.setAttribute('aria-label', '查看原始銀行對帳單資料');
+    btn.textContent = 'ⓘ';
+
+    const open = () => showRawRowPopover(btn, row, header);
+    const close = () => {
+        if (rawRowPopoverAnchor === btn) hideRawRowPopover();
+    };
+
+    btn.addEventListener('mouseenter', open);
+    btn.addEventListener('mouseleave', close);
+    btn.addEventListener('focus', open);
+    btn.addEventListener('blur', close);
+    // 點擊不觸發父層連動，僅做切換顯示
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (rawRowPopoverAnchor === btn && rawRowPopoverEl && !rawRowPopoverEl.hidden) {
+            hideRawRowPopover();
+        } else {
+            open();
+        }
+    });
+    return btn;
 }
