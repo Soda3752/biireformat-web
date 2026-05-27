@@ -21,6 +21,7 @@ import {
     type HandfillBook,
     isCustomerEmpty,
     lineLabel,
+    sortProductsBlanksFirst,
 } from '@/domain/models/handfill-book';
 import {deleteBook as deleteBookFromStore, getActiveId, loadBook, saveBook, setActiveId,} from '@/infra/handfill-store';
 import {readHandfillBook} from '@/readers/handfill-reader';
@@ -148,6 +149,9 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
             </div>
           </div>
           <div class="handfill-cust-actions">
+            <button type="button" class="btn btn-secondary btn-sm" data-role="sort-all" data-mode="list-only" title="把每一家客戶的品名清單都排序（空白置頂，其餘依帳單排序表）">
+              ${icon('chevron-down', 14)}<span>全部排序</span>
+            </button>
             <button type="button" class="btn btn-secondary btn-sm" data-role="add-cust">
               ${icon('plus', 14)}<span>新增客戶</span>
             </button>
@@ -180,6 +184,7 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     const backToListBtn = panel.querySelector<HTMLButtonElement>('[data-role="back-to-list"]')!;
     const listHintEl = panel.querySelector<HTMLElement>('[data-role="list-hint"]')!;
     const custToolbar = panel.querySelector<HTMLElement>('.handfill-cust-toolbar')!;
+    const sortAllBtn = panel.querySelector<HTMLButtonElement>('[data-role="sort-all"]')!;
     const addCustBtn = panel.querySelector<HTMLButtonElement>('[data-role="add-cust"]')!;
     const deleteCustBtn = panel.querySelector<HTMLButtonElement>('[data-role="delete-cust"]')!;
     const custBody = panel.querySelector<HTMLElement>('[data-role="cust-body"]')!;
@@ -536,6 +541,20 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     backToListBtn.addEventListener('click', () => {
         state.viewMode = 'list';
         renderCustBody();
+    });
+    sortAllBtn.addEventListener('click', () => {
+        if (state.book.customers.length === 0) return;
+        // 對每一家客戶套用與單店「排序」鈕相同的規則：空白置頂 → 帳單排序表順序 → 未知殿後。
+        for (const cust of state.book.customers) {
+            sortProductsBlanksFirst(cust.products, state.cargoNames);
+        }
+        renderCustBody();
+        scheduleSave();
+        showToast({
+            variant: 'success',
+            title: '已全部排序',
+            message: `已將 ${state.book.customers.length} 個客戶的品名清單排序`,
+        });
     });
     addCustBtn.addEventListener('click', () => {
         const newCust = createEmptyCustomer();
