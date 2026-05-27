@@ -31,7 +31,7 @@ import {HANDFILL_MANIFEST_VERSION, type HandfillManifest, layoutHashOfWorkbook,}
 /* ====================== 樣式常數 ======================= */
 const TITLE_FONT_PT = 20;       // 範本：400 POI = 20pt
 const CONTENT_FONT_PT = 12;     // 範本：240 POI = 12pt
-const ROW_HEIGHT_PT = 15.8;     // 配合縮減邊距，讓 36 列填滿 A4 橫向可印區域
+const ROW_HEIGHT_PT = 16;     // 配合縮減邊距，讓 36 列填滿 A4 橫向可印區域
 
 // 欄寬：A4 橫向、左右邊界 0.25" 時可印寬約 806pt。
 // 在原本（左右 0.05"）的欄寬基礎上整體放大 ~8%，讓表格右側貼齊可印區。
@@ -144,7 +144,7 @@ function writeSheet(wb: ExcelJS.Workbook, book: HandfillBook, spec: SheetSpec): 
     sheet.pageSetup = {
         paperSize: PAPER_A4,
         orientation: 'landscape',
-        scale: 105,
+        scale: 100,
         horizontalCentered: true,
         verticalCentered: true,
         margins: {
