@@ -13,6 +13,7 @@ import type {TabDefinition} from '@/ui/tabs';
 import {showToast} from '@/ui/toast';
 import {renderHandfillCustomerCard} from '@/ui/handfill-customer-card';
 import {openHandfillHistoryDialog} from '@/ui/handfill-history-dialog';
+import {openHandfillJsonImportDialog} from '@/ui/handfill-json-import-dialog';
 
 import {
     createEmptyBook,
@@ -125,6 +126,9 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
               ${icon('upload', 14)}<span>匯入 .xlsx / .xls</span>
             </button>
             <input type="file" data-role="file-input" accept=".xlsx,.xls" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" data-role="import-json">
+              ${icon('clipboard-list', 14)}<span>從 JSON 匯入</span>
+            </button>
             <button type="button" class="btn btn-secondary btn-sm" data-role="open-history">
               ${icon('list', 14)}<span>歷史紀錄</span>
             </button>
@@ -177,6 +181,7 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     const newBtn = panel.querySelector<HTMLButtonElement>('[data-role="new-book"]')!;
     const importBtn = panel.querySelector<HTMLButtonElement>('[data-role="import-xlsx"]')!;
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="file-input"]')!;
+    const importJsonBtn = panel.querySelector<HTMLButtonElement>('[data-role="import-json"]')!;
     const historyBtn = panel.querySelector<HTMLButtonElement>('[data-role="open-history"]')!;
     const exportBtn = panel.querySelector<HTMLButtonElement>('[data-role="export-xlsx"]')!;
     state.saveStatusEl = panel.querySelector<HTMLElement>('[data-role="save-status"]');
@@ -414,27 +419,31 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
         showToast({variant: 'success', title: '已建立新手填本', message: '請填寫線別與客戶資料'});
     });
 
+    // 匯入成功後的共用處理：.xlsx 與「從 JSON 匯入」皆走此路徑。
+    // 沿用匯入來源帶來的 id（與 readHandfillBook 行為一致），套排序後存檔並刷新 UI。
+    function applyImportedBook(imported: HandfillBook): void {
+        state.book = imported;
+        applyCargoSortToBook(state.book, state.cargoNames);
+        state.cursor = 0;
+        saveBook(state.book);
+        setActiveId(state.book.id);
+        syncToolbar();
+        renderCustBody();
+        setSaveStatus('已儲存', 'saved');
+        showToast({
+            variant: 'success',
+            title: '匯入完成',
+            message: `共解析 ${state.book.customers.length} 個客戶`,
+        });
+    }
+
     importBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files?.[0];
         if (!file) return;
         try {
             setSaveStatus('解析中…', 'saving');
-            const imported = await readHandfillBook(file);
-            // 保留 id，覆蓋既有 book 內容；若是全新匯入則用新 id
-            state.book = imported;
-            applyCargoSortToBook(state.book, state.cargoNames);
-            state.cursor = 0;
-            saveBook(state.book);
-            setActiveId(state.book.id);
-            syncToolbar();
-            renderCustBody();
-            setSaveStatus('已儲存', 'saved');
-            showToast({
-                variant: 'success',
-                title: '匯入完成',
-                message: `共解析 ${state.book.customers.length} 個客戶`,
-            });
+            applyImportedBook(await readHandfillBook(file));
         } catch (err) {
             setSaveStatus('已儲存', 'saved');
             showToast({
@@ -445,6 +454,12 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
         } finally {
             fileInput.value = '';
         }
+    });
+
+    importJsonBtn.addEventListener('click', () => {
+        openHandfillJsonImportDialog({
+            onImport: (book) => applyImportedBook(book),
+        });
     });
 
     historyBtn.addEventListener('click', () => {

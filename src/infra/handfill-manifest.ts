@@ -128,26 +128,38 @@ export function readManifestRaw(wb: ExcelJS.Workbook): { book: HandfillBook; lay
     const raw = textOfExcelJs(sheet.getCell(1, 1).value);
     if (!raw) return null;
     try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (!parsed || typeof parsed !== 'object') return null;
-
-        // 新格式：有 book 包裝
-        const wrapped = parsed as Partial<HandfillManifest>;
-        if (wrapped.book && Array.isArray(wrapped.book.customers)) {
-            return {
-                book: wrapped.book,
-                layoutHash: typeof wrapped.layoutHash === 'string' ? wrapped.layoutHash : undefined,
-            };
-        }
-
-        // 舊格式：頂層即 book
-        const legacy = parsed as Partial<HandfillBook>;
-        if (Array.isArray(legacy.customers)) {
-            return {book: legacy as HandfillBook, layoutHash: undefined};
-        }
-
-        return null;
+        return normalizeManifestObject(JSON.parse(raw));
     } catch {
         return null;
     }
+}
+
+/**
+ * 將已解析的 JSON 物件判定為 manifest，相容新舊兩種格式：
+ *   - 新格式：{ version, book, layoutHash }（book 內含 customers 陣列）
+ *   - 舊格式（af24e5d）：頂層即 HandfillBook（頂層含 customers 陣列），無 layoutHash
+ * 回傳統一形狀 { book, layoutHash? }；不符任一格式則回 null。
+ *
+ * 注意：此函式僅做「結構判定」，不補齊缺漏欄位；下游若要直接使用 book，
+ * 應再經 reader 的 normalizeBook 補齊型別與預設值。
+ */
+export function normalizeManifestObject(parsed: unknown): { book: HandfillBook; layoutHash?: string } | null {
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    // 新格式：有 book 包裝
+    const wrapped = parsed as Partial<HandfillManifest>;
+    if (wrapped.book && Array.isArray(wrapped.book.customers)) {
+        return {
+            book: wrapped.book,
+            layoutHash: typeof wrapped.layoutHash === 'string' ? wrapped.layoutHash : undefined,
+        };
+    }
+
+    // 舊格式：頂層即 book
+    const legacy = parsed as Partial<HandfillBook>;
+    if (Array.isArray(legacy.customers)) {
+        return {book: legacy as HandfillBook, layoutHash: undefined};
+    }
+
+    return null;
 }

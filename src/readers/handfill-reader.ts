@@ -24,7 +24,14 @@ import {
     type HandfillCustomer,
     type HandfillProduct,
 } from '@/domain/models/handfill-book';
-import {buildMatrixFromWorkbook, type Cell, hashMatrix, type Matrix, readManifestRaw,} from '@/infra/handfill-manifest';
+import {
+    buildMatrixFromWorkbook,
+    type Cell,
+    hashMatrix,
+    type Matrix,
+    normalizeManifestObject,
+    readManifestRaw,
+} from '@/infra/handfill-manifest';
 
 /* ====================== 對外 API ======================= */
 
@@ -58,6 +65,34 @@ export async function readHandfillBook(file: File): Promise<HandfillBook> {
 
     // 無 manifest（外部範本 / 非 web app 產出）→ 純版面分析
     return parseMatrix(matrix);
+}
+
+/**
+ * 從 JSON 文字直接解析出 HandfillBook（對應「從 JSON 匯入」功能）。
+ *
+ * 接受兩種格式（與 .xlsx manifest 一致，沿用 normalizeManifestObject 判定）：
+ *   - 新格式：{ version, book, layoutHash }
+ *   - 舊格式：頂層即 HandfillBook（含 customers 陣列）
+ * 無版面可分析，因此直接信任 book 內容，僅以 normalizeBook 補齊缺漏欄位。
+ *
+ * 失敗時拋出明確訊息，分「語法錯誤」與「結構不符」兩類，方便使用者除錯。
+ */
+export function parseHandfillBookFromJson(text: string): HandfillBook {
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error('請貼上 manifest JSON 內容');
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(trimmed);
+    } catch (err) {
+        throw new Error(`JSON 語法錯誤：${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const detected = normalizeManifestObject(parsed);
+    if (!detected) {
+        throw new Error('無法辨識的格式：需為 { version, book, layoutHash } 包裝，或頂層含 customers 陣列的 HandfillBook 物件');
+    }
+    return normalizeBook(detected.book);
 }
 
 async function loadXlsxWorkbook(file: File): Promise<ExcelJS.Workbook> {
@@ -94,8 +129,12 @@ function mergeInternalFields(target: HandfillBook, source: HandfillBook): void {
     });
 }
 
-/** 補齊欄位、保證型別正確，避免 manifest 缺欄位時下游 UI 出錯。 */
-function normalizeBook(raw: Partial<HandfillBook>): HandfillBook {
+/**
+ * 補齊欄位、保證型別正確，避免缺欄位時下游 UI 出錯。
+ * 適用於「信任來源」的 book 物件（.xlsx manifest 還原、或使用者貼上的 JSON），
+ * 這類來源沒有版面可分析、結構即視為真相；勿用於不信任的外部輸入。
+ */
+export function normalizeBook(raw: Partial<HandfillBook>): HandfillBook {
     const base = createEmptyBook();
     const customers: HandfillCustomer[] = (raw.customers ?? []).map((c) => {
         const phones = Array.isArray(c.phones) ? [...c.phones] : [];
