@@ -26,6 +26,7 @@ import {
     type HandfillCustomer,
     lineFullName,
 } from '@/domain/models/handfill-book';
+import {HANDFILL_MANIFEST_VERSION, type HandfillManifest, layoutHashOfWorkbook,} from '@/infra/handfill-manifest';
 
 /* ====================== 樣式常數 ======================= */
 const TITLE_FONT_PT = 20;       // 範本：400 POI = 20pt
@@ -85,20 +86,41 @@ export async function buildHandfillWorkbook(book: HandfillBook): Promise<ExcelJS
     const wb = createWorkbook();
     writeSheet(wb, book, SHEET_UPPER);
     writeSheet(wb, book, SHEET_LOWER);
-    writeManifest(wb, book);
+    // layoutHash 必須在寫 manifest 前算：避免 manifest 內容（含 hash）反過來影響 hash。
+    const layoutHash = await computeLayoutHash(wb);
+    writeManifest(wb, book, layoutHash);
     return wb;
 }
 
 /**
- * 寫入隱藏 metadata 分頁，A1 存整本 book 的 JSON。
- * 設為 veryHidden 讓使用者無法透過 Excel「取消隱藏」選單看到，避免誤改造成資料/manifest 不同步。
- * Reader 讀檔時優先讀此分頁，繞過版面分析的不確定性。
+ * 透過 round-trip（writeBuffer → load）計算「上」分頁版面 hash。
+ * 用 load 回來的 workbook 而非 in-memory worksheet，使寫/讀路徑對稱：
+ * 合併格、數字格式、字串 trim 全交給 ExcelJS 反序列化統一處理，
+ * 否則 in-memory（merge 非主格為 null）與 loaded（merge 非主格帶主格值）不一致，
+ * 會讓「沒手改」的檔案 hash 永遠不符而誤判成被改過。
  */
-function writeManifest(wb: ExcelJS.Workbook, book: HandfillBook): void {
+async function computeLayoutHash(wb: ExcelJS.Workbook): Promise<string> {
+    const buffer = await wb.xlsx.writeBuffer();
+    const probe = new ExcelJS.Workbook();
+    await probe.xlsx.load(buffer);
+    return layoutHashOfWorkbook(probe);
+}
+
+/**
+ * 寫入隱藏 metadata 分頁，A1 存 { version, book, layoutHash } 的 JSON。
+ * 設為 veryHidden 讓使用者無法透過 Excel「取消隱藏」選單看到，避免誤改造成資料/manifest 不同步。
+ * Reader 讀檔時比對 layoutHash 判斷版面是否被手改，決定用 JSON 還是用版面分析。
+ */
+function writeManifest(wb: ExcelJS.Workbook, book: HandfillBook, layoutHash: string): void {
     const sheet = wb.addWorksheet(HANDFILL_MANIFEST_SHEET, {
         state: 'veryHidden',
     });
-    sheet.getCell(1, 1).value = JSON.stringify(book);
+    const manifest: HandfillManifest = {
+        version: HANDFILL_MANIFEST_VERSION,
+        book,
+        layoutHash,
+    };
+    sheet.getCell(1, 1).value = JSON.stringify(manifest);
 }
 
 /* ====================== Sheet 寫入 ======================= */

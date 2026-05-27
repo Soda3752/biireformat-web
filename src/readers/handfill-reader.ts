@@ -20,14 +20,11 @@ import ExcelJS from 'exceljs';
 import {
     createEmptyBook,
     genId,
-    HANDFILL_MANIFEST_SHEET,
     type HandfillBook,
     type HandfillCustomer,
     type HandfillProduct,
 } from '@/domain/models/handfill-book';
-
-type Cell = string;
-type Matrix = Cell[][];   // matrix[rowIdx][colIdx]，0-indexed
+import {buildMatrixFromWorkbook, type Cell, hashMatrix, type Matrix, readManifestRaw,} from '@/infra/handfill-manifest';
 
 /* ====================== 對外 API ======================= */
 
@@ -39,14 +36,29 @@ export async function readHandfillBook(file: File): Promise<HandfillBook> {
         return parseMatrix(await loadMatrixFromXls(file));
     }
 
-    // .xlsx：先嘗試讀隱藏 manifest，沒有再 fallback 到版面分析
+    // .xlsx：讀 manifest 並以 layoutHash 判斷使用者是否在 Excel 改過版面
     const wb = await loadXlsxWorkbook(file);
-    const fromManifest = tryReadManifest(wb);
-    if (fromManifest) return fromManifest;
-    return parseMatrix(buildMatrixFromWorkbook(wb));
-}
+    const manifest = readManifestRaw(wb);
+    const matrix = buildMatrixFromWorkbook(wb);
 
-/* ====================== Manifest 讀取 ======================= */
+    if (manifest) {
+        // 舊檔（af24e5d 寫出、無 layoutHash）：維持「manifest 優先」舊行為，不破壞既有檔案
+        if (!manifest.layoutHash) {
+            return normalizeBook(manifest.book);
+        }
+        // 新檔：hash 相符代表版面未被手改 → 直接用 JSON 還原
+        if (hashMatrix(matrix) === manifest.layoutHash) {
+            return normalizeBook(manifest.book);
+        }
+        // hash 不符代表使用者在 Excel 改過版面 → 以版面分析為準，再補回版面表達不了的內部欄位
+        const layoutBook = parseMatrix(matrix);
+        mergeInternalFields(layoutBook, manifest.book);
+        return layoutBook;
+    }
+
+    // 無 manifest（外部範本 / 非 web app 產出）→ 純版面分析
+    return parseMatrix(matrix);
+}
 
 async function loadXlsxWorkbook(file: File): Promise<ExcelJS.Workbook> {
     const buffer = await file.arrayBuffer();
@@ -55,20 +67,31 @@ async function loadXlsxWorkbook(file: File): Promise<ExcelJS.Workbook> {
     return wb;
 }
 
-function tryReadManifest(wb: ExcelJS.Workbook): HandfillBook | null {
-    const sheet = wb.getWorksheet(HANDFILL_MANIFEST_SHEET);
-    if (!sheet) return null;
-    const raw = textOfExcelJs(sheet.getCell(1, 1).value);
-    if (!raw) return null;
-    try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (!parsed || typeof parsed !== 'object') return null;
-        const p = parsed as Partial<HandfillBook>;
-        if (!Array.isArray(p.customers)) return null;
-        return normalizeBook(p);
-    } catch {
-        return null;
+/* ====================== Manifest 內部欄位補回 ======================= */
+
+/**
+ * 使用者改過版面、改走版面分析後，從 manifest book 補回「版面表達不了」的內部欄位。
+ * 目前僅 manualSort（手動排序旗標）。
+ * 對應 key：優先用 customerId（非空且在 source 中唯一），否則 fallback 用索引位置。
+ * id / createdAt / updatedAt 屬內部識別，允許重新生成，不補回。
+ */
+function mergeInternalFields(target: HandfillBook, source: HandfillBook): void {
+    const byId = new Map<string, HandfillCustomer>();
+    const dupIds = new Set<string>();
+    for (const c of source.customers) {
+        const key = c.customerId.trim();
+        if (!key) continue;
+        if (byId.has(key)) dupIds.add(key);
+        else byId.set(key, c);
     }
+
+    target.customers.forEach((tc, i) => {
+        const key = tc.customerId.trim();
+        const src = (key && byId.has(key) && !dupIds.has(key))
+            ? byId.get(key)
+            : source.customers[i];
+        if (src) tc.manualSort = src.manualSort ?? false;
+    });
 }
 
 /** 補齊欄位、保證型別正確，避免 manifest 缺欄位時下游 UI 出錯。 */
@@ -96,28 +119,6 @@ function normalizeBook(raw: Partial<HandfillBook>): HandfillBook {
         id: raw.id ?? base.id,
         customers,
     };
-}
-
-/* ====================== ExcelJS (.xlsx) 版面分析 ======================= */
-
-function buildMatrixFromWorkbook(wb: ExcelJS.Workbook): Matrix {
-    // 跳過 manifest sheet，取「上」分頁；沒有則取第一個非 manifest 分頁
-    const sheet = wb.getWorksheet('上')
-        ?? wb.worksheets.find((s) => s.name !== HANDFILL_MANIFEST_SHEET);
-    if (!sheet) throw new Error('找不到資料分頁');
-
-    const matrix: Matrix = [];
-    const totalRows = sheet.actualRowCount || sheet.rowCount;
-    const totalCols = sheet.actualColumnCount || sheet.columnCount;
-
-    for (let r = 1; r <= totalRows; r++) {
-        const row: Cell[] = [];
-        for (let c = 1; c <= totalCols; c++) {
-            row.push(textOfExcelJs(sheet.getRow(r).getCell(c).value));
-        }
-        matrix.push(row);
-    }
-    return matrix;
 }
 
 /* ====================== SheetJS (.xls) 適配 ======================= */
@@ -329,19 +330,6 @@ function parseCustomerBlock(matrix: Matrix, startRow: number, endRowExclusive: n
 }
 
 /* ====================== Cell value 規格化 ======================= */
-
-function textOfExcelJs(value: ExcelJS.CellValue): string {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number') return String(value);
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (value instanceof Date) return value.toISOString();
-    const obj = value as { richText?: Array<{ text: string }>; text?: string; result?: unknown };
-    if (obj.richText) return obj.richText.map((t) => t.text).join('');
-    if (obj.text) return obj.text;
-    if (obj.result !== undefined) return textOfExcelJs(obj.result as ExcelJS.CellValue);
-    return '';
-}
 
 function textOfPrimitive(value: unknown): string {
     if (value === null || value === undefined) return '';
