@@ -21,7 +21,6 @@ import {
     type HandfillBook,
     isCustomerEmpty,
     lineLabel,
-    sortProductsByCargoOrder,
 } from '@/domain/models/handfill-book';
 import {deleteBook as deleteBookFromStore, getActiveId, loadBook, saveBook, setActiveId,} from '@/infra/handfill-store';
 import {readHandfillBook} from '@/readers/handfill-reader';
@@ -49,13 +48,6 @@ function readCargoNamesFromCache(): ReadonlyArray<string> {
     }
 }
 
-function applyCargoSortToBook(book: HandfillBook, cargoNames: ReadonlyArray<string>): void {
-    if (cargoNames.length === 0) return;
-    for (const cust of book.customers) {
-        sortProductsByCargoOrder(cust.products, cargoNames);
-    }
-}
-
 export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     const panel = document.createElement('section');
     panel.className = 'tab-panel handfill-panel';
@@ -78,9 +70,6 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
         draggingIndex: null,
         cargoNames: readCargoNamesFromCache(),
     };
-
-    // 初始套排序（若 sortingList 已快取），尚未載入時等下方非同步完成後再套
-    applyCargoSortToBook(state.book, state.cargoNames);
 
     setActiveId(state.book.id);
 
@@ -420,10 +409,10 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     });
 
     // 匯入成功後的共用處理：.xlsx 與「從 JSON 匯入」皆走此路徑。
-    // 沿用匯入來源帶來的 id（與 readHandfillBook 行為一致），套排序後存檔並刷新 UI。
+    // 沿用匯入來源帶來的 id（與 readHandfillBook 行為一致），存檔並刷新 UI。
+    // 不自動重排：匯入的順序即視為真相，由使用者自行決定是否按「排序」。
     function applyImportedBook(imported: HandfillBook): void {
         state.book = imported;
-        applyCargoSortToBook(state.book, state.cargoNames);
         state.cursor = 0;
         saveBook(state.book);
         setActiveId(state.book.id);
@@ -481,7 +470,6 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
                 if (state.book.customers.length === 0) {
                     state.book.customers.push(createEmptyCustomer());
                 }
-                applyCargoSortToBook(state.book, state.cargoNames);
                 state.cursor = 0;
                 setActiveId(state.book.id);
                 syncToolbar();
@@ -574,12 +562,12 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     syncToolbar();
     renderCustBody();
 
-    // 若 sortingList 尚未準備好（首次啟動 race），等載入後補套排序並重新繪製
+    // 若 sortingList 尚未準備好（首次啟動 race），等載入後更新品名建議並重新繪製。
+    // 不自動重排：cargoNames 僅供「排序」按鈕與品名輸入建議使用。
     if (state.cargoNames.length === 0) {
         loadSortingList()
             .then((list) => {
                 state.cargoNames = list.cargoItems.map((it) => it.name);
-                applyCargoSortToBook(state.book, state.cargoNames);
                 renderCustBody();
             })
             .catch(() => {

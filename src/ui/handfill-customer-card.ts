@@ -11,7 +11,7 @@
  */
 
 import {icon} from '@/ui/icons';
-import {type HandfillCustomer, type HandfillProduct, sortProductsByCargoOrder,} from '@/domain/models/handfill-book';
+import {type HandfillCustomer, type HandfillProduct, sortProductsBlanksFirst,} from '@/domain/models/handfill-book';
 
 export interface HandfillCardOptions {
     customer: HandfillCustomer;
@@ -63,11 +63,10 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         <h3 class="handfill-card-section-title">
           品名清單
           <span class="handfill-card-section-meta" data-role="product-count">(0)</span>
-          <span class="handfill-manual-sort-badge" data-role="manual-sort-badge" hidden>手動排序</span>
         </h3>
         <div class="handfill-card-section-actions">
-          <button type="button" class="btn btn-secondary btn-sm" data-role="restore-auto-sort" hidden>
-            ${icon('chevron-down', 12)}<span>還原自動排序</span>
+          <button type="button" class="btn btn-secondary btn-sm" data-role="sort-products" title="空白置頂，其餘依帳單排序表排列">
+            ${icon('chevron-down', 12)}<span>排序</span>
           </button>
           <button type="button" class="btn btn-secondary btn-sm" data-role="insert-blank-product">
             ${icon('row-insert-above', 12)}<span>插入空白行</span>
@@ -91,8 +90,7 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
     const addPhoneBtn = card.querySelector<HTMLButtonElement>('[data-role="add-phone"]')!;
     const addProductBtn = card.querySelector<HTMLButtonElement>('[data-role="add-product"]')!;
     const insertBlankProductBtn = card.querySelector<HTMLButtonElement>('[data-role="insert-blank-product"]')!;
-    const restoreAutoSortBtn = card.querySelector<HTMLButtonElement>('[data-role="restore-auto-sort"]')!;
-    const manualSortBadge = card.querySelector<HTMLElement>('[data-role="manual-sort-badge"]')!;
+    const sortProductsBtn = card.querySelector<HTMLButtonElement>('[data-role="sort-products"]')!;
 
     function notify(): void {
         opts.onChange(cloneCustomer(cust));
@@ -196,12 +194,6 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         .join('');
     card.appendChild(datalistEl);
 
-    function syncSortUI(): void {
-        const isManual = cust.manualSort === true;
-        restoreAutoSortBtn.hidden = !isManual;
-        manualSortBadge.hidden = !isManual;
-    }
-
     // 拖曳排序狀態：來源列索引（null 表示沒有正在拖曳）
     let dragSrcIdx: number | null = null;
 
@@ -263,14 +255,10 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
                 productCountEl.textContent = `(${cust.products.filter((p) => p.name.trim()).length})`;
                 notify();
             });
-            // change：使用者「確認」輸入（blur 或選 datalist 建議）時依排序表重排
-            // 但若已進入手動排序模式（cust.manualSort=true），則保留手動順序，不再自動重排
+            // change：確認輸入（blur 或選 datalist 建議）僅同步資料，不自動重排。
+            // 排序一律由使用者按「排序」按鈕主動觸發。
             nameInp.addEventListener('change', () => {
                 cust.products[idx].name = nameInp.value;
-                if (!cust.manualSort && opts.cargoNames.length > 0) {
-                    sortProductsByCargoOrder(cust.products, opts.cargoNames);
-                    renderProductList();
-                }
                 notify();
             });
             priceInp.addEventListener('input', () => {
@@ -297,22 +285,16 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
 
     insertBlankProductBtn.addEventListener('click', () => {
         cust.products.unshift({name: '', unitPrice: undefined});
-        // 「插入空白行」是排版意圖，視同手動排序，避免後續 nameInput change 把空白行沖到末端
-        cust.manualSort = true;
         renderProductList();
-        syncSortUI();
         notify();
         const first = productList.querySelector<HTMLInputElement>('.handfill-card-product-row:first-child .handfill-product-name');
         first?.focus();
     });
 
-    restoreAutoSortBtn.addEventListener('click', () => {
-        cust.manualSort = false;
-        if (opts.cargoNames.length > 0) {
-            sortProductsByCargoOrder(cust.products, opts.cargoNames);
-        }
+    sortProductsBtn.addEventListener('click', () => {
+        // 空白置頂 → cargo_sort 表內依序 → 未知品名殿後
+        sortProductsBlanksFirst(cust.products, opts.cargoNames);
         renderProductList();
-        syncSortUI();
         notify();
     });
 
@@ -359,16 +341,13 @@ export function renderHandfillCustomerCard(opts: HandfillCardOptions): HTMLEleme
         if (fromIdx === toIdx) return;
         const [moved] = cust.products.splice(fromIdx, 1);
         cust.products.splice(toIdx, 0, moved);
-        cust.manualSort = true;
         renderProductList();
-        syncSortUI();
         notify();
     });
 
     renderRestList();
     renderPhoneList();
     renderProductList();
-    syncSortUI();
 
     return card;
 }

@@ -3952,18 +3952,6 @@ td.cell-price-down {
     min-width: 0;
 }
 
-.handfill-manual-sort-badge {
-    display: inline-block;
-    margin-left: var(--space-2);
-    padding: 2px 8px;
-    background: var(--color-warning-bg, #fef3c7);
-    color: var(--color-warning-text, #92400e);
-    border-radius: 999px;
-    font-size: var(--font-size-xs, 11px);
-    font-weight: normal;
-    vertical-align: middle;
-}
-
 /* 列表模式 */
 .handfill-cust-list {
     display: flex;

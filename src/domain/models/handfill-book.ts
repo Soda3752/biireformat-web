@@ -22,9 +22,9 @@ export interface HandfillCustomer {
     restNotes: string[];
     phones: string[];
     /**
-     * 是否已由使用者手動排序過品名清單。
-     * - false（預設）：品名於 change 事件時依 cargo_sort 自動重排。
-     * - true：保留使用者手動順序，change 不再自動重排，直到按「還原自動排序」。
+     * 歷史欄位：早期版本用來標記「品名清單已手動排序、停用自動重排」。
+     * 自動排序已全面移除（排序改為使用者按「排序」按鈕主動觸發），此旗標
+     * 不再驅動任何 UI 行為，僅為相容舊資料與 round-trip 保存而保留。
      * 既有 localStorage 資料可能不存在此欄位，讀取時視為 false。
      */
     manualSort?: boolean;
@@ -104,20 +104,28 @@ export function createEmptyBook(init?: Partial<Pick<HandfillBook, 'lineNo' | 'li
 }
 
 /**
- * 依「帳單排序品項（cargo_sort）」的順序就地排序客戶的品名清單。
- * 空品名 / 不在排序表中的品名一律落在尾端，保留相對順序（穩定排序）。
+ * 就地排序客戶的品名清單（由「排序」按鈕觸發，非自動）。
+ * 順序規則：
+ *   1. 空白品名 → 置頂
+ *   2. 在「帳單排序品項（cargo_sort）」表內的品名 → 依表索引排序
+ *   3. 不在表內的非空白品名 → 殿後
+ * 同一群組內保留原相對順序（穩定排序）。
  */
-export function sortProductsByCargoOrder(
+export function sortProductsBlanksFirst(
     products: HandfillProduct[],
     cargoNames: ReadonlyArray<string>,
 ): void {
     const indexMap = new Map<string, number>();
     cargoNames.forEach((name, i) => indexMap.set(name, i));
-    const keyed = products.map((p, i) => ({
-        p,
-        i,
-        key: p.name.trim().length === 0 ? Number.MAX_SAFE_INTEGER : (indexMap.get(p.name) ?? Number.MAX_SAFE_INTEGER),
-    }));
+    const keyed = products.map((p, i) => {
+        let key: number;
+        if (p.name.trim().length === 0) {
+            key = Number.MIN_SAFE_INTEGER; // 空白置頂
+        } else {
+            key = indexMap.get(p.name) ?? Number.MAX_SAFE_INTEGER; // 表內依序，未知殿後
+        }
+        return {p, i, key};
+    });
     keyed.sort((a, b) => (a.key - b.key) || (a.i - b.i));
     for (let i = 0; i < keyed.length; i++) {
         products[i] = keyed[i].p;
