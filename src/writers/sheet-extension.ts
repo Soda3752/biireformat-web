@@ -219,6 +219,36 @@ export function createCustInfo(
     cell.style = custFont;
   });
   mergeRange(sheet, nameRow.number, 2, nameRow.number, 5);
+
+  // 公司抬頭 / 統一編號：顯示在中間空白區（年月左側），抬頭對齊編號列、統編對齊名稱列。
+  // 任一項有值才顯示（對應需求：其中一項有就顯示）。
+  const infoStart = 6;
+  const infoEnd = rowMaxSize - 5;
+  if (infoEnd >= infoStart) {
+    if (customer.companyTitle) {
+      writeCustInfoExtra(sheet, codeRow, infoStart, infoEnd, `抬頭：${customer.companyTitle}`, custFont);
+    }
+    if (customer.uniformNumber) {
+      writeCustInfoExtra(sheet, nameRow, infoStart, infoEnd, `統編：${customer.uniformNumber}`, custFont);
+    }
+  }
+}
+
+/** 在客戶資訊列的中間空白區寫一段置中合併文字（抬頭 / 統編）。 */
+function writeCustInfoExtra(
+  sheet: ExcelJS.Worksheet,
+  row: ExcelJS.Row,
+  startCol: number,
+  endCol: number,
+  text: string,
+  style: Partial<ExcelJS.Style>
+): void {
+  const cell = row.getCell(startCol);
+  cell.value = text;
+  cell.style = style;
+  if (endCol > startCol) {
+    mergeRange(sheet, row.number, startCol, row.number, endCol);
+  }
 }
 
 /**

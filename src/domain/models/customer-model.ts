@@ -10,6 +10,9 @@ import type {ProductSetting} from './product-setting';
 const PARAM_NAME = '客戶名稱';
 const PARAM_CODE = '客戶編號';
 const PARAM_SETTING = '傳真電話';
+const PARAM_UNIFORM = '統一編號';
+const PARAM_PHONE = '電話號碼';
+const PARAM_CONTACT = '聯絡人員';
 
 export class CustomerModel {
   readonly name: string;
@@ -25,18 +28,31 @@ export class CustomerModel {
   /** 是否為現金結 */
   isCashUser = false;
 
+  /** 統一編號（輸入檔「統一編號」欄後方的值；無則空字串） */
+  uniformNumber = '';
+  /** 公司抬頭（輸入檔「聯絡人員」欄後方的值；無則空字串） */
+  companyTitle = '';
+
   constructor(name: string, code: string) {
     this.name = name;
     this.code = code;
   }
 
   /**
-   * 範例 rowData：[客戶名稱, 辭修弘爺, 客戶編號, 1001, 統一編號, , 電話號碼, ]
+   * 範例 rowData：[客戶名稱, 辭修弘爺, 客戶編號, 1001, 統一編號, 12345678, 電話號碼, ]
+   * 統一編號為空時，reader 會略過空格，使「統一編號」後方直接接「電話號碼」，
+   * 故以「值不等於下一個標籤」判定有無填寫。
    */
   static newInstanceWithRowData(rowData: ReadonlyArray<string>): CustomerModel {
     const name = rowData[rowData.indexOf(PARAM_NAME) + 1];
     const code = rowData[rowData.indexOf(PARAM_CODE) + 1];
-    return new CustomerModel(name, code);
+    const model = new CustomerModel(name, code);
+
+    const uniIdx = rowData.indexOf(PARAM_UNIFORM);
+    const uniform = uniIdx >= 0 ? rowData[uniIdx + 1] ?? '' : '';
+    model.uniformNumber = uniform === PARAM_PHONE ? '' : uniform;
+
+    return model;
   }
 
   appendOrderInfo(orderInfo: OrderInfo): void {
@@ -60,6 +76,11 @@ export class CustomerModel {
     this.isMonthly = configInfo.includes('月');
     this.isNeedTex = configInfo.includes('稅');
     this.isCashUser = configInfo.includes('現');
+
+    // 公司抬頭：客戶地址列「聯絡人員」欄後方的值；為空時後方直接接「傳真電話」標籤。
+    const contactIdx = rowData.indexOf(PARAM_CONTACT);
+    const title = contactIdx >= 0 ? rowData[contactIdx + 1] ?? '' : '';
+    this.companyTitle = title === PARAM_SETTING ? '' : title;
   }
 
   getTotalPrice(): number {
