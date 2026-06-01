@@ -31,7 +31,7 @@ import {getItemIndex} from '@/domain/sorting-list';
 export const TITLE_SIZE_POI = 400;
 export const FONT_SIZE_POI = 300;
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
-export const ROW_HEIGHT_POI = 440;
+export const ROW_HEIGHT_POI = 360;
 
 export const FIRST_LINE_WIDTH_POI = 15 * 256;
 export const CENTER_LINE_WIDTH_POI = 6 * 256;
