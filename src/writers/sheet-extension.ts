@@ -28,9 +28,11 @@ import {getItemIndex} from '@/domain/sorting-list';
 /* ============================================================
    桌面版 Writer.companion 常數（POI 單位）
    ============================================================ */
-export const TITLE_SIZE_POI = 400;
+export const TITLE_SIZE_POI = 320;
 export const FONT_SIZE_POI = 300;
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
+/** 頁尾（訂貨專線／銀行／匯款提醒）字級，刻意小於內文，僅需可辨識。 */
+export const FOOTER_FONT_POI = 200;
 export const ROW_HEIGHT_POI = 360;
 
 export const FIRST_LINE_WIDTH_POI = 15 * 256;
@@ -70,10 +72,10 @@ const styles = {
       font: { name: KAI_FONT, bold: true, size: poiFontSize(CUSTINFO_FONT_POI) },
       align: 'center',
     }),
-  /** 一般置中文字（無框、無粗體、字級 15pt） */
+  /** 頁尾置中文字（無框、無粗體、字級 10pt，僅需可辨識） */
   centerText: () =>
     buildStyle({
-      font: { name: KAI_FONT, size: poiFontSize(FONT_SIZE_POI) },
+      font: { name: KAI_FONT, size: poiFontSize(FOOTER_FONT_POI) },
       align: 'center',
     }),
   /** 商品列基本格式（含框） */
