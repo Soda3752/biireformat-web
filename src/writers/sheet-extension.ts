@@ -28,12 +28,22 @@ import {getItemIndex} from '@/domain/sorting-list';
 /* ============================================================
    桌面版 Writer.companion 常數（POI 單位）
    ============================================================ */
-export const TITLE_SIZE_POI = 320;
+export const TITLE_SIZE_POI = 400;
 export const FONT_SIZE_POI = 300;
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
+/** 請款單客戶編號/名稱字級（加大為 18pt）；獨立常數以免影響代送費共用的 createSingleLineCustInfo。 */
+export const BILL_CUSTINFO_FONT_POI = 360;
 /** 頁尾（訂貨專線／銀行／匯款提醒）字級，刻意小於內文，僅需可辨識。 */
-export const FOOTER_FONT_POI = 200;
-export const ROW_HEIGHT_POI = 360;
+export const FOOTER_FONT_POI = 240;
+/**
+ * 通用行高 17.25pt。使用者以像素指定行距，px→pt 換算 ×0.75（23px=17.25pt）。
+ * 供請款單標題/客戶/明細/總計與代送費等沿用。
+ */
+export const ROW_HEIGHT_POI = 345;
+/** 請款單「訂貨日期表頭」行高：16px=12pt。 */
+export const BILL_DATE_ROW_HEIGHT_POI = 240;
+/** 請款單「倒數三行頁尾」行高：19px=14.25pt。 */
+export const BILL_FOOTER_ROW_HEIGHT_POI = 285;
 
 export const FIRST_LINE_WIDTH_POI = 15 * 256;
 export const CENTER_LINE_WIDTH_POI = 6 * 256;
@@ -66,13 +76,19 @@ const styles = {
       font: { name: KAI_FONT, bold: true, size: poiFontSize(TITLE_SIZE_POI) },
       align: 'center',
     }),
-  /** 客戶資訊欄（標楷體、粗體、字級 17pt） */
+  /** 客戶資訊欄（標楷體、粗體、字級 17pt）；代送費單行客戶資訊沿用 */
   custInfo: () =>
     buildStyle({
       font: { name: KAI_FONT, bold: true, size: poiFontSize(CUSTINFO_FONT_POI) },
       align: 'center',
     }),
-  /** 頁尾置中文字（無框、無粗體、字級 10pt，僅需可辨識） */
+  /** 請款單客戶編號/名稱欄（標楷體、粗體、字級 18pt，較 custInfo 大） */
+  custInfoBill: () =>
+    buildStyle({
+      font: { name: KAI_FONT, bold: true, size: poiFontSize(BILL_CUSTINFO_FONT_POI) },
+      align: 'center',
+    }),
+  /** 頁尾置中文字（無框、無粗體、字級 12pt，僅需可辨識） */
   centerText: () =>
     buildStyle({
       font: { name: KAI_FONT, size: poiFontSize(FOOTER_FONT_POI) },
@@ -183,10 +199,12 @@ export function createHeader(sheet: ExcelJS.Worksheet, rowMaxSize: number): void
   const headerStyle = styles.title();
   const r1 = sheet.addRow(['青坊食品行']);
   r1.getCell(1).style = headerStyle;
+  setRowHeightPoi(r1, ROW_HEIGHT_POI);
   mergeRange(sheet, r1.number, 1, r1.number, rowMaxSize + 1);
 
   const r2 = sheet.addRow(['請款單']);
   r2.getCell(1).style = headerStyle;
+  setRowHeightPoi(r2, ROW_HEIGHT_POI);
   mergeRange(sheet, r2.number, 1, r2.number, rowMaxSize + 1);
 }
 
@@ -201,10 +219,11 @@ export function createCustInfo(
   billMonth: string,
   rowMaxSize: number
 ): void {
-  const custFont = styles.custInfo();
+  const custFont = styles.custInfoBill();
 
   // 客戶編號列：標籤 + 值（值合併欄 2..5）
   const codeRow = sheet.addRow(['客戶編號', customer.code]);
+  setRowHeightPoi(codeRow, ROW_HEIGHT_POI);
   codeRow.getCell(1).style = custFont;
   codeRow.getCell(2).style = custFont;
   mergeRange(sheet, codeRow.number, 2, codeRow.number, 5);
@@ -286,7 +305,8 @@ export function createSingleLineCustInfo(
 export function createDateRangeRow(
   sheet: ExcelJS.Worksheet,
   dateRange: ReadonlyArray<number>,
-  maxDate = 0
+  maxDate = 0,
+  rowHeightPoi: number = ROW_HEIGHT_POI
 ): void {
   const base = styles.cellWithBorder();
   const dateBold = styles.dateBold();
@@ -301,7 +321,7 @@ export function createDateRangeRow(
 
   cells.push(['數量', base], ['單價', base], ['合計', base]);
   const row = writeMixedRow(sheet, cells, base);
-  setRowHeightPoi(row, ROW_HEIGHT_POI);
+  setRowHeightPoi(row, rowHeightPoi);
 }
 
 /** 商品列寫入後回傳的範圍，供總計列以 SUM 公式參照。 */
@@ -521,6 +541,7 @@ export function createFooter(sheet: ExcelJS.Worksheet, rowMaxSize: number): void
 
   for (const text of lines) {
     const r = sheet.addRow([text]);
+    setRowHeightPoi(r, BILL_FOOTER_ROW_HEIGHT_POI);
     r.getCell(1).style = base;
     mergeRange(sheet, r.number, 1, r.number, rowMaxSize + 1);
   }
