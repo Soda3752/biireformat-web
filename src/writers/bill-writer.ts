@@ -25,7 +25,7 @@ import {
 } from '@/infra/excel-service';
 
 import {
-  BILL_DATE_ROW_HEIGHT_POI,
+  BILL_ROW_HEIGHT_POI,
   CENTER_LINE_WIDTH_POI,
   createCustInfo,
   createDateRangeRow,
@@ -289,7 +289,7 @@ export class BillWriter {
     const max = this.halfMonthMaxRow;
     createHeader(ws, max);
       createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
-      createDateRangeRow(ws, this.displayDateRange, 0, BILL_DATE_ROW_HEIGHT_POI);
+      createDateRangeRow(ws, this.displayDateRange, 0, BILL_ROW_HEIGHT_POI);
     const range = createProductRowBySlots(ws, customer.productList, this.halfMonthSlots);
     createTotalRowBySlots(ws, customer, max, this.halfMonthSlots, range ? [range] : []);
     createFooter(ws, max);
@@ -302,14 +302,14 @@ export class BillWriter {
       createCustInfo(ws, customer, year, month, max);
 
     // 上半月：日期 1..15，maxDate=16
-    createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16, BILL_DATE_ROW_HEIGHT_POI);
+    createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16, BILL_ROW_HEIGHT_POI);
     const upperRange = createProductRow(ws, customer.productList, FULL_MONTH_FIRST_RANGE, 16);
 
     // 中間空白列
     ws.addRow([]);
 
     // 下半月：日期 16..31，maxDate=16
-    createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16, BILL_DATE_ROW_HEIGHT_POI);
+    createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16, BILL_ROW_HEIGHT_POI);
     const lowerRange = createProductRow(ws, customer.productList, FULL_MONTH_SECOND_RANGE, 16);
 
     const ranges = [upperRange, lowerRange].filter(

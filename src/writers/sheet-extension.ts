@@ -31,19 +31,21 @@ import {getItemIndex} from '@/domain/sorting-list';
 export const TITLE_SIZE_POI = 400;
 export const FONT_SIZE_POI = 300;
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
-/** 請款單客戶編號/名稱字級（加大為 18pt）；獨立常數以免影響代送費共用的 createSingleLineCustInfo。 */
+/** 請款單客戶編號/名稱字級（維持 18pt）；獨立常數以免影響代送費共用的 createSingleLineCustInfo。 */
 export const BILL_CUSTINFO_FONT_POI = 360;
-/** 頁尾（訂貨專線／銀行／匯款提醒）字級，刻意小於內文，僅需可辨識。 */
-export const FOOTER_FONT_POI = 240;
+/** 頁尾（訂貨專線／銀行／匯款提醒）字級：回到 2.1.0，與內文同為 15pt。 */
+export const FOOTER_FONT_POI = 300;
 /**
- * 通用行高 17.25pt。使用者以像素指定行距，px→pt 換算 ×0.75（23px=17.25pt）。
- * 供請款單標題/客戶/明細/總計與代送費等沿用。
+ * 通用行高 17.25pt（23px）。目前僅「代送費」與其共用 helper（createSingleLineCustInfo /
+ * createDateRangeRow 預設）沿用；請款單改用較寬鬆的 BILL_ROW_HEIGHT_POI。
  */
 export const ROW_HEIGHT_POI = 345;
-/** 請款單「訂貨日期表頭」行高：16px=12pt。 */
-export const BILL_DATE_ROW_HEIGHT_POI = 240;
-/** 請款單「倒數三行頁尾」行高：19px=14.25pt。 */
-export const BILL_FOOTER_ROW_HEIGHT_POI = 285;
+/**
+ * 請款單專用行高 22pt（≈29px）：回到 2.1.0 的寬鬆行距（標題/客戶/日期表頭/明細/總計/頁尾共用）。
+ * 與代送費共用的 ROW_HEIGHT_POI 區隔，避免波及代送費版面。
+ * 品項過多而一頁放不下者，由 bill-writer 的 fitBlockToOnePage 自動等比例縮小。
+ */
+export const BILL_ROW_HEIGHT_POI = 440;
 
 export const FIRST_LINE_WIDTH_POI = 15 * 256;
 export const CENTER_LINE_WIDTH_POI = 6 * 256;
@@ -88,7 +90,7 @@ const styles = {
       font: { name: KAI_FONT, bold: true, size: poiFontSize(BILL_CUSTINFO_FONT_POI) },
       align: 'center',
     }),
-  /** 頁尾置中文字（無框、無粗體、字級 12pt，僅需可辨識） */
+  /** 頁尾置中文字（無框、無粗體、字級 15pt，與內文同） */
   centerText: () =>
     buildStyle({
       font: { name: KAI_FONT, size: poiFontSize(FOOTER_FONT_POI) },
@@ -199,12 +201,12 @@ export function createHeader(sheet: ExcelJS.Worksheet, rowMaxSize: number): void
   const headerStyle = styles.title();
   const r1 = sheet.addRow(['青坊食品行']);
   r1.getCell(1).style = headerStyle;
-  setRowHeightPoi(r1, ROW_HEIGHT_POI);
+  setRowHeightPoi(r1, BILL_ROW_HEIGHT_POI);
   mergeRange(sheet, r1.number, 1, r1.number, rowMaxSize + 1);
 
   const r2 = sheet.addRow(['請款單']);
   r2.getCell(1).style = headerStyle;
-  setRowHeightPoi(r2, ROW_HEIGHT_POI);
+  setRowHeightPoi(r2, BILL_ROW_HEIGHT_POI);
   mergeRange(sheet, r2.number, 1, r2.number, rowMaxSize + 1);
 }
 
@@ -223,7 +225,7 @@ export function createCustInfo(
 
   // 客戶編號列：標籤 + 值（值合併欄 2..5）
   const codeRow = sheet.addRow(['客戶編號', customer.code]);
-  setRowHeightPoi(codeRow, ROW_HEIGHT_POI);
+  setRowHeightPoi(codeRow, BILL_ROW_HEIGHT_POI);
   codeRow.getCell(1).style = custFont;
   codeRow.getCell(2).style = custFont;
   mergeRange(sheet, codeRow.number, 2, codeRow.number, 5);
@@ -235,7 +237,7 @@ export function createCustInfo(
   nameValues.push(billYear, '年', billMonth, '月');
 
   const nameRow = sheet.addRow(nameValues);
-  setRowHeightPoi(nameRow, ROW_HEIGHT_POI);
+  setRowHeightPoi(nameRow, BILL_ROW_HEIGHT_POI);
   nameRow.eachCell({ includeEmpty: true }, (cell) => {
     cell.style = custFont;
   });
@@ -374,7 +376,7 @@ export function createProductRow(
     );
 
     const row = writeMixedRow(sheet, cells, cellStyle);
-    setRowHeightPoi(row, ROW_HEIGHT_POI);
+    setRowHeightPoi(row, BILL_ROW_HEIGHT_POI);
       setQtyAsFormula(row, cells.length - 2, cachedCount);
       setTotalAsFormula(row, cells.length, cachedTotal);
 
@@ -437,7 +439,7 @@ export function createProductRowBySlots(
         );
 
         const row = writeMixedRow(sheet, cells, cellStyle);
-        setRowHeightPoi(row, ROW_HEIGHT_POI);
+        setRowHeightPoi(row, BILL_ROW_HEIGHT_POI);
         setQtyAsFormula(row, cells.length - 2, cachedCount);
         setTotalAsFormula(row, cells.length, cachedTotal);
 
@@ -469,7 +471,7 @@ export function createTotalRow(
   for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
     totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
   const totalRow = writeMixedRow(sheet, totalCells, redStyle);
-  setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
+  setRowHeightPoi(totalRow, BILL_ROW_HEIGHT_POI);
     applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
   if (customer.isNeedTex) {
@@ -477,13 +479,13 @@ export function createTotalRow(
     for (let i = 0; i < rowMaxSize - 1; i++) taxCells.push(['', redStyle]);
     taxCells.push(['稅金', redStyle], [customer.getTex(), redStyle]);
     const taxRow = writeMixedRow(sheet, taxCells, redStyle);
-    setRowHeightPoi(taxRow, ROW_HEIGHT_POI);
+    setRowHeightPoi(taxRow, BILL_ROW_HEIGHT_POI);
 
     const sumCells: StyledCell[] = [];
     for (let i = 0; i < rowMaxSize; i++) sumCells.push(['', redStyle]);
     sumCells.push([customer.getAfterTexSum(), redStyle]);
     const sumRow = writeMixedRow(sheet, sumCells, redStyle);
-    setRowHeightPoi(sumRow, ROW_HEIGHT_POI);
+    setRowHeightPoi(sumRow, BILL_ROW_HEIGHT_POI);
   }
 }
 
@@ -505,7 +507,7 @@ export function createTotalRowBySlots(
     for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
     totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
     const totalRow = writeMixedRow(sheet, totalCells, redStyle);
-    setRowHeightPoi(totalRow, ROW_HEIGHT_POI);
+    setRowHeightPoi(totalRow, BILL_ROW_HEIGHT_POI);
     applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
     if (customer.isNeedTex) {
@@ -513,13 +515,13 @@ export function createTotalRowBySlots(
         for (let i = 0; i < rowMaxSize - 1; i++) taxCells.push(['', redStyle]);
         taxCells.push(['稅金', redStyle], [customer.getTexForDates(sources), redStyle]);
         const taxRow = writeMixedRow(sheet, taxCells, redStyle);
-        setRowHeightPoi(taxRow, ROW_HEIGHT_POI);
+        setRowHeightPoi(taxRow, BILL_ROW_HEIGHT_POI);
 
         const sumCells: StyledCell[] = [];
         for (let i = 0; i < rowMaxSize; i++) sumCells.push(['', redStyle]);
         sumCells.push([customer.getAfterTexSumForDates(sources), redStyle]);
         const sumRow = writeMixedRow(sheet, sumCells, redStyle);
-        setRowHeightPoi(sumRow, ROW_HEIGHT_POI);
+        setRowHeightPoi(sumRow, BILL_ROW_HEIGHT_POI);
     }
 }
 
@@ -541,7 +543,7 @@ export function createFooter(sheet: ExcelJS.Worksheet, rowMaxSize: number): void
 
   for (const text of lines) {
     const r = sheet.addRow([text]);
-    setRowHeightPoi(r, BILL_FOOTER_ROW_HEIGHT_POI);
+    setRowHeightPoi(r, BILL_ROW_HEIGHT_POI);
     r.getCell(1).style = base;
     mergeRange(sheet, r.number, 1, r.number, rowMaxSize + 1);
   }
