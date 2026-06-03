@@ -82,10 +82,18 @@ const PAGE_BUDGET_PT = 336;
 /** 未設定列高的空白列，ExcelJS 預設約 15pt。 */
 const DEFAULT_ROW_PT = 15;
 
+/** 四捨五入到小數點後兩位，避免寫出過長小數／科學記號（如 1.2e-8）導致 Excel 無法開啟。 */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 /**
  * 將 [startRow, endRow]（單一客戶的請款單，含其後屬於本頁的空白列）壓進一頁。
  * 估算整段自然列高總和，超過單頁上限時，等比例縮小每一列的「列高」與「字級」，
  * 讓內容塞回一頁且字體不被裁切。原本就放得下的客戶不會被改動。
+ *
+ * 注意：ExcelJS 的合併儲存格附屬格會把字型 getter/setter 委派給主格，且樣式物件在
+ * 多格／多列間以參照共用，若直接「讀取現值×比例」會重複縮放、把字級壓到趨近 0
+ * （甚至以科學記號序列化）而毀檔。因此採兩階段：先快照原始值，再以「原始值×比例」
+ * 的絕對值寫回，且只設定合併區塊的主格（附屬格沿用主格樣式，不重複設定）。
  */
 function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: number): void {
     let total = 0;
@@ -95,15 +103,27 @@ function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: numb
     if (total <= PAGE_BUDGET_PT) return;
 
     const scale = PAGE_BUDGET_PT / total;
+
+    // 第一階段：快照原始列高與（主格的）字級，避免共用樣式造成「讀到已縮放值」。
+    const rowHeights: number[] = [];
+    const fontTargets: Array<{ cell: ExcelJS.Cell; font: Partial<ExcelJS.Font>; size: number }> = [];
     for (let r = startRow; r <= endRow; r++) {
         const row = ws.getRow(r);
-        row.height = (row.height ?? DEFAULT_ROW_PT) * scale;
+        rowHeights.push(row.height ?? DEFAULT_ROW_PT);
         row.eachCell({ includeEmpty: true }, (cell) => {
+            if (cell.master !== cell) return; // 跳過合併附屬格
             const font = cell.font;
-            if (font?.size) {
-                cell.font = { ...font, size: font.size * scale };
-            }
+            if (font?.size) fontTargets.push({ cell, font, size: font.size });
         });
+    }
+
+    // 第二階段：以快照值寫入絕對結果（順序無關，不會累乘）。
+    let i = 0;
+    for (let r = startRow; r <= endRow; r++) {
+        ws.getRow(r).height = round2(rowHeights[i++] * scale);
+    }
+    for (const { cell, font, size } of fontTargets) {
+        cell.font = { ...font, size: round2(size * scale) };
     }
 }
 
