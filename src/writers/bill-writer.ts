@@ -63,6 +63,48 @@ const FULL_MONTH_FIRST_RANGE: ReadonlyArray<number> = Array.from({ length: 15 },
 const FULL_MONTH_SECOND_RANGE: ReadonlyArray<number> = Array.from({ length: 16 }, (_, i) => i + 16);
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+/* ------------------------------------------------------------
+   壓進一頁：品項過多的請款單自動等比例縮小，避免破版
+   ------------------------------------------------------------ */
+
+/** A5 短邊 148mm 換算為 pt（A5 橫向列印時的紙張高度）。 */
+const A5_LANDSCAPE_HEIGHT_PT = (148 / 25.4) * 72;
+/** 安全係數：吸收印表機不可印區與估算誤差，確保確實塞進一頁。 */
+const PRINT_SAFETY = 0.95;
+/**
+ * 單頁可容納的「自然列高總和」上限（pt）。
+ * 列印縮放 s% 會把內容縮到 s%，故自然高度上限 = 紙張高度 / (s/100)。
+ */
+const PAGE_BUDGET_PT =
+    (A5_LANDSCAPE_HEIGHT_PT / ((BILL_PRINT_SETTINGS.scale ?? 100) / 100)) * PRINT_SAFETY;
+/** 未設定列高的空白列，ExcelJS 預設約 15pt。 */
+const DEFAULT_ROW_PT = 15;
+
+/**
+ * 將 [startRow, endRow]（單一客戶的請款單，含其後屬於本頁的空白列）壓進一頁。
+ * 估算整段自然列高總和，超過單頁上限時，等比例縮小每一列的「列高」與「字級」，
+ * 讓內容塞回一頁且字體不被裁切。原本就放得下的客戶不會被改動。
+ */
+function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: number): void {
+    let total = 0;
+    for (let r = startRow; r <= endRow; r++) {
+        total += ws.getRow(r).height ?? DEFAULT_ROW_PT;
+    }
+    if (total <= PAGE_BUDGET_PT) return;
+
+    const scale = PAGE_BUDGET_PT / total;
+    for (let r = startRow; r <= endRow; r++) {
+        const row = ws.getRow(r);
+        row.height = (row.height ?? DEFAULT_ROW_PT) * scale;
+        row.eachCell({ includeEmpty: true }, (cell) => {
+            const font = cell.font;
+            if (font?.size) {
+                cell.font = { ...font, size: font.size * scale };
+            }
+        });
+    }
+}
+
 export interface BillFile {
   /** 輸出檔名（含 .xlsx），對應桌面版 `getFilePath` */
   filename: string;
@@ -198,6 +240,7 @@ export class BillWriter {
     mode: 'half' | 'full'
   ): void {
     customers.forEach((customer, idx) => {
+      const blockStart = (ws.lastRow?.number ?? 0) + 1;
       if (mode === 'full') {
         this.writeFullMonthBlock(ws, customer);
       } else {
@@ -205,8 +248,13 @@ export class BillWriter {
       }
 
       // 對應桌面版： row {} ; setRowBreak(lastRowNum) ; row {}
-      ws.addRow([]); // (a)
-      const nextRowNumber = (ws.lastRow?.number ?? 0) + 1;
+      ws.addRow([]); // (a)，仍屬本頁，一併納入「壓進一頁」估算
+      const blockEnd = ws.lastRow?.number ?? blockStart;
+
+      // 品項過多會破版的客戶：等比例縮小列高與字級，壓回一頁
+      fitBlockToOnePage(ws, blockStart, blockEnd);
+
+      const nextRowNumber = blockEnd + 1;
       // 只要不是最後一位客戶，就把分頁設在 (c) 那一列
       if (idx < customers.length - 1) {
         ws.getRow(nextRowNumber).addPageBreak();
