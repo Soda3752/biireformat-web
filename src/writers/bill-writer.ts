@@ -64,19 +64,12 @@ const FULL_MONTH_SECOND_RANGE: ReadonlyArray<number> = Array.from({ length: 16 }
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------
-   壓進一頁：品項過多的請款單自動等比例縮小，避免破版
+   壓進一頁：品項過多的請款單自動套用緊湊版型，避免破版
    ------------------------------------------------------------ */
 
 /**
  * 單一客戶請款單區塊（標題～總計～頁尾，含其後 1 列空白）的「列高總和」上限（pt）。
- *
- * 為實測校正值，非理論推導：列印縮放（80%）實際上並不會放大每頁可用高度，內容仍須
- * 以自然高度塞進實體 A5 橫向頁面。由實際輸出檔觀察：某客戶區塊約 370pt（含上下半月
- * 兩段明細）會被擠到次頁破版，而 ~336pt（含）以下的客戶均可正常列印於一頁。
- *
- * 另外每頁起始尚有約 30pt 的分頁結構空白列（不計入此區塊），因此本上限 336pt 對應到
- * 「整頁約 366pt」——即目前確認可正常列印的最高頁面。如此一來：原本就放得下（≤336pt）
- * 的客戶完全不動，過高者等比例縮小至此上限，使每頁高度都不超過已知可正常列印的範圍。
+ * 實測校正值：整頁自然高度超過此值會被擠到次頁破版；放得下的客戶完全不受影響。
  */
 const PAGE_BUDGET_PT = 336;
 /** 未設定列高的空白列，ExcelJS 預設約 15pt。 */
@@ -86,14 +79,44 @@ const DEFAULT_ROW_PT = 15;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
+ * 緊湊版型的分區字級（pt）：
+ *   頭4列（青坊食品行/請款單/客戶編號/名稱） → 18pt
+ *   中間內容（日期表頭/明細/總計）           → 15pt
+ *   尾3列（訂貨專線/銀行/匯款提醒）          → 13pt
+ */
+const COMPACT_HEADER_FONT = 18;
+const COMPACT_CONTENT_FONT = 15;
+const COMPACT_FOOTER_FONT = 13;
+/** 空白/間距列在緊湊版型的列高（pt）。 */
+const COMPACT_BLANK_H = 10;
+
+/** 依列在區塊中的位置判斷緊湊版型字級；endRow（尾部空白）回傳 null。 */
+function compactFontForRow(r: number, startRow: number, endRow: number): number | null {
+    if (r === endRow) return null;                                           // 尾部空白列（a）
+    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;     // 尾3列 footer（先判，防止極短區塊重疊）
+    if (r <= startRow + 3) return COMPACT_HEADER_FONT;                      // 頭4列
+    return COMPACT_CONTENT_FONT;
+}
+
+/** 依列在區塊中的位置判斷緊湊版型列高（pt）。有高度的內容列取內文字級，空白間距列取 COMPACT_BLANK_H。 */
+function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number, endRow: number): number {
+    if (r === endRow) return COMPACT_BLANK_H;
+    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;
+    if (r <= startRow + 3) return COMPACT_HEADER_FONT;
+    return ws.getRow(r).height != null ? COMPACT_CONTENT_FONT : COMPACT_BLANK_H;
+}
+
+/**
  * 將 [startRow, endRow]（單一客戶的請款單，含其後屬於本頁的空白列）壓進一頁。
- * 估算整段自然列高總和，超過單頁上限時，等比例縮小每一列的「列高」與「字級」，
- * 讓內容塞回一頁且字體不被裁切。原本就放得下的客戶不會被改動。
  *
- * 注意：ExcelJS 的合併儲存格附屬格會把字型 getter/setter 委派給主格，且樣式物件在
- * 多格／多列間以參照共用，若直接「讀取現值×比例」會重複縮放、把字級壓到趨近 0
- * （甚至以科學記號序列化）而毀檔。因此採兩階段：先快照原始值，再以「原始值×比例」
- * 的絕對值寫回，且只設定合併區塊的主格（附屬格沿用主格樣式，不重複設定）。
+ * 放得下的客戶（自然高度 ≤ PAGE_BUDGET_PT）完全不動。
+ * 超出上限的客戶套用「緊湊版型」：
+ *   - 頭4列字級 18pt、中間內容 15pt、尾3列 13pt（依使用者指定）。
+ *   - 列高以字級為基準計算緊湊高度；若緊湊高度仍超過上限，再等比例縮小列高
+ *     （字級維持不動，確保文字可讀）。
+ *
+ * 注意：ExcelJS 合併儲存格附屬格共用主格樣式，因此採兩階段（先快照、再寫入）
+ * 以避免共用樣式被重複縮放而壓成趨近 0 / 科學記號，導致 Excel 無法開啟。
  */
 function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: number): void {
     let total = 0;
@@ -102,28 +125,34 @@ function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: numb
     }
     if (total <= PAGE_BUDGET_PT) return;
 
-    const scale = PAGE_BUDGET_PT / total;
+    // 計算緊湊版型基礎列高總和，必要時等比例縮小列高（字級保持不動）
+    let compactTotal = 0;
+    for (let r = startRow; r <= endRow; r++) {
+        compactTotal += compactHeightForRow(ws, r, startRow, endRow);
+    }
+    const scale = compactTotal > PAGE_BUDGET_PT ? PAGE_BUDGET_PT / compactTotal : 1;
 
-    // 第一階段：快照原始列高與（主格的）字級，避免共用樣式造成「讀到已縮放值」。
-    const rowHeights: number[] = [];
+    // 第一階段：快照目標列高與（主格的）目標字級，避免共用樣式重複縮放
+    const targetHeights: number[] = [];
     const fontTargets: Array<{ cell: ExcelJS.Cell; font: Partial<ExcelJS.Font>; size: number }> = [];
     for (let r = startRow; r <= endRow; r++) {
-        const row = ws.getRow(r);
-        rowHeights.push(row.height ?? DEFAULT_ROW_PT);
-        row.eachCell({ includeEmpty: true }, (cell) => {
-            if (cell.master !== cell) return; // 跳過合併附屬格
-            const font = cell.font;
-            if (font?.size) fontTargets.push({ cell, font, size: font.size });
-        });
+        targetHeights.push(compactHeightForRow(ws, r, startRow, endRow) * scale);
+        const targetSize = compactFontForRow(r, startRow, endRow);
+        if (targetSize !== null) {
+            ws.getRow(r).eachCell({ includeEmpty: true }, (cell) => {
+                if (cell.master !== cell) return; // 跳過合併附屬格
+                if (cell.font?.size) fontTargets.push({ cell, font: cell.font, size: targetSize });
+            });
+        }
     }
 
-    // 第二階段：以快照值寫入絕對結果（順序無關，不會累乘）。
+    // 第二階段：以絕對值寫回（不累乘，不受共用樣式影響）
     let i = 0;
     for (let r = startRow; r <= endRow; r++) {
-        ws.getRow(r).height = round2(rowHeights[i++] * scale);
+        ws.getRow(r).height = round2(targetHeights[i++]);
     }
     for (const { cell, font, size } of fontTargets) {
-        cell.font = { ...font, size: round2(size * scale) };
+        cell.font = { ...font, size };
     }
 }
 
