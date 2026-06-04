@@ -87,8 +87,10 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 const COMPACT_HEADER_FONT = 18;
 const COMPACT_CONTENT_FONT = 15;
 const COMPACT_FOOTER_FONT = 13;
-/** 空白/間距列在緊湊版型的列高（pt）。壓到 1pt，避免佔用版面空間。 */
+/** 結構性尾部空白列（blank a）的緊湊列高（pt）——壓到 1pt，不佔版面。 */
 const COMPACT_BLANK_H = 1;
+/** 視覺間距列（上半／下半分隔、頁尾前留白）的緊湊列高（pt）——保留足夠高度讓段落清楚可辨。 */
+const COMPACT_GAP_H = 8;
 
 /** 依列在區塊中的位置判斷緊湊版型字級；endRow（尾部空白）回傳 null。 */
 function compactFontForRow(r: number, startRow: number, endRow: number): number | null {
@@ -98,12 +100,16 @@ function compactFontForRow(r: number, startRow: number, endRow: number): number 
     return COMPACT_CONTENT_FONT;
 }
 
-/** 依列在區塊中的位置判斷緊湊版型列高（pt）。有高度的內容列取內文字級，空白間距列取 COMPACT_BLANK_H。 */
+/**
+ * 依列在區塊中的位置判斷緊湊版型列高（pt）。
+ * 有高度的內容列 → COMPACT_CONTENT_FONT；無高度的視覺間距列（上下半分隔、頁尾留白）→ COMPACT_GAP_H；
+ * 尾部結構空白列 (a) → COMPACT_BLANK_H。
+ */
 function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number, endRow: number): number {
     if (r === endRow) return COMPACT_BLANK_H;
     if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;
     if (r <= startRow + 3) return COMPACT_HEADER_FONT;
-    return ws.getRow(r).height != null ? COMPACT_CONTENT_FONT : COMPACT_BLANK_H;
+    return ws.getRow(r).height != null ? COMPACT_CONTENT_FONT : COMPACT_GAP_H;
 }
 
 /**
