@@ -69,9 +69,10 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 單一客戶請款單區塊（標題～總計～頁尾，含其後 1 列空白）的「列高總和」上限（pt）。
- * 實測校正值：整頁自然高度超過此值會被擠到次頁破版；放得下的客戶完全不受影響。
+ * 實測校正值：整頁超過約 370pt 會破版。blank(a)/(c) 已壓到 1pt，故頁面總高
+ * ≈ block + 2pt。本上限設為 360pt → 整頁約 362pt，保留約 8pt 安全餘裕。
  */
-const PAGE_BUDGET_PT = 336;
+const PAGE_BUDGET_PT = 360;
 /** 未設定列高的空白列，ExcelJS 預設約 15pt。 */
 const DEFAULT_ROW_PT = 15;
 
@@ -120,7 +121,7 @@ function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number,
  *
  * 放得下的客戶（自然高度 ≤ PAGE_BUDGET_PT）完全不動。
  * 超出上限的客戶套用「緊湊版型」：
- *   - 頭4列字級 18pt、中間內容 15pt、尾3列 13pt（依使用者指定）。
+ *   - 頭4列 21.75pt/20pt、中間內容 19.5pt/15pt、尾3列 12.75pt/14pt（依使用者指定）。
  *   - 列高以字級為基準計算緊湊高度；若緊湊高度仍超過上限，再等比例縮小列高
  *     （字級維持不動，確保文字可讀）。
  *
