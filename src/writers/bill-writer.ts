@@ -79,14 +79,17 @@ const DEFAULT_ROW_PT = 15;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
- * 緊湊版型的分區字級（pt）：
- *   頭4列（青坊食品行/請款單/客戶編號/名稱） → 18pt
- *   中間內容（日期表頭/明細/總計）           → 15pt
- *   尾3列（訂貨專線/銀行/匯款提醒）          → 13pt
+ * 緊湊版型行高（pt）與字級（pt）——依使用者指定（px × 0.75 換算）：
+ *   頭4列（青坊食品行/請款單/客戶編號/名稱）→ 行高 21.75pt（29px）、字級 20pt
+ *   中間內容（日期表頭/明細/總計）          → 行高 19.5pt（26px）、字級 15pt
+ *   尾3列（訂貨專線/銀行/匯款提醒）         → 行高 12.75pt（17px）、字級 14pt
  */
-const COMPACT_HEADER_FONT = 18;
+const COMPACT_HEADER_H    = 21.75;  // 29px × 0.75
+const COMPACT_HEADER_FONT = 20;
+const COMPACT_CONTENT_H    = 19.5;  // 26px × 0.75
 const COMPACT_CONTENT_FONT = 15;
-const COMPACT_FOOTER_FONT = 13;
+const COMPACT_FOOTER_H    = 12.75;  // 17px × 0.75
+const COMPACT_FOOTER_FONT = 14;
 /** 結構性尾部空白列（blank a）的緊湊列高（pt）——壓到 1pt，不佔版面。 */
 const COMPACT_BLANK_H = 1;
 /** 視覺間距列（上半／下半分隔、頁尾前留白）的緊湊列高（pt）——保留足夠高度讓段落清楚可辨。 */
@@ -101,15 +104,15 @@ function compactFontForRow(r: number, startRow: number, endRow: number): number 
 }
 
 /**
- * 依列在區塊中的位置判斷緊湊版型列高（pt）。
- * 有高度的內容列 → COMPACT_CONTENT_FONT；無高度的視覺間距列（上下半分隔、頁尾留白）→ COMPACT_GAP_H；
+ * 依列在區塊中的位置判斷緊湊版型列高（pt）。行高與字級獨立設定。
+ * 有高度的內容列 → COMPACT_CONTENT_H；無高度的視覺間距列 → COMPACT_GAP_H；
  * 尾部結構空白列 (a) → COMPACT_BLANK_H。
  */
 function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number, endRow: number): number {
     if (r === endRow) return COMPACT_BLANK_H;
-    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;
-    if (r <= startRow + 3) return COMPACT_HEADER_FONT;
-    return ws.getRow(r).height != null ? COMPACT_CONTENT_FONT : COMPACT_GAP_H;
+    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_H;
+    if (r <= startRow + 3) return COMPACT_HEADER_H;
+    return ws.getRow(r).height != null ? COMPACT_CONTENT_H : COMPACT_GAP_H;
 }
 
 /**
