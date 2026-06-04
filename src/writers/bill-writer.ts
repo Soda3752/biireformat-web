@@ -87,8 +87,8 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 const COMPACT_HEADER_FONT = 18;
 const COMPACT_CONTENT_FONT = 15;
 const COMPACT_FOOTER_FONT = 13;
-/** 空白/間距列在緊湊版型的列高（pt）。 */
-const COMPACT_BLANK_H = 10;
+/** 空白/間距列在緊湊版型的列高（pt）。壓到 1pt，避免佔用版面空間。 */
+const COMPACT_BLANK_H = 1;
 
 /** 依列在區塊中的位置判斷緊湊版型字級；endRow（尾部空白）回傳 null。 */
 function compactFontForRow(r: number, startRow: number, endRow: number): number | null {
@@ -299,18 +299,21 @@ export class BillWriter {
       }
 
       // 對應桌面版： row {} ; setRowBreak(lastRowNum) ; row {}
-      ws.addRow([]); // (a)，仍屬本頁，一併納入「壓進一頁」估算
-      const blockEnd = ws.lastRow?.number ?? blockStart;
+      // 空白列 (a)/(c) 均設為 1pt，避免佔用版面空間
+      const rowA = ws.addRow([]); // (a)：頁尾緩衝列，納入壓縮估算
+      rowA.height = 1;
+      const blockEnd = rowA.number;
 
-      // 品項過多會破版的客戶：等比例縮小列高與字級，壓回一頁
+      // 品項過多會破版的客戶：套用緊湊版型，壓回一頁；完成後確保 (a) 仍為 1pt
       fitBlockToOnePage(ws, blockStart, blockEnd);
+      rowA.height = 1;
 
-      const nextRowNumber = blockEnd + 1;
-      // 只要不是最後一位客戶，就把分頁設在 (c) 那一列
+      // 分頁起始列 (c)：先建立列再標記分頁，避免預先建立列導致高度設定失效
+      const rowC = ws.addRow([]);
+      rowC.height = 1;
       if (idx < customers.length - 1) {
-        ws.getRow(nextRowNumber).addPageBreak();
+        rowC.addPageBreak();
       }
-      ws.addRow([]); // (c)
     });
   }
 
