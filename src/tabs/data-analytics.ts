@@ -12,7 +12,7 @@ import {saveAs} from 'file-saver';
 
 import {showToast} from '@/ui/toast';
 import {icon} from '@/ui/icons';
-import type {TabDefinition} from '@/ui/tabs';
+import {type TabDefinition, settingsJumpButtonHtml} from '@/ui/tabs';
 import {parseBillFile} from '@/readers/bill-reader';
 import {Bill} from '@/domain/models/bill';
 import {ExcelRowType} from '@/domain/excel-row-data';
@@ -89,6 +89,7 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
           KPI、營收趨勢、線別佔比、商品/客戶排行、熱力圖等多維度分析。
           可同時拖入多份月份檔做月對月比較。
         </p>
+        ${settingsJumpButtonHtml('daily', '單日數量')}
       </header>
 
       <div class="analytics-uploader">

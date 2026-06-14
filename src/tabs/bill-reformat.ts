@@ -22,7 +22,7 @@ import {BillWriter} from '@/writers/bill-writer';
 import {getCashCustomer, getHalfMonthlyCustomer, getMonthlyCustomer,} from '@/writers/sheet-extension';
 
 import type {Bill} from '@/domain/models/bill';
-import type {TabDefinition} from '@/ui/tabs';
+import {type TabDefinition, settingsJumpButtonHtml} from '@/ui/tabs';
 
 const DATE_SHIFT_MIN = -30;
 const DATE_SHIFT_MAX = 30;
@@ -46,6 +46,7 @@ export function renderBillReformatPanel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">帳單產生工具</h1>
         <p class="card-subtitle">上傳帳單 .xlsx，依設定頁的「客戶排序」輸出</p>
+        ${settingsJumpButtonHtml('cargo', '帳單排序')}
       </header>
 
       <div class="notice-banner" data-role="customer-order-banner" hidden></div>

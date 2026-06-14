@@ -178,6 +178,12 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
       </nav>
 
       <section class="settings-pane is-active" data-pane="cargo" role="tabpanel">
+        <p class="settings-pane-hint">
+          這份清單同時決定商品的「排列順序」與「代送費」，會影響：<br>
+          ① <strong>帳單、代送費、生成手填本</strong>：商品的排列順序（清單裡沒有的商品會排到最後）。<br>
+          ② <strong>代送費分頁與代送費報表</strong>：每項商品的代送費金額（取自下方「代送費」欄位）。<br>
+          ③ <strong>代送費未設定提醒</strong>：清單裡沒有、或代送費欄位空白的商品，會被標出來提醒補登。
+        </p>
         <div class="settings-toolbar">
           <div class="settings-toolbar-info" data-role="cargo-status">載入中…</div>
           <div class="settings-toolbar-actions">
@@ -200,6 +206,12 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
       </section>
 
       <section class="settings-pane" data-pane="daily" role="tabpanel" hidden>
+        <p class="settings-pane-hint">
+          這份清單是商品的「分類底稿」，會影響：<br>
+          ① <strong>單日數量分頁</strong>：開啟時依這份清單列出全部商品（依分類分組）讓您填當日數量。<br>
+          ② <strong>數據分析的商品分類</strong>：每項商品歸到哪個分類依這份清單，找不到的會歸到「其他」。<br>
+          ③ <strong>數據分析的成本／毛利計算</strong>：每項商品的成本取自下方「成本」欄位，空白者會提示補填。
+        </p>
         <div class="settings-toolbar">
           <div class="settings-toolbar-info" data-role="daily-status">載入中…</div>
           <div class="settings-toolbar-actions">

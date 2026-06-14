@@ -19,6 +19,7 @@ import {processBillFile} from '@/domain/process-bill';
 import {DeliveryFeeWriter} from '@/writers/delivery-fee-writer';
 import {findDeliveryFeeStatus} from '@/domain/sorting-list';
 import {openUnsetDeliveryFeeDialog} from '@/tabs/unset-delivery-fee-dialog';
+import {settingsJumpButtonHtml} from '@/ui/tabs';
 
 import type {Bill} from '@/domain/models/bill';
 
@@ -39,6 +40,7 @@ export function renderDeliveryFeePanel(): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">代送費計算工具</h1>
         <p class="card-subtitle">上傳帳單，依商品代送費單價計算每客戶與全部總計</p>
+        ${settingsJumpButtonHtml('cargo', '帳單排序')}
       </header>
 
       <div class="card-section">

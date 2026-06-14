@@ -117,3 +117,22 @@ export function resolveInitialTab(): string {
 export function tabHash(tabId: string): string {
   return TABS.find((t) => t.id === tabId)?.hash ?? `#${DEFAULT_TAB_ID}`;
 }
+
+/**
+ * 切到「設定」分頁並開啟指定子分頁（如 'cargo' / 'daily'）。
+ * 設定面板於啟動時已渲染並常駐 DOM，故設好 hash 後直接點擊對應子分頁按鈕即可。
+ */
+export function jumpToSettingsSubtab(subtab: string): void {
+  window.location.hash = '#settings';
+  const btn = document.querySelector<HTMLButtonElement>(
+    `.settings-subnav-item[data-subtab="${subtab}"]`,
+  );
+  btn?.click();
+}
+
+/** 產生「前往設定」跳轉按鈕 HTML；點擊由 main.ts 的全域委派統一處理。 */
+export function settingsJumpButtonHtml(subtab: string, label: string): string {
+  return `<button type="button" class="btn btn-secondary btn-sm settings-jump-btn" data-settings-jump="${subtab}">
+      <span class="btn-icon">${icon('settings', 14)}</span>前往設定：${label}
+    </button>`;
+}

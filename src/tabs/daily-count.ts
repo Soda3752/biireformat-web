@@ -11,7 +11,7 @@ import {buildDailyCountFilename, formatDateDisplay, writeDailyCount} from '@/wri
 import {createDateCalendar} from '@/ui/date-picker-calendar';
 import {createDropZone} from '@/ui/drop-zone';
 import {showToast} from '@/ui/toast';
-import type {TabDefinition} from '@/ui/tabs';
+import {type TabDefinition, settingsJumpButtonHtml} from '@/ui/tabs';
 
 export function renderDailyCountPanel(tab: TabDefinition): HTMLElement {
   const panel = document.createElement('section');
@@ -29,6 +29,7 @@ export function renderDailyCountPanel(tab: TabDefinition): HTMLElement {
           <code>daily_report_list.csv</code>
           將該日商品分組統計。未對應到的商品會自動歸入「其他」分類。
         </p>
+        ${settingsJumpButtonHtml('daily', '單日數量')}
       </header>
 
       <div data-role="zone-host"></div>

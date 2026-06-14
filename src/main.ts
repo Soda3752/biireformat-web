@@ -6,6 +6,7 @@ import {showToast} from '@/ui/toast';
 import {
     hideHiddenTab,
     isHiddenTabRevealed,
+    jumpToSettingsSubtab,
     renderSideNav,
     resolveInitialTab,
     revealHiddenTab,
@@ -108,6 +109,12 @@ function bootstrap(): void {
 
   window.addEventListener('hashchange', () => {
     switchTab(resolveInitialTab());
+  });
+
+  // 各功能頁的「前往設定」跳轉按鈕（data-settings-jump）統一委派處理
+  app.addEventListener('click', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-settings-jump]');
+    if (target) jumpToSettingsSubtab(target.dataset.settingsJump!);
   });
 
     bindHiddenTabUnlock(app, navHost, switchTab);

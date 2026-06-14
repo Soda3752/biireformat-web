@@ -9,7 +9,7 @@
 import {saveAs} from 'file-saver';
 
 import {icon} from '@/ui/icons';
-import type {TabDefinition} from '@/ui/tabs';
+import {type TabDefinition, settingsJumpButtonHtml} from '@/ui/tabs';
 import {showToast} from '@/ui/toast';
 import {renderHandfillCustomerCard} from '@/ui/handfill-customer-card';
 import {openHandfillHistoryDialog} from '@/ui/handfill-history-dialog';
@@ -82,6 +82,7 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
           <p class="card-subtitle">
             為每月手填本產生空白範本 .xlsx，支援匯入既有檔案編輯、自動儲存與歷史紀錄。
           </p>
+          ${settingsJumpButtonHtml('cargo', '帳單排序')}
         </div>
       </header>
 
