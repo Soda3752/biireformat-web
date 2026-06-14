@@ -1,7 +1,7 @@
 {
   "name": "biireformat-web",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.4.1",
   "type": "module",
   "description": "青坊食品行 帳單處理工具 — 網頁版（純前端 SPA）",
   "scripts": {
