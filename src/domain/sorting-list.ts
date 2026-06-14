@@ -21,6 +21,8 @@ export interface CargoItem {
   name: string;
     /** null 代表 cargo_sort.csv 中此商品的代送費欄位為空白（未填） */
     deliveryFee: number | null;
+    /** null 代表 cargo_sort.csv 中此商品的成本欄位為空白（未填）。成本原本在 daily_report_list，已搬移到此。 */
+    cost: number | null;
 }
 
 export type DeliveryFeeStatus =
@@ -95,7 +97,15 @@ export function parseCargoSortCsv(text: string): SortingList {
             if (Number.isNaN(fee)) continue;
             deliveryFee = fee;
         }
-        items.push({id, name, deliveryFee});
+        const costRaw = String(row[3] ?? '').trim();
+        let cost: number | null;
+        if (costRaw.length === 0) {
+            cost = null;
+        } else {
+            const c = Number(costRaw);
+            cost = Number.isNaN(c) ? null : c;
+        }
+        items.push({id, name, deliveryFee, cost});
     }
 
     return {

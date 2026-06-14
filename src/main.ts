@@ -27,10 +27,11 @@ import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
 import {hideCostColumn, isCostColumnRevealed, renderSettingsPanel, revealCostColumn,} from '@/tabs/settings';
 import {loadSortingList} from '@/domain/sorting-list';
+import {migrateDailyCostToCargo, type CostMigrationResult} from '@/domain/cost-migration';
 
 const APP_VERSION = __APP_VERSION__;
 
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app root not found');
 
@@ -57,6 +58,15 @@ function bootstrap(): void {
   const navHost = app.querySelector<HTMLElement>('.sidenav');
   const mainHost = app.querySelector<HTMLElement>('.main');
   if (!navHost || !mainHost) throw new Error('UI shell not constructed');
+
+  // 一次性：把「單日數量」的成本依商品編號搬到「帳單排序」（封存舊資料、不刪除）。
+  // 必須在渲染各分頁與載入排序資料「之前」完成，確保後續讀到的是搬移後的資料。
+  let costMigration: CostMigrationResult | null = null;
+  try {
+    costMigration = await migrateDailyCostToCargo();
+  } catch (err) {
+    console.error('成本搬移失敗', err);
+  }
 
   for (const tab of TABS) {
     if (tab.id === 'bill') {
@@ -110,6 +120,25 @@ function bootstrap(): void {
   window.addEventListener('hashchange', () => {
     switchTab(resolveInitialTab());
   });
+
+  // 一次性成本搬移結果回報（有搬到或有對不上的才提示）
+  if (costMigration && (costMigration.migratedCount > 0 || costMigration.unmatched.length > 0)) {
+    if (costMigration.unmatched.length > 0) {
+      const names = costMigration.unmatched.map((u) => u.name || u.code).join('、');
+      showToast({
+        variant: 'warning',
+        title: `成本已搬移到帳單排序（${costMigration.migratedCount} 筆）`,
+        message: `有 ${costMigration.unmatched.length} 筆找不到對應的商品編號、未搬移，請手動確認：${names}`,
+        duration: 0,
+      });
+    } else {
+      showToast({
+        variant: 'success',
+        title: '成本已搬移到帳單排序',
+        message: `共 ${costMigration.migratedCount} 筆`,
+      });
+    }
+  }
 
   // 各功能頁的「前往設定」跳轉按鈕（data-settings-jump）統一委派處理
   app.addEventListener('click', (e) => {
@@ -183,10 +212,10 @@ function bindHiddenTabUnlock(
             showToast({
                 variant: 'success',
                 title: '已解鎖隱藏設定',
-                message: '「單日數量」現在會顯示「成本」欄位',
+                message: '「帳單排序」現在會顯示「成本」欄位',
             });
         }
     });
 }
 
-bootstrap();
+void bootstrap();

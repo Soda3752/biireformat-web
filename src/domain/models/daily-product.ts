@@ -1,8 +1,9 @@
 /**
  * 對應桌面版 src/main/kotlin/dailyCountStatistics/model/Product.kt
  *
- * `costRaw` 為設定頁「單日數量」第 4 欄的原始字串。
- * 空字串代表使用者尚未填入成本（數據分析頁會在下方提示）。
+ * `costRaw` 為「單日數量」CSV 第 4 欄的原始字串（已封存）。
+ * 成本已搬移到「帳單排序」管理，數據分析改讀帳單排序的成本；
+ * 此欄僅在解析舊資料時保留，目前不再參與任何成本計算。
  */
 export interface DailyProduct {
   readonly code: string;
@@ -11,16 +12,6 @@ export interface DailyProduct {
     readonly costRaw: string;
   count: number;
 }
-
-/** 解析 costRaw 為數字；空值或無法 parse 視為 0。 */
-export const getCostNumber = (product: DailyProduct): number => {
-    const n = Number(product.costRaw);
-    return Number.isFinite(n) ? n : 0;
-};
-
-/** 是否已填入成本（非空白字串）。 */
-export const hasCost = (product: DailyProduct): boolean =>
-    product.costRaw.trim().length > 0;
 
 /** 對應 Product.getTotalCount()：包含「(半)」名稱者算半個（向上取整） */
 export const getTotalCount = (product: DailyProduct): number => {

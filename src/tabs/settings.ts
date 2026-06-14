@@ -22,6 +22,7 @@ import {
 } from '@/infra/local-settings-store';
 import {invalidateSortingList, loadSortingList,} from '@/domain/sorting-list';
 import {invalidateDailyReportTemplate, onDailyReportChanged} from '@/domain/daily-report-loader';
+import {invalidateCostMap} from '@/analytics/cost-loader';
 import {
     BANK_INFO_HEADER,
     invalidateBankInfos,
@@ -57,6 +58,7 @@ interface CargoRow {
     id: string;
     name: string;
     fee: string;
+    cost: string;
 }
 
 interface DailyRow {
@@ -73,7 +75,10 @@ interface LastFiveRow {
     lastFiveDigit: string;
 }
 
-const CARGO_HEADER = ['貨品編號', '貨品名稱', '代送費'];
+const CARGO_HEADER_FULL = ['貨品編號', '貨品名稱', '代送費', '成本'];
+const CARGO_HEADER_BASE = ['貨品編號', '貨品名稱', '代送費'];
+// daily 的成本欄已搬移到 cargo（帳單排序），單日數量不再顯示成本；
+// 但內部持久化仍寫回成本欄以「封存」舊資料，故保留 FULL 表頭供序列化使用。
 const DAILY_HEADER_FULL = ['分類', '貨品編號', '貨品名稱', '成本'];
 const DAILY_HEADER_BASE = ['分類', '貨品編號', '貨品名稱'];
 const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
@@ -179,10 +184,11 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
 
       <section class="settings-pane is-active" data-pane="cargo" role="tabpanel">
         <p class="settings-pane-hint">
-          這份清單同時決定商品的「排列順序」與「代送費」，會影響：<br>
+          這份清單決定商品的「排列順序」「代送費」與「成本」，會影響：<br>
           ① <strong>帳單、代送費、生成手填本</strong>：商品的排列順序（清單裡沒有的商品會排到最後）。<br>
           ② <strong>代送費分頁與代送費報表</strong>：每項商品的代送費金額（取自下方「代送費」欄位）。<br>
-          ③ <strong>代送費未設定提醒</strong>：清單裡沒有、或代送費欄位空白的商品，會被標出來提醒補登。
+          ③ <strong>代送費未設定提醒</strong>：清單裡沒有、或代送費欄位空白的商品，會被標出來提醒補登。<br>
+          ④ <strong>數據分析的成本／毛利計算</strong>：每項商品的成本取自下方「成本」欄位，空白者會提示補填。
         </p>
         <div class="settings-toolbar">
           <div class="settings-toolbar-info" data-role="cargo-status">載入中…</div>
@@ -210,7 +216,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           這份清單是商品的「分類底稿」，會影響：<br>
           ① <strong>單日數量分頁</strong>：開啟時依這份清單列出全部商品（依分類分組）讓您填當日數量。<br>
           ② <strong>數據分析的商品分類</strong>：每項商品歸到哪個分類依這份清單，找不到的會歸到「其他」。<br>
-          ③ <strong>數據分析的成本／毛利計算</strong>：每項商品的成本取自下方「成本」欄位，空白者會提示補填。
+          （成本已搬移到「帳單排序」設定，這裡不再管理成本。）
         </p>
         <div class="settings-toolbar">
           <div class="settings-toolbar-info" data-role="daily-status">載入中…</div>
@@ -528,6 +534,7 @@ function bindCargoPane(panel: HTMLElement): void {
         const csv = serializeCargoCsv(rows);
         localSettings.setCargoSort(csv);
         invalidateSortingList();
+        invalidateCostMap();
         try {
             await loadSortingList();
         } catch (err) {
@@ -537,18 +544,22 @@ function bindCargoPane(panel: HTMLElement): void {
     };
 
     const renderTable = () => {
+        const showCost = isCostColumnRevealed();
+        const headers = showCost ? CARGO_HEADER_FULL : CARGO_HEADER_BASE;
         tableWrap.innerHTML = '';
         tableWrap.appendChild(
             buildEditableTable({
-                headers: CARGO_HEADER,
+                headers,
                 rows,
-                rowToCells: (row) => [row.id, row.name, row.fee],
+                rowToCells: (row) =>
+                    showCost ? [row.id, row.name, row.fee, row.cost] : [row.id, row.name, row.fee],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
                     if (!r) return;
                     if (colIdx === 0) r.id = value;
                     else if (colIdx === 1) r.name = value;
                     else if (colIdx === 2) r.fee = value;
+                    else if (colIdx === 3) r.cost = value;
                     void persist();
                 },
                 onDeleteRow: (rowIdx) => {
@@ -562,12 +573,12 @@ function bindCargoPane(panel: HTMLElement): void {
                     void persist();
                 },
                 onInsertAbove: (rowIdx) => {
-                    rows.splice(rowIdx, 0, {id: '', name: '', fee: '0'});
+                    rows.splice(rowIdx, 0, {id: '', name: '', fee: '0', cost: ''});
                     renderTable();
                     void persist();
                 },
                 onInsertBelow: (rowIdx) => {
-                    rows.splice(rowIdx + 1, 0, {id: '', name: '', fee: '0'});
+                    rows.splice(rowIdx + 1, 0, {id: '', name: '', fee: '0', cost: ''});
                     renderTable();
                     void persist();
                 },
@@ -582,21 +593,26 @@ function bindCargoPane(panel: HTMLElement): void {
         renderTable();
     })();
 
+    // 連點 brand icon 解鎖「成本」欄位後即時重繪
+    onCostColumnRevealed(() => {
+        renderTable();
+    });
+
     addBtn.addEventListener('click', () => {
-        rows.push({id: '', name: '', fee: '0'});
+        rows.push({id: '', name: '', fee: '0', cost: ''});
         renderTable();
         void persist();
     });
 
     exportCsvBtn.addEventListener('click', () => {
-        const csv = serializeCargoCsv(rows);
+        const csv = serializeCargoCsv(rows, isCostColumnRevealed());
         const blob = new Blob([addBom(csv)], {type: 'text/csv;charset=utf-8'});
         saveAs(blob, 'cargo_sort.csv');
     });
 
     exportXlsxBtn.addEventListener('click', async () => {
         try {
-            const blob = await buildCargoXlsxBlob(rows);
+            const blob = await buildCargoXlsxBlob(rows, isCostColumnRevealed());
             saveAs(blob, 'cargo_sort.xlsx');
         } catch (err) {
             console.error(err);
@@ -624,6 +640,7 @@ function bindCargoPane(panel: HTMLElement): void {
             rows = next;
             localSettings.setCargoSort(serializeCargoCsv(rows));
             invalidateSortingList();
+            invalidateCostMap();
             await loadSortingList();
             renderTable();
             showToast({
@@ -663,13 +680,23 @@ function parseCargoCsv(text: string): CargoRow[] {
             id: String(row[0] ?? '').trim(),
             name: String(row[1] ?? '').trim(),
             fee: String(row[2] ?? '').trim(),
+            cost: String(row[3] ?? '').trim(),
         });
     }
     return out;
 }
 
-function serializeCargoCsv(rows: CargoRow[]): string {
-    const data = [CARGO_HEADER, ...rows.map((r) => [r.id, r.name, r.fee])];
+/**
+ * 序列化 cargo_sort.csv：
+ * `includeCost` 預設為 true，內部持久化（localStorage）時保留完整 cost 欄；
+ * 使用者匯出 CSV 時若成本欄處於鎖定狀態，傳入 false 以隱藏 cost 欄位。
+ */
+function serializeCargoCsv(rows: CargoRow[], includeCost = true): string {
+    const header = includeCost ? CARGO_HEADER_FULL.slice() : CARGO_HEADER_BASE.slice();
+    const data = [
+        header,
+        ...rows.map((r) => (includeCost ? [r.id, r.name, r.fee, r.cost] : [r.id, r.name, r.fee])),
+    ];
     return Papa.unparse(data, {newline: '\n'});
 }
 
@@ -683,22 +710,31 @@ function parseCargoFromXlsxRows(xlsxRows: string[][]): CargoRow[] {
             id: (row[0] ?? '').trim(),
             name: (row[1] ?? '').trim(),
             fee: (row[2] ?? '').trim(),
+            cost: (row[3] ?? '').trim(),
         });
     }
     return out;
 }
 
-async function buildCargoXlsxBlob(rows: CargoRow[]): Promise<Blob> {
+async function buildCargoXlsxBlob(rows: CargoRow[], includeCost = true): Promise<Blob> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('cargo_sort');
-    ws.addRow(CARGO_HEADER);
+    ws.addRow(includeCost ? CARGO_HEADER_FULL : CARGO_HEADER_BASE);
     for (const r of rows) {
         const feeNum = Number(r.fee);
-        ws.addRow([r.id, r.name, Number.isFinite(feeNum) ? feeNum : r.fee]);
+        const feeCell = Number.isFinite(feeNum) ? feeNum : r.fee;
+        if (includeCost) {
+            const costNum = Number(r.cost);
+            const costCell = r.cost !== '' && Number.isFinite(costNum) ? costNum : r.cost;
+            ws.addRow([r.id, r.name, feeCell, costCell]);
+        } else {
+            ws.addRow([r.id, r.name, feeCell]);
+        }
     }
     ws.getColumn(1).width = 12;
     ws.getColumn(2).width = 24;
     ws.getColumn(3).width = 10;
+    if (includeCost) ws.getColumn(4).width = 10;
     const buf = await wb.xlsx.writeBuffer();
     return new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -737,24 +773,19 @@ function bindDailyPane(panel: HTMLElement): void {
     };
 
     const renderTable = () => {
-        const showCost = isCostColumnRevealed();
-        const headers = showCost ? DAILY_HEADER_FULL : DAILY_HEADER_BASE;
+        // 成本欄已搬移到「帳單排序」，單日數量不再顯示成本（舊資料仍封存於序列化結果中）
         tableWrap.innerHTML = '';
         tableWrap.appendChild(
             buildEditableTable({
-                headers,
+                headers: DAILY_HEADER_BASE,
                 rows,
-                rowToCells: (row) =>
-                    showCost
-                        ? [row.group, row.code, row.name, row.cost]
-                        : [row.group, row.code, row.name],
+                rowToCells: (row) => [row.group, row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
                     if (!r) return;
                     if (colIdx === 0) r.group = value;
                     else if (colIdx === 1) r.code = value;
                     else if (colIdx === 2) r.name = value;
-                    else if (colIdx === 3) r.cost = value;
                     persist();
                 },
                 onDeleteRow: (rowIdx) => {
@@ -802,11 +833,6 @@ function bindDailyPane(panel: HTMLElement): void {
         })();
     });
 
-    // 連點 brand icon 解鎖「成本」欄位後即時重繪
-    onCostColumnRevealed(() => {
-        renderTable();
-    });
-
     addBtn.addEventListener('click', () => {
         const lastGroup = rows.length > 0 ? rows[rows.length - 1].group : '';
         rows.push({group: lastGroup, code: '', name: '', cost: ''});
@@ -815,14 +841,15 @@ function bindDailyPane(panel: HTMLElement): void {
     });
 
     exportCsvBtn.addEventListener('click', () => {
-        const csv = serializeDailyCsv(rows, isCostColumnRevealed());
+        // 成本欄已搬移到帳單排序，單日數量匯出不再含成本
+        const csv = serializeDailyCsv(rows, false);
         const blob = new Blob([addBom(csv)], {type: 'text/csv;charset=utf-8'});
         saveAs(blob, 'daily_report_list.csv');
     });
 
     exportXlsxBtn.addEventListener('click', async () => {
         try {
-            const blob = await buildDailyXlsxBlob(rows, isCostColumnRevealed());
+            const blob = await buildDailyXlsxBlob(rows, false);
             saveAs(blob, 'daily_report_list.xlsx');
         } catch (err) {
             console.error(err);

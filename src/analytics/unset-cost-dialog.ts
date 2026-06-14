@@ -3,8 +3,9 @@
  *
  * 使用情境：使用者在數據分析頁的「未填成本商品」清單上點擊任一筆，
  * 顯示彈窗讓他輸入成本（單品成本，正數，允許小數）。
- * 儲存後寫回 localStorage 的 daily_report_list（同名商品所有列同步更新），
- * invalidate 兩個快取，讓呼叫方可即時 rebuildDataset。
+ * 成本已搬移到 cargo_sort（帳單排序），故儲存後寫回 localStorage 的 cargo_sort
+ * （同名商品所有列同步更新；若清單裡沒有這個商品則新增一列），
+ * invalidate sorting list 與 cost map 快取，讓呼叫方可即時 rebuildDataset。
  */
 
 import Papa from 'papaparse';
@@ -12,17 +13,16 @@ import Papa from 'papaparse';
 import {icon} from '@/ui/icons';
 import {showToast} from '@/ui/toast';
 import {localSettings} from '@/infra/local-settings-store';
-import {notifyDailyReportChanged} from '@/domain/daily-report-loader';
-import {invalidateCategoryMap} from '@/analytics/category-loader';
+import {invalidateSortingList} from '@/domain/sorting-list';
 import {invalidateCostMap} from '@/analytics/cost-loader';
 
-const DAILY_HEADER = ['分類', '編號', '品名', '成本'] as const;
-const DAILY_ASSET_URL = `${import.meta.env.BASE_URL}assets/daily_report_list.csv`;
+const CARGO_HEADER = ['貨品編號', '貨品名稱', '代送費', '成本'] as const;
+const CARGO_ASSET_URL = `${import.meta.env.BASE_URL}assets/cargo_sort.csv`;
 
-interface DailyRow {
-    group: string;
-    code: string;
+interface CargoRow {
+    id: string;
     name: string;
+    fee: string;
     cost: string;
 }
 
@@ -32,7 +32,7 @@ export interface UnsetCostDialogOptions {
 }
 
 export async function openUnsetCostDialog(options: UnsetCostDialogOptions): Promise<void> {
-    const rows = await readDailyRows();
+    const rows = await readCargoRows();
 
     const backdrop = document.createElement('div');
     backdrop.className = 'app-modal-backdrop';
@@ -146,51 +146,52 @@ export async function openUnsetCostDialog(options: UnsetCostDialogOptions): Prom
     queueMicrotask(() => costInput.focus());
 }
 
-async function persistCost(existing: DailyRow[], productName: string, costRaw: string): Promise<void> {
-    const next = existing.map((r) =>
-        r.name === productName ? {...r, cost: costRaw} : r
-    );
-    const csv = serializeDailyCsv(next);
-    localSettings.setDailyReportList(csv);
-    invalidateCategoryMap();
+async function persistCost(existing: CargoRow[], productName: string, costRaw: string): Promise<void> {
+    let matched = false;
+    const next = existing.map((r) => {
+        if (r.name === productName) {
+            matched = true;
+            return {...r, cost: costRaw};
+        }
+        return r;
+    });
+    // 帳單排序清單裡沒有這個商品 → 新增一列（編號／代送費留空，使用者可再到設定補齊）
+    if (!matched) {
+        next.push({id: '', name: productName, fee: '', cost: costRaw});
+    }
+    const csv = serializeCargoCsv(next);
+    localSettings.setCargoSort(csv);
+    invalidateSortingList();
     invalidateCostMap();
-    notifyDailyReportChanged();
 }
 
-async function readDailyRows(): Promise<DailyRow[]> {
-    const overridden = localSettings.getDailyReportList();
-    if (overridden !== null) return parseDailyCsv(overridden);
+async function readCargoRows(): Promise<CargoRow[]> {
+    const overridden = localSettings.getCargoSort();
+    if (overridden !== null) return parseCargoCsv(overridden);
 
-    const url = new URL(DAILY_ASSET_URL, document.baseURI).toString();
+    const url = new URL(CARGO_ASSET_URL, document.baseURI).toString();
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`無法讀取 daily_report_list.csv（HTTP ${res.status}）`);
-    return parseDailyCsv(await res.text());
+    if (!res.ok) throw new Error(`無法讀取 cargo_sort.csv（HTTP ${res.status}）`);
+    return parseCargoCsv(await res.text());
 }
 
-function parseDailyCsv(text: string): DailyRow[] {
-    const parsed = Papa.parse<string[]>(text, {header: false, skipEmptyLines: 'greedy'});
-    const out: DailyRow[] = [];
-    let currentGroup = '';
+function parseCargoCsv(text: string): CargoRow[] {
+    const parsed = Papa.parse<string[]>(text, {header: false, skipEmptyLines: true});
+    const out: CargoRow[] = [];
     for (let i = 1; i < parsed.data.length; i++) {
         const row = parsed.data[i];
         if (!row || row.length === 0) continue;
-        const groupRaw = String(row[0] ?? '').trim();
-        const code = String(row[1] ?? '').trim();
-        const name = String(row[2] ?? '').trim();
-        const cost = String(row[3] ?? '').trim();
-        if (groupRaw.length > 0) currentGroup = groupRaw;
-        out.push({group: currentGroup, code, name, cost});
+        out.push({
+            id: String(row[0] ?? '').trim(),
+            name: String(row[1] ?? '').trim(),
+            fee: String(row[2] ?? '').trim(),
+            cost: String(row[3] ?? '').trim(),
+        });
     }
     return out;
 }
 
-function serializeDailyCsv(rows: DailyRow[]): string {
-    const out: string[][] = [];
-    let prevGroup = '';
-    for (const r of rows) {
-        const groupCol = r.group !== prevGroup ? r.group : '';
-        out.push([groupCol, r.code, r.name, r.cost]);
-        prevGroup = r.group;
-    }
-    return Papa.unparse([DAILY_HEADER.slice(), ...out], {newline: '\n'});
+function serializeCargoCsv(rows: CargoRow[]): string {
+    const data = [CARGO_HEADER.slice(), ...rows.map((r) => [r.id, r.name, r.fee, r.cost])];
+    return Papa.unparse(data, {newline: '\n'});
 }
