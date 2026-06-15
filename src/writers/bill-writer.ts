@@ -81,12 +81,15 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
  * 緊湊版型行高（pt）與字級（pt）——依使用者指定（px × 0.75 換算）：
- *   頭4列（青坊食品行/請款單/客戶編號/名稱）→ 行高 21.75pt（29px）、字級 20pt
+ *   標題2列（青坊食品行/請款單）            → 行高 21.75pt（29px）、字級 20pt
+ *   客戶編號/名稱2列                        → 行高 21.75pt（29px）、字級 18pt（同未壓縮版型，避免被放大）
  *   中間內容（日期表頭/明細/總計）          → 行高 19.5pt（26px）、字級 15pt
  *   尾3列（訂貨專線/銀行/匯款提醒）         → 行高 12.75pt（17px）、字級 14pt
  */
 const COMPACT_HEADER_H    = 21.75;  // 29px × 0.75
 const COMPACT_HEADER_FONT = 20;
+/** 客戶編號/名稱兩列字級（pt）：與未壓縮版型一致（BILL_CUSTINFO_FONT_POI=18pt），避免壓縮反而放大。 */
+const COMPACT_CUSTINFO_FONT = 18;
 const COMPACT_CONTENT_H    = 19.5;  // 26px × 0.75
 const COMPACT_CONTENT_FONT = 15;
 const COMPACT_FOOTER_H    = 12.75;  // 17px × 0.75
@@ -100,7 +103,8 @@ const COMPACT_GAP_H = 8;
 function compactFontForRow(r: number, startRow: number, endRow: number): number | null {
     if (r === endRow) return null;                                           // 尾部空白列（a）
     if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;     // 尾3列 footer（先判，防止極短區塊重疊）
-    if (r <= startRow + 3) return COMPACT_HEADER_FONT;                      // 頭4列
+    if (r <= startRow + 1) return COMPACT_HEADER_FONT;                      // 標題2列（青坊食品行/請款單）
+    if (r <= startRow + 3) return COMPACT_CUSTINFO_FONT;                    // 客戶編號/名稱2列（維持 18pt，不放大）
     return COMPACT_CONTENT_FONT;
 }
 
@@ -121,7 +125,7 @@ function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number,
  *
  * 放得下的客戶（自然高度 ≤ PAGE_BUDGET_PT）完全不動。
  * 超出上限的客戶套用「緊湊版型」：
- *   - 頭4列 21.75pt/20pt、中間內容 19.5pt/15pt、尾3列 12.75pt/14pt（依使用者指定）。
+ *   - 標題2列 21.75pt/20pt、客戶編號名稱2列 21.75pt/18pt、中間內容 19.5pt/15pt、尾3列 12.75pt/14pt。
  *   - 列高以字級為基準計算緊湊高度；若緊湊高度仍超過上限，再等比例縮小列高
  *     （字級維持不動，確保文字可讀）。
  *
