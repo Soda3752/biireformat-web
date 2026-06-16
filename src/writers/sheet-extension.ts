@@ -165,11 +165,11 @@ function columnLetter(n: number): string {
 }
 
 /**
- * 將「總計」欄改為 Excel 公式：=ROUNDUP(SUM(合計欄各區段), 0)。
+ * 將「總計」欄改為 Excel 公式：=ROUND(SUM(合計欄各區段), 0)。
  * `productRanges` 可一段或多段（全月結帳單上下半各一段）。
- * `result` 是 Math.ceil 後的快取值，讓未重新計算的檢視仍顯示正確金額。
+ * `result` 是四捨五入後的快取值，讓未重新計算的檢視仍顯示正確金額。
  */
-function applySumRoundUpFormula(
+function applySumRoundFormula(
     row: ExcelJS.Row,
     totalColIdx: number,
     productRanges: ReadonlyArray<ProductRowRange>,
@@ -184,7 +184,7 @@ function applySumRoundUpFormula(
         })
         .join(',');
     row.getCell(totalColIdx).value = {
-        formula: `ROUNDUP(SUM(${refs}),0)`,
+        formula: `ROUND(SUM(${refs}),0)`,
         result,
     };
 }
@@ -465,14 +465,14 @@ export function createTotalRow(
   productRanges: ReadonlyArray<ProductRowRange> = []
 ): void {
   const redStyle = styles.redTotal();
-    const cachedTotal = Math.ceil(customer.getTotalPrice());
+    const cachedTotal = customer.getTotalPrice();
 
   const totalCells: StyledCell[] = [];
   for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
     totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
   const totalRow = writeMixedRow(sheet, totalCells, redStyle);
   setRowHeightPoi(totalRow, BILL_ROW_HEIGHT_POI);
-    applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
+    applySumRoundFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
   if (customer.isNeedTex) {
     const taxCells: StyledCell[] = [];
@@ -501,14 +501,14 @@ export function createTotalRowBySlots(
 ): void {
     const redStyle = styles.redTotal();
     const sources = slots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
-    const cachedTotal = Math.ceil(customer.getTotalPriceForDates(sources));
+    const cachedTotal = customer.getTotalPriceForDates(sources);
 
     const totalCells: StyledCell[] = [];
     for (let i = 0; i < rowMaxSize - 1; i++) totalCells.push(['', redStyle]);
     totalCells.push(['總計', redStyle], [cachedTotal, redStyle]);
     const totalRow = writeMixedRow(sheet, totalCells, redStyle);
     setRowHeightPoi(totalRow, BILL_ROW_HEIGHT_POI);
-    applySumRoundUpFormula(totalRow, totalCells.length, productRanges, cachedTotal);
+    applySumRoundFormula(totalRow, totalCells.length, productRanges, cachedTotal);
 
     if (customer.isNeedTex) {
         const taxCells: StyledCell[] = [];
