@@ -189,6 +189,29 @@ function applySumRoundFormula(
     };
 }
 
+/**
+ * 將「稅金」與「含稅小計」兩格改為 Excel 公式，讓編輯商品數量/單價後可自動重算：
+ *   稅金 = ROUND(總計 * 0.05, 0)（傳統四捨五入，與 getTex 一致）
+ *   含稅小計 = 總計 + 稅金
+ * `taxResult` / `sumResult` 為快取值，讓尚未重新計算的檢視仍正確顯示。
+ */
+function applyTaxFormulas(
+    totalAddr: string,
+    taxRow: ExcelJS.Row,
+    taxColIdx: number,
+    taxResult: number,
+    sumRow: ExcelJS.Row,
+    sumColIdx: number,
+    sumResult: number
+): void {
+    const taxCell = taxRow.getCell(taxColIdx);
+    taxCell.value = {formula: `ROUND(${totalAddr}*0.05,0)`, result: taxResult};
+    sumRow.getCell(sumColIdx).value = {
+        formula: `${totalAddr}+${taxCell.address}`,
+        result: sumResult,
+    };
+}
+
 /* ============================================================
    區塊建構：對應 SheetExtension.* helpers
    ============================================================ */
@@ -486,6 +509,12 @@ export function createTotalRow(
     sumCells.push([customer.getAfterTexSum(), redStyle]);
     const sumRow = writeMixedRow(sheet, sumCells, redStyle);
     setRowHeightPoi(sumRow, BILL_ROW_HEIGHT_POI);
+
+    applyTaxFormulas(
+      totalRow.getCell(totalCells.length).address,
+      taxRow, taxCells.length, customer.getTex(),
+      sumRow, sumCells.length, customer.getAfterTexSum()
+    );
   }
 }
 
@@ -522,6 +551,12 @@ export function createTotalRowBySlots(
         sumCells.push([customer.getAfterTexSumForDates(sources), redStyle]);
         const sumRow = writeMixedRow(sheet, sumCells, redStyle);
         setRowHeightPoi(sumRow, BILL_ROW_HEIGHT_POI);
+
+        applyTaxFormulas(
+            totalRow.getCell(totalCells.length).address,
+            taxRow, taxCells.length, customer.getTexForDates(sources),
+            sumRow, sumCells.length, customer.getAfterTexSumForDates(sources)
+        );
     }
 }
 
