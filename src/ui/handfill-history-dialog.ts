@@ -5,13 +5,26 @@
  * 支援載入與刪除。
  */
 
+import {saveAs} from 'file-saver';
+
 import {icon} from '@/ui/icons';
-import {type HandfillBookSummary, listBooks} from '@/infra/handfill-store';
+import {showToast} from '@/ui/toast';
+import {
+    HANDFILL_BACKUP_TYPE,
+    HANDFILL_BACKUP_VERSION,
+    type HandfillBookSummary,
+    exportAllBooks,
+    importBooks,
+    listBooks,
+} from '@/infra/handfill-store';
+import {parseHandfillBackup} from '@/readers/handfill-reader';
 
 export interface HandfillHistoryDialogOptions {
     currentId?: string;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
+    /** 合併匯入後通知外層；傳入被匯入（新增＋覆蓋）的 book id 清單，供外層判斷是否需重載當前紀錄。 */
+    onImported?: (importedIds: string[]) => void;
 }
 
 export function openHandfillHistoryDialog(opts: HandfillHistoryDialogOptions): void {
@@ -36,7 +49,16 @@ export function openHandfillHistoryDialog(opts: HandfillHistoryDialogOptions): v
       <div class="handfill-history-list" data-role="list"></div>
       <div class="handfill-history-empty" data-role="empty" hidden>尚無歷史紀錄</div>
     </div>
-    <footer class="app-modal-footer">
+    <footer class="app-modal-footer handfill-history-footer">
+      <div class="handfill-history-footer-left">
+        <button type="button" class="btn btn-secondary" data-role="export-all">
+          ${icon('download', 14)}<span>匯出全部</span>
+        </button>
+        <button type="button" class="btn btn-secondary" data-role="import-all">
+          ${icon('upload', 14)}<span>匯入</span>
+        </button>
+        <input type="file" data-role="import-file" accept=".json,application/json" hidden>
+      </div>
       <button type="button" class="btn btn-secondary" data-role="cancel">關閉</button>
     </footer>
   `;
@@ -69,6 +91,59 @@ export function openHandfillHistoryDialog(opts: HandfillHistoryDialogOptions): v
     });
     dialog.querySelector<HTMLButtonElement>('[data-role="close"]')!.addEventListener('click', close);
     dialog.querySelector<HTMLButtonElement>('[data-role="cancel"]')!.addEventListener('click', close);
+
+    // ====== 匯出全部 ======
+    const exportAllBtn = dialog.querySelector<HTMLButtonElement>('[data-role="export-all"]')!;
+    exportAllBtn.addEventListener('click', () => {
+        const books = exportAllBooks();
+        if (books.length === 0) {
+            showToast({variant: 'error', title: '無法匯出', message: '目前沒有任何歷史紀錄'});
+            return;
+        }
+        const backup = {
+            type: HANDFILL_BACKUP_TYPE,
+            version: HANDFILL_BACKUP_VERSION,
+            exportedAt: Date.now(),
+            books,
+        };
+        const blob = new Blob([JSON.stringify(backup, null, 2)], {type: 'application/json'});
+        const d = new Date();
+        const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+        saveAs(blob, `手填本備份_${stamp}.json`);
+        showToast({variant: 'success', title: '匯出完成', message: `共 ${books.length} 份手填本`});
+    });
+
+    // ====== 匯入（合併＋覆蓋）======
+    const importAllBtn = dialog.querySelector<HTMLButtonElement>('[data-role="import-all"]')!;
+    const importFileInput = dialog.querySelector<HTMLInputElement>('[data-role="import-file"]')!;
+    importAllBtn.addEventListener('click', () => importFileInput.click());
+    importFileInput.addEventListener('change', async () => {
+        const file = importFileInput.files?.[0];
+        if (!file) return;
+        try {
+            const books = parseHandfillBackup(await file.text());
+            if (!window.confirm(`確定要匯入 ${books.length} 份手填本？同一份紀錄將以檔案內容覆蓋。`)) {
+                return;
+            }
+            const {added, updated} = importBooks(books);
+            allBooks = listBooks();
+            renderList();
+            opts.onImported?.(books.map((b) => b.id));
+            showToast({
+                variant: 'success',
+                title: '匯入完成',
+                message: `新增 ${added} 份、覆蓋 ${updated} 份`,
+            });
+        } catch (err) {
+            showToast({
+                variant: 'error',
+                title: '匯入失敗',
+                message: err instanceof Error ? err.message : String(err),
+            });
+        } finally {
+            importFileInput.value = '';
+        }
+    });
 
     searchInput.addEventListener('input', () => {
         keyword = searchInput.value.trim().toLowerCase();

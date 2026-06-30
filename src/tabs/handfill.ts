@@ -494,6 +494,25 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
                     renderCustBody();
                 }
             },
+            // 合併匯入後：只有「當前編輯中的紀錄」確實被檔案覆蓋時才重載（採用檔案版本）；
+            // 未被覆蓋則維持現狀，避免丟失尚未存檔的編輯。
+            onImported: (importedIds) => {
+                if (!importedIds.includes(state.book.id)) return;
+                if (state.saveTimer !== null) {
+                    window.clearTimeout(state.saveTimer);
+                    state.saveTimer = null;
+                }
+                const reloaded = loadBook(state.book.id);
+                if (!reloaded) return;
+                state.book = reloaded;
+                if (state.book.customers.length === 0) {
+                    state.book.customers.push(createEmptyCustomer());
+                }
+                state.cursor = 0;
+                syncToolbar();
+                renderCustBody();
+                setSaveStatus('已儲存', 'saved');
+            },
         });
     });
 

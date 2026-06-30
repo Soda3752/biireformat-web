@@ -12,6 +12,10 @@ import {lineFullName} from '@/domain/models/handfill-book';
 const KEY_PREFIX = 'bii.handfill.book.';
 const ACTIVE_KEY = 'bii.handfill.activeId';
 
+/** 「匯出全部歷史紀錄」備份檔信封標記，供寫出與匯入驗證共用。 */
+export const HANDFILL_BACKUP_TYPE = 'bii.handfill.backup';
+export const HANDFILL_BACKUP_VERSION = 1;
+
 function bookKey(id: string): string {
     return KEY_PREFIX + id;
 }
@@ -84,6 +88,42 @@ export function listBooks(): HandfillBookSummary[] {
     }
     summaries.sort((a, b) => b.updatedAt - a.updatedAt);
     return summaries;
+}
+
+/** 讀出 localStorage 中所有手填本完整內容（用於「匯出全部歷史紀錄」備份）。 */
+export function exportAllBooks(): HandfillBook[] {
+    const books: HandfillBook[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith(KEY_PREFIX)) continue;
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            books.push(JSON.parse(raw) as HandfillBook);
+        } catch {
+            // skip corrupted entry
+        }
+    }
+    books.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    return books;
+}
+
+/**
+ * 合併＋覆蓋匯入：依 id 寫入。
+ *  - 同 id 已存在 → 以匯入內容覆蓋（updated）
+ *  - 新 id → 新增（added）
+ * 保留 book 自身的 createdAt / updatedAt（不重新蓋上現在時間），確保備份還原後時間正確。
+ */
+export function importBooks(books: HandfillBook[]): {added: number; updated: number} {
+    let added = 0;
+    let updated = 0;
+    for (const book of books) {
+        const exists = localStorage.getItem(bookKey(book.id)) !== null;
+        localStorage.setItem(bookKey(book.id), JSON.stringify(book));
+        if (exists) updated++;
+        else added++;
+    }
+    return {added, updated};
 }
 
 export function getActiveId(): string | null {

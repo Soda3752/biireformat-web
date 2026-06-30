@@ -4182,6 +4182,15 @@ td.cell-price-down {
     padding: var(--space-6);
 }
 
+.handfill-history-footer {
+    justify-content: space-between;
+}
+
+.handfill-history-footer-left {
+    display: flex;
+    gap: var(--space-2);
+}
+
 /* ========== 對帳 2.0 分頁 ========== */
 
 .reconcile-options {

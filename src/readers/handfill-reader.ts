@@ -32,6 +32,7 @@ import {
     normalizeManifestObject,
     readManifestRaw,
 } from '@/infra/handfill-manifest';
+import {HANDFILL_BACKUP_TYPE} from '@/infra/handfill-store';
 
 /* ====================== 對外 API ======================= */
 
@@ -93,6 +94,49 @@ export function parseHandfillBookFromJson(text: string): HandfillBook {
         throw new Error('無法辨識的格式：需為 { version, book, layoutHash } 包裝，或頂層含 customers 陣列的 HandfillBook 物件');
     }
     return normalizeBook(detected.book);
+}
+
+/**
+ * 解析「匯出全部歷史紀錄」備份檔（對應「匯出全部」寫出的 JSON）。
+ *
+ * 僅接受正確的備份信封：{ type: HANDFILL_BACKUP_TYPE, version, exportedAt, books: [...] }，
+ * 以 type 標記擋掉「選錯檔」（例如其他功能的 JSON 輸出）。
+ * 每份 book 以 normalizeBook 補齊欄位（信任來源，無版面分析），並依 id 去重
+ * （同 id 取最後一筆，避免重複 id 在匯入時互相覆蓋且計數失真）。
+ * 失敗時拋出明確訊息。
+ */
+export function parseHandfillBackup(text: string): HandfillBook[] {
+    // trim() 會一併移除前導 BOM（U+FEFF 屬 WhiteSpace），故毋須額外 stripBom
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error('檔案內容是空的');
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(trimmed);
+    } catch (err) {
+        throw new Error(`JSON 語法錯誤：${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (
+        !parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        (parsed as {type?: unknown}).type !== HANDFILL_BACKUP_TYPE ||
+        !Array.isArray((parsed as {books?: unknown}).books)
+    ) {
+        throw new Error('這不是手填本備份檔，請選擇用「匯出全部」產生的檔案');
+    }
+
+    const arr = (parsed as {books: unknown[]}).books;
+    if (arr.length === 0) throw new Error('檔案內沒有任何手填本');
+    if (arr.some((b) => !b || typeof b !== 'object')) {
+        throw new Error('備份內容格式錯誤：每筆手填本需為物件');
+    }
+
+    const byId = new Map<string, HandfillBook>();
+    for (const b of arr) {
+        const book = normalizeBook(b as Partial<HandfillBook>);
+        byId.set(book.id, book);
+    }
+    return [...byId.values()];
 }
 
 async function loadXlsxWorkbook(file: File): Promise<ExcelJS.Workbook> {
