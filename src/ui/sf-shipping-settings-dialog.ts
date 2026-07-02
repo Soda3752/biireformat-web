@@ -33,6 +33,7 @@ const FIELDS: ReadonlyArray<FieldDef> = [
     {key: 'receiverState', label: '收件方州/省 (V)', type: 'text', group: '收件方預設'},
     {key: 'receiverCountry', label: '收件方國家 (W)', type: 'text', group: '收件方預設'},
     {key: 'receiverZip', label: '收件方郵編 (X)', type: 'text', group: '收件方預設'},
+    {key: 'receiverType', label: '收件類型 (Z)', type: 'text', group: '收件方預設'},
     {key: 'productName', label: '商品名稱預設', type: 'text', group: '商品預設'},
     {key: 'productQty', label: '商品數量預設', type: 'number', group: '商品預設'},
     {key: 'productUnit', label: '單位 (AD)', type: 'text', group: '商品預設'},

@@ -51,6 +51,7 @@ const COL = {
     receiverState: 22,    // V
     receiverCountry: 23,  // W
     receiverZip: 24,      // X
+    receiverType: 26,     // Z
     productName: 28,      // AB
     productQty: 29,       // AC
     productUnit: 30,      // AD
@@ -128,6 +129,7 @@ function fillData(sheet: ExcelJS.Worksheet, payload: SfShippingPayload): void {
         setCell(row, COL.receiverState, settings.receiverState);
         setCell(row, COL.receiverCountry, settings.receiverCountry);
         setCell(row, COL.receiverZip, settings.receiverZip);
+        setCell(row, COL.receiverType, settings.receiverType);
 
         // 訂單號（A 欄為文字格式 @）
         setCell(row, COL.orderNo, order.orderNo);

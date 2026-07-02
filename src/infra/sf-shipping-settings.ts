@@ -24,6 +24,7 @@ export interface SfShippingSettings {
     receiverState: string;     // V
     receiverCountry: string;   // W
     receiverZip: string;       // X
+    receiverType: string;      // Z  公司件 / 個人件
     // 商品預設
     productName: string;       // AB
     productQty: number;        // AC
@@ -53,6 +54,7 @@ export const DEFAULT_SF_SETTINGS: SfShippingSettings = {
     receiverState: '.',
     receiverCountry: '中國臺灣',
     receiverZip: '886000',
+    receiverType: '個人件',
     productName: '麵包',
     productQty: 1,
     productUnit: '箱',
