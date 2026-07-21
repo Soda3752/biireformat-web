@@ -2,7 +2,7 @@
  * KPI 卡片計算與渲染（純 HTML，不用 ECharts）。
  */
 
-import {distinctCount, sumAmount, sumCostAmount, sumCount, sumProfit} from './aggregators';
+import {distinctCount, sumAmount, sumAmountWithTax, sumCostAmount, sumCount, sumProfit} from './aggregators';
 
 export interface KpiData {
     totalAmount: number;
@@ -35,15 +35,9 @@ export function computeKpi(dataset: {
     const totalProfit = sumProfit(rows);
     const grossMarginPct = totalAmount > 0 ? (totalProfit / totalAmount) * 100 : 0;
 
-    // 含稅金額：有 isNeedTex 旗標的客戶銷貨額外加 5%
-    let amountWithTax = 0;
-    for (const r of rows) {
-        amountWithTax += r.isNeedTex ? r.amount * 1.05 : r.amount;
-    }
-
     return {
         totalAmount,
-        totalAmountWithTax: Math.round(amountWithTax),
+        totalAmountWithTax: Math.round(sumAmountWithTax(rows)),
         totalCount,
         orderRowCount: rows.length,
         customerCount,

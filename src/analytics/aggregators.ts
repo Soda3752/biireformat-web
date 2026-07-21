@@ -133,6 +133,13 @@ export function sumAmount(rows: ReadonlyArray<AnalyticsRow>): number {
     return s;
 }
 
+/** 含稅銷貨額：有 isNeedTex 旗標的 row 額外加 5% 稅。 */
+export function sumAmountWithTax(rows: ReadonlyArray<AnalyticsRow>): number {
+    let s = 0;
+    for (const r of rows) s += r.isNeedTex ? r.amount * 1.05 : r.amount;
+    return s;
+}
+
 export function sumCount(rows: ReadonlyArray<AnalyticsRow>): number {
     let s = 0;
     for (const r of rows) s += r.count;

@@ -28,6 +28,7 @@ import {applyFilter, type FilterState} from '@/analytics/filter-engine';
 import {createFilterUi, defaultFilterState} from '@/analytics/filter-ui';
 import {createDetailTable, rowsToCsv} from '@/analytics/detail-table';
 import {createLeastProfitableTable} from '@/analytics/least-profitable-table';
+import {createRouteRevenueSection} from '@/analytics/route-revenue';
 import {createProductPriceVarianceTable} from '@/analytics/product-price-variance-table';
 import {openUncategorizedDialog} from '@/analytics/uncategorized-dialog';
 import {openUnsetCostDialog} from '@/analytics/unset-cost-dialog';
@@ -113,6 +114,8 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
         <div class="analytics-section-label">趨勢與分佈</div>
         <div class="analytics-chart-grid" data-role="chart-grid"></div>
 
+        <div data-role="route-revenue-host"></div>
+
         <div class="analytics-section-label">客戶低價值排行（相對均價損益）</div>
         <p class="analytics-section-hint">以「相對均價損益＝Σ(客戶單價 − 該商品整體均價) × 數量」由小到大排序，最虧的客戶（負值最大）排第 1 名，代表最該調漲價格。「每單位損益」可輔助判斷該漲多少。<span style="color:var(--color-success)">綠字</span>＝高於均價（營利、優質客戶）；<span style="color:var(--color-danger)">紅字</span>＝低於均價（虧損、該漲價）。紅底列＝該客戶整體毛利為負。搭配「最低數量」門檻可聚焦在「買很多但賣愈多虧愈多」的客戶。會跟隨上方篩選器即時更新。</p>
         <div data-role="least-profit-host"></div>
@@ -156,6 +159,7 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     const kpiHost = panel.querySelector<HTMLElement>('[data-role="kpi-grid"]')!;
     const chartGridHost = panel.querySelector<HTMLElement>('[data-role="chart-grid"]')!;
     const detailHost = panel.querySelector<HTMLElement>('[data-role="detail-host"]')!;
+    const routeRevenueHost = panel.querySelector<HTMLElement>('[data-role="route-revenue-host"]')!;
     const leastProfitHost = panel.querySelector<HTMLElement>('[data-role="least-profit-host"]')!;
     const priceVarianceHost = panel.querySelector<HTMLElement>('[data-role="price-variance-host"]')!;
     const exportCsvBtn = panel.querySelector<HTMLButtonElement>('[data-role="export-csv"]')!;
@@ -185,6 +189,9 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
     // ===== 子元件 =====
     const detailTable = createDetailTable();
     detailHost.appendChild(detailTable.element);
+
+    const routeRevenueSection = createRouteRevenueSection();
+    routeRevenueHost.appendChild(routeRevenueSection.element);
 
     const leastProfitableTable = createLeastProfitableTable({
         onCustomerClick: (code) => {
@@ -439,6 +446,9 @@ export function renderDataAnalyticsPanel(tab: TabDefinition): HTMLElement {
             }
             if (slot.modalChart) apply(slot.modalChart);
         }
+
+        // 各路線營收排行
+        routeRevenueSection.setRows(filteredRows);
 
         // 客戶毛利倒數排行
         leastProfitableTable.setRows(filteredRows);

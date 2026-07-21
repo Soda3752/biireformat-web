@@ -2212,6 +2212,190 @@ p {
     margin: calc(-1 * var(--space-1)) 0 var(--space-2);
 }
 
+/* 各路線營收排行 */
+.analytics-route-revenue {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+}
+
+.analytics-route-revenue-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.analytics-route-revenue-titles {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.analytics-route-revenue .analytics-section-label {
+    margin-top: 0;
+}
+
+.analytics-route-revenue-total {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.analytics-route-revenue-total-label {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+}
+
+.analytics-route-revenue-total-value {
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-primary);
+}
+
+.analytics-route-revenue-total-hint {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.analytics-route-revenue-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.analytics-route-revenue-sort {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.analytics-route-revenue-sort button {
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--font-size-sm);
+    background-color: var(--color-surface);
+    color: var(--color-text-secondary);
+    border: none;
+    cursor: pointer;
+    transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+
+.analytics-route-revenue-sort button + button {
+    border-left: 1px solid var(--color-border);
+}
+
+.analytics-route-revenue-sort button.is-active {
+    background-color: var(--color-primary);
+    color: #fff;
+}
+
+.analytics-route-revenue-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.analytics-route-bar-row {
+    display: grid;
+    grid-template-columns: 26px 56px 1fr auto 52px;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.analytics-route-bar-rank {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+}
+
+.analytics-route-bar-name {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+    white-space: nowrap;
+}
+
+.analytics-route-bar-track {
+    height: 20px;
+    background-color: var(--color-surface-hover);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.analytics-route-bar-fill {
+    height: 100%;
+    min-width: 2px;
+    background-color: var(--color-primary);
+    border-radius: var(--radius-sm);
+    transition: width var(--motion-fast);
+}
+
+.analytics-route-bar-amount {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    text-align: right;
+    white-space: nowrap;
+}
+
+.analytics-route-bar-pct {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    text-align: right;
+}
+
+.analytics-route-revenue-empty {
+    padding: var(--space-4);
+    text-align: center;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+}
+
+/* 列印：只印各路線營收排行區塊 */
+@media print {
+    body.printing-route-revenue * {
+        visibility: hidden;
+    }
+
+    body.printing-route-revenue .analytics-route-revenue,
+    body.printing-route-revenue .analytics-route-revenue * {
+        visibility: visible;
+    }
+
+    body.printing-route-revenue .analytics-route-revenue {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        padding: 0;
+        border: none;
+    }
+
+    body.printing-route-revenue .analytics-route-revenue-actions {
+        display: none;
+    }
+
+    .analytics-route-bar-fill,
+    .analytics-route-bar-rank {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+
 .analytics-least-profit-toolbar {
     flex-wrap: wrap;
     gap: var(--space-2);
