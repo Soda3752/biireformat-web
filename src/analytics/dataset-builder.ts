@@ -11,6 +11,25 @@ import type {CategoryMap} from './category-loader';
 import {UNCATEGORIZED} from './category-loader';
 import type {CostMap} from './cost-loader';
 
+/** 各線別代表地區名稱（以客戶代碼首碼對應）。 */
+const LINE_NAMES: Record<string, string> = {
+    '1': '彰化',
+    '2': '和美',
+    '3': '溪湖',
+    '4': '台中',
+    '5': '市區',
+    '6': '海線',
+    '7': '員林+石',
+    '8': '逢甲',
+    '9': '貨運',
+};
+
+/** 線別標籤：第X線 + 地區名（無對應名稱時只顯示第X線）。 */
+function lineLabel(code: string): string {
+    const key = code.substring(0, 1);
+    return `第${key}線${LINE_NAMES[key] ?? ''}`;
+}
+
 export interface LoadedFileMeta {
     id: string;
     name: string;
@@ -26,7 +45,7 @@ export interface AnalyticsRow {
     weekday: number;     // 0=日 ~ 6=六
     customerCode: string;
     customerName: string;
-    line: string;        // 第N線
+    line: string;        // 第N線+地區名（如「第1線彰化」）
     isMonthly: boolean;
     isNeedTex: boolean;
     isCashUser: boolean;
@@ -77,7 +96,7 @@ export function buildDataset(
 
         let fileRowCount = 0;
         for (const customer of bill.customerModels) {
-            const line = `第${customer.code.substring(0, 1)}線`;
+            const line = lineLabel(customer.code);
 
             for (const product of customer.productList) {
                 const category = categoryMap.get(product.name);
