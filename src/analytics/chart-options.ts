@@ -34,6 +34,12 @@ function metricValueFromDaily(p: { amount: number; count: number; profit: number
     return p.amount;
 }
 
+function metricValueFromRow(r: AnalyticsRow, metric: MetricKind): number {
+    if (metric === 'count') return r.count;
+    if (metric === 'profit') return r.profit;
+    return r.amount;
+}
+
 function metricSeriesName(metric: MetricKind): string {
     if (metric === 'count') return '銷售數量';
     if (metric === 'profit') return '毛利';
@@ -200,6 +206,126 @@ export function linePieOption(rows: ReadonlyArray<AnalyticsRow>, metric: MetricK
                     hideOverlap: true,
                 },
                 data: groups.map((g) => ({name: g.key, value: metricValueFromGroup(g, metric)})),
+            },
+        ],
+    };
+}
+
+/* ================ 路線分析：每日折線（每條線一條線） ================ */
+export function routeDailyLineOption(
+    rows: ReadonlyArray<AnalyticsRow>,
+    metric: MetricKind,
+    lines: ReadonlyArray<string>,
+    colorOf: (line: string) => string
+): EChartsOption {
+    const sel = new Set(lines);
+    const dayset = new Set<number>();
+    const perLine = new Map<string, Map<number, number>>();
+    for (const r of rows) {
+        if (!sel.has(r.line)) continue;
+        dayset.add(r.day);
+        let m = perLine.get(r.line);
+        if (!m) {
+            m = new Map();
+            perLine.set(r.line, m);
+        }
+        m.set(r.day, (m.get(r.day) ?? 0) + metricValueFromRow(r, metric));
+    }
+    const days = [...dayset].sort((a, b) => a - b);
+    const valueFmt = metricValueFmt(metric);
+    const series: NonNullable<EChartsOption['series']> = lines.map((line) => ({
+        name: line,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        data: days.map((d) => Math.round(perLine.get(line)?.get(d) ?? 0)),
+        itemStyle: {color: colorOf(line)},
+        lineStyle: {width: 2, color: colorOf(line)},
+    }));
+    return {
+        grid: {top: 20, right: 20, bottom: 50, left: 60},
+        legend: {bottom: 0, left: 'center', textStyle: {fontSize: 11}, itemWidth: 14, itemHeight: 8, itemGap: 8},
+        tooltip: {trigger: 'axis', valueFormatter: (v) => valueFmt(Number(v))},
+        xAxis: {type: 'category', data: days.map((d) => `${d}日`), axisLabel: {fontSize: 11}},
+        yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
+        series,
+    };
+}
+
+/* ================ 路線分析：佔比圓餅 ================ */
+export function routePieOption(
+    rows: ReadonlyArray<AnalyticsRow>,
+    metric: MetricKind,
+    lines: ReadonlyArray<string>,
+    colorOf: (line: string) => string
+): EChartsOption {
+    const gmap = new Map(groupBy(rows, 'line', metric, true).map((g) => [g.key, g]));
+    const valueFmt = metricValueFmt(metric);
+    // 圓餅面積不可為負，利潤虧損取 0（tooltip 仍顯示真實毛利）。
+    const data = lines.map((line) => {
+        const g = gmap.get(line);
+        return {name: line, value: g ? Math.max(0, metricValueFromGroup(g, metric)) : 0, itemStyle: {color: colorOf(line)}};
+    });
+    return {
+        tooltip: {
+            trigger: 'item',
+            formatter: (raw) => {
+                const p = Array.isArray(raw) ? raw[0] : raw;
+                const name = String(p.name ?? '');
+                const g = gmap.get(name);
+                const pctText = typeof p.percent === 'number' ? `（${p.percent.toFixed(1)}%）` : '';
+                const head = `<div style="font-weight:600">${name}</div>${p.marker ?? ''}${valueFmt(Number(p.value ?? 0))}${pctText}`;
+                return head + formatProfitFooter(g);
+            },
+        },
+        legend: {bottom: 0, left: 'center', textStyle: {fontSize: 11}, itemWidth: 12, itemHeight: 8, itemGap: 8},
+        series: [
+            {
+                type: 'pie',
+                radius: ['38%', '58%'],
+                center: ['50%', '42%'],
+                avoidLabelOverlap: true,
+                minAngle: 2,
+                label: {formatter: '{b} {d}%', fontSize: 11, overflow: 'truncate', width: 80},
+                labelLine: {length: 8, length2: 8, smooth: true},
+                labelLayout: {hideOverlap: true},
+                data,
+            },
+        ],
+    };
+}
+
+/* ================ 路線分析：總計條狀（各線比較） ================ */
+export function routeBarOption(
+    rows: ReadonlyArray<AnalyticsRow>,
+    metric: MetricKind,
+    lines: ReadonlyArray<string>,
+    colorOf: (line: string) => string
+): EChartsOption {
+    const sel = new Set(lines);
+    // groupBy 已依 metric 由大到小排序，過濾出勾選的線即為排名順序。
+    const ordered = groupBy(rows, 'line', metric, true).filter((g) => sel.has(g.key));
+    const valueFmt = metricValueFmt(metric);
+    return {
+        grid: {top: 20, right: 20, bottom: 30, left: 60},
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {type: 'shadow'},
+            formatter: (raw) => buildAxisTooltip(raw as AxisTooltipParam | AxisTooltipParam[], ordered, valueFmt),
+        },
+        xAxis: {type: 'category', data: ordered.map((g) => g.key), axisLabel: {fontSize: 11, interval: 0}},
+        yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
+        series: [
+            {
+                name: metricSeriesName(metric),
+                type: 'bar',
+                data: ordered.map((g) => ({
+                    value: metricValueFromGroup(g, metric),
+                    itemStyle: {color: colorOf(g.key), borderRadius: [4, 4, 0, 0]},
+                })),
+                barMaxWidth: 40,
+                label: {show: true, position: 'top', fontSize: 11, formatter: (p) => valueFmt(Number(p.value))},
             },
         ],
     };
