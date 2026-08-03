@@ -544,8 +544,8 @@ function bindCargoPane(panel: HTMLElement): void {
     const renderTable = () => {
         const showCost = isCostColumnRevealed();
         const headers = showCost ? CARGO_HEADER_FULL : CARGO_HEADER_BASE;
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
+        mountEditableTable(
+            tableWrap,
             buildEditableTable({
                 headers,
                 rows,
@@ -640,6 +640,7 @@ function bindCargoPane(panel: HTMLElement): void {
             invalidateSortingList();
             invalidateCostMap();
             await loadSortingList();
+            resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
                 variant: 'success',
@@ -772,8 +773,8 @@ function bindDailyPane(panel: HTMLElement): void {
 
     const renderTable = () => {
         // 成本欄已搬移到「帳單排序」，單日數量不再顯示成本（舊資料仍封存於序列化結果中）
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
+        mountEditableTable(
+            tableWrap,
             buildEditableTable({
                 headers: DAILY_HEADER_BASE,
                 rows,
@@ -873,6 +874,7 @@ function bindDailyPane(panel: HTMLElement): void {
             }
             localSettings.setDailyReportList(serializeDailyCsv(rows));
             invalidateDailyReportTemplate();
+            resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
                 variant: 'success',
@@ -1092,8 +1094,8 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     };
 
     const renderTable = () => {
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
+        mountEditableTable(
+            tableWrap,
             buildEditableTable({
                 headers: CUSTOMER_HEADER,
                 rows: entries,
@@ -1174,6 +1176,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
             entries = next;
             cfg.set(serializeCustomerOrderCsv(entries));
             cfg.invalidate();
+            resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
                 variant: 'success',
@@ -1245,8 +1248,8 @@ function bindLastFivePane(panel: HTMLElement): void {
     };
 
     const renderTable = () => {
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
+        mountEditableTable(
+            tableWrap,
             buildEditableTable({
                 headers: LAST_FIVE_HEADER,
                 rows,
@@ -1332,6 +1335,7 @@ function bindLastFivePane(panel: HTMLElement): void {
             rows = next;
             localSettings.setLastFiveDigit(serializeLastFiveCsv(rows));
             invalidateBankInfos();
+            resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
                 variant: 'success',
@@ -1459,8 +1463,8 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     };
 
     const renderTable = () => {
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
+        mountEditableTable(
+            tableWrap,
             buildEditableTable({
                 headers: DEFAULT_EXCLUDED_HEADER,
                 rows: entries,
@@ -1541,6 +1545,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
             entries = next;
             localSettings.setDefaultExcludedCustomers(serializeDefaultExcludedCustomersCsv(entries));
             invalidateDefaultExcludedCustomers();
+            resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
                 variant: 'success',
@@ -1729,6 +1734,30 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
     wrap.className = 'settings-table-scroll';
     wrap.appendChild(table);
     return wrap;
+}
+
+/**
+ * 把新表格換進 host，並沿用原本的捲動位置。
+ * 每次 renderTable 都會重建整個 .settings-table-scroll 容器（拖曳排序、上下移、插入、刪除都會觸發），
+ * 若不還原捲動位置，列表就會跳回置頂。
+ */
+function mountEditableTable(host: HTMLElement, next: HTMLElement): void {
+    const prev = host.querySelector<HTMLElement>('.settings-table-scroll');
+    const prevScrollTop = prev?.scrollTop ?? 0;
+    const prevScrollLeft = prev?.scrollLeft ?? 0;
+    host.innerHTML = '';
+    host.appendChild(next);
+    next.scrollTop = prevScrollTop;
+    next.scrollLeft = prevScrollLeft;
+}
+
+/** 整份資料被替換（匯入檔案）時先呼叫，讓接下來的重繪回到列表頂端而非沿用舊位置。 */
+function resetEditableTableScroll(host: HTMLElement): void {
+    const el = host.querySelector<HTMLElement>('.settings-table-scroll');
+    if (el) {
+        el.scrollTop = 0;
+        el.scrollLeft = 0;
+    }
 }
 
 function attachDragHandlers(
