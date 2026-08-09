@@ -82,6 +82,13 @@ const CARGO_HEADER_BASE = ['貨品編號', '貨品名稱', '代送費'];
 const DAILY_HEADER_FULL = ['分類', '貨品編號', '貨品名稱', '成本'];
 const DAILY_HEADER_BASE = ['分類', '貨品編號', '貨品名稱'];
 const LAST_FIVE_HEADER = Array.from(BANK_INFO_HEADER);
+/** 對應 LAST_FIVE_HEADER 的欄位順序，供搜尋與排序使用 */
+const LAST_FIVE_FIELDS: (keyof LastFiveRow)[] = [
+    'customerName',
+    'storeCode',
+    'customerLine',
+    'lastFiveDigit',
+];
 const CUSTOMER_HEADER = Array.from(CUSTOMER_ORDER_HEADER);
 const DEFAULT_EXCLUDED_HEADER = Array.from(DEFAULT_EXCLUDED_CUSTOMERS_HEADER);
 
@@ -258,6 +265,11 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
             </button>
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="lastfive-file" hidden />
+        </div>
+        <div class="settings-search-bar">
+          <input type="search" class="settings-search-input" data-role="lastfive-search"
+                 placeholder="搜尋客戶名稱／店家編號／線別／末五碼..." autocomplete="off">
+          <button type="button" class="settings-search-clear" data-role="lastfive-search-clear" aria-label="清除搜尋" hidden>✕</button>
         </div>
         <div class="settings-table-wrap" data-role="lastfive-table-wrap"></div>
       </section>
@@ -1229,15 +1241,23 @@ function bindLastFivePane(panel: HTMLElement): void {
     const exportXlsxBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-export-xlsx"]')!;
     const addBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-add"]')!;
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="lastfive-file"]')!;
+    const searchInput = panel.querySelector<HTMLInputElement>('[data-role="lastfive-search"]')!;
+    const searchClearBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-search-clear"]')!;
 
     let rows: LastFiveRow[] = [];
+    let query = '';
+    let sort: {col: number; dir: 'asc' | 'desc'} | null = null;
+    let matched = 0;
 
     const refreshStatus = () => {
         const overridden = localSettings.hasLastFiveDigit();
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">共 ${rows.length} 筆</span>`;
+        const countText = query.trim()
+            ? `符合 ${matched} 筆 / 共 ${rows.length} 筆`
+            : `共 ${rows.length} 筆`;
+        status.innerHTML = `${tag}<span class="settings-status-text">${countText}</span>`;
     };
 
     const persist = () => {
@@ -1247,39 +1267,65 @@ function bindLastFivePane(panel: HTMLElement): void {
         refreshStatus();
     };
 
+    /** 目前顯示的列在 rows 裡的索引；沒搜尋時就是原順序 */
+    const visibleIndices = (): number[] => {
+        const q = query.trim().toLowerCase();
+        const all = rows.map((_, i) => i);
+        if (q.length === 0) return all;
+        return all.filter((i) =>
+            LAST_FIVE_FIELDS.some((f) => rows[i][f].toLowerCase().includes(q))
+        );
+    };
+
     const renderTable = () => {
+        const view = visibleIndices();
+        const filtering = query.trim().length > 0;
+        matched = view.length;
         mountEditableTable(
             tableWrap,
             buildEditableTable({
                 headers: LAST_FIVE_HEADER,
-                rows,
+                rows: view.map((i) => rows[i]),
                 rowToCells: (row) => [row.customerName, row.storeCode, row.customerLine, row.lastFiveDigit],
-                onCellChange: (rowIdx, colIdx, value) => {
-                    const r = rows[rowIdx];
+                sort,
+                onSortHeader: (colIdx) => sortRows(colIdx),
+                // 搜尋中畫面只有部分列，搬移的目標位置無從對應，先關掉
+                reorderable: !filtering,
+                emptyText: filtering && rows.length > 0 ? '沒有符合搜尋條件的資料。' : undefined,
+                onCellChange: (dispIdx, colIdx, value) => {
+                    const r = rows[view[dispIdx]];
                     if (!r) return;
                     if (colIdx === 0) r.customerName = value;
                     else if (colIdx === 1) r.storeCode = value;
                     else if (colIdx === 2) r.customerLine = value;
                     else if (colIdx === 3) r.lastFiveDigit = value;
+                    // 改了內容後順序可能已不符排序（這裡刻意不重繪以保住游標，
+                    // 表頭箭頭留到下次重繪才更新，但點擊方向要立刻回到升冪）
+                    sort = null;
                     persist();
                 },
-                onDeleteRow: (rowIdx) => {
-                    rows.splice(rowIdx, 1);
+                onDeleteRow: (dispIdx) => {
+                    rows.splice(view[dispIdx], 1);
                     renderTable();
                     persist();
                 },
+                // 以下三個只在未搜尋時可觸發，此時 view 等同原順序，索引可直接使用；
+                // 手動搬動／插入後順序已不符任何排序，清掉 sort 免得表頭指示與實際不符
                 onMoveRow: (from, to) => {
                     moveItem(rows, from, to);
+                    sort = null;
                     renderTable();
                     persist();
                 },
                 onInsertAbove: (rowIdx) => {
                     rows.splice(rowIdx, 0, emptyLastFiveRow());
+                    sort = null;
                     renderTable();
                     persist();
                 },
                 onInsertBelow: (rowIdx) => {
                     rows.splice(rowIdx + 1, 0, emptyLastFiveRow());
+                    sort = null;
                     renderTable();
                     persist();
                 },
@@ -1288,12 +1334,58 @@ function bindLastFivePane(panel: HTMLElement): void {
         refreshStatus();
     };
 
+    /** 點表頭排序：升冪 ↔ 降冪，並把新順序一併存檔（匯出的順序也跟著變） */
+    const sortRows = (colIdx: number) => {
+        // 空表點表頭不做任何事：否則會寫入一份只有標題列的設定，狀態從「尚未建立」變成「已建立」
+        if (rows.length === 0) return;
+        const dir: 'asc' | 'desc' = sort?.col === colIdx && sort.dir === 'asc' ? 'desc' : 'asc';
+        sort = {col: colIdx, dir};
+        const field = LAST_FIVE_FIELDS[colIdx];
+        const sign = dir === 'asc' ? 1 : -1;
+        rows.sort((a, b) => sign * a[field].localeCompare(b[field], 'zh-Hant', {numeric: true}));
+        resetEditableTableScroll(tableWrap);
+        renderTable();
+        persist();
+    };
+
+    const clearSearch = () => {
+        searchInput.value = '';
+        query = '';
+        searchClearBtn.hidden = true;
+    };
+
     // 初始載入：localStorage 沒值就空陣列起步（與其他兩個不同，無內建 fallback）
     rows = loadLastFiveRows();
     renderTable();
 
+    const applySearch = () => {
+        query = searchInput.value;
+        searchClearBtn.hidden = query.length === 0;
+        resetEditableTableScroll(tableWrap);
+        renderTable();
+    };
+
+    searchInput.addEventListener('input', (ev) => {
+        searchClearBtn.hidden = searchInput.value.length === 0;
+        // 中文輸入法組字途中也會發 input，這時拿到的是拼音片段（ㄨㄤ…），
+        // 直接篩選會讓列表在打字中途變成「沒有符合的資料」，等組字完成再篩
+        if ((ev as InputEvent).isComposing) return;
+        applySearch();
+    });
+    searchInput.addEventListener('compositionend', applySearch);
+
+    searchClearBtn.addEventListener('click', () => {
+        clearSearch();
+        resetEditableTableScroll(tableWrap);
+        renderTable();
+        searchInput.focus();
+    });
+
     addBtn.addEventListener('click', () => {
+        // 新增的空白列不符合任何搜尋條件，先清掉搜尋才看得到它
+        clearSearch();
         rows.push(emptyLastFiveRow());
+        sort = null;
         renderTable();
         persist();
     });
@@ -1335,6 +1427,8 @@ function bindLastFivePane(panel: HTMLElement): void {
             rows = next;
             localSettings.setLastFiveDigit(serializeLastFiveCsv(rows));
             invalidateBankInfos();
+            clearSearch();
+            sort = null;
             resetEditableTableScroll(tableWrap);
             renderTable();
             showToast({
@@ -1593,23 +1687,53 @@ interface EditableTableSpec<T> {
     onMoveRow: (from: number, to: number) => void;
     onInsertAbove: (rowIdx: number) => void;
     onInsertBelow: (rowIdx: number) => void;
+    /** 傳入 onSortHeader 時表頭可點擊排序；sort 為目前排序狀態（null = 未排序） */
+    sort?: {col: number; dir: 'asc' | 'desc'} | null;
+    onSortHeader?: (colIdx: number) => void;
+    /** false 時隱藏拖曳／上下移／插入：畫面被篩選過，搬移會搬到錯的位置 */
+    reorderable?: boolean;
+    /** 沒有資料時顯示的文字 */
+    emptyText?: string;
 }
 
 function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
+    const reorderable = spec.reorderable !== false;
     const table = document.createElement('table');
     table.className = 'settings-table';
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    const thGrip = document.createElement('th');
-    thGrip.className = 'settings-table-grip-col';
-    thGrip.setAttribute('aria-label', '拖曳排序');
-    headerRow.appendChild(thGrip);
-    for (const h of spec.headers) {
+    if (reorderable) {
+        const thGrip = document.createElement('th');
+        thGrip.className = 'settings-table-grip-col';
+        thGrip.setAttribute('aria-label', '拖曳排序');
+        headerRow.appendChild(thGrip);
+    }
+    spec.headers.forEach((h, colIdx) => {
         const th = document.createElement('th');
         th.textContent = h;
+        const onSortHeader = spec.onSortHeader;
+        if (onSortHeader) {
+            const active = spec.sort?.col === colIdx ? spec.sort : null;
+            th.className = 'is-sortable';
+            th.tabIndex = 0;
+            // 不加 role="button"：那會蓋掉 columnheader，讓 aria-sort 對螢幕閱讀器失效
+            th.setAttribute('aria-sort', active ? (active.dir === 'asc' ? 'ascending' : 'descending') : 'none');
+            th.title = `點擊依「${h}」排序`;
+            const mark = document.createElement('span');
+            mark.className = active ? 'sort-indicator is-active' : 'sort-indicator';
+            mark.textContent = active ? (active.dir === 'asc' ? '↑' : '↓') : '⇅';
+            th.appendChild(mark);
+            th.addEventListener('click', () => onSortHeader(colIdx));
+            th.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                    ev.preventDefault();
+                    onSortHeader(colIdx);
+                }
+            });
+        }
         headerRow.appendChild(th);
-    }
+    });
     const thAction = document.createElement('th');
     thAction.className = 'settings-table-action-col';
     thAction.textContent = '';
@@ -1622,9 +1746,9 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
     if (spec.rows.length === 0) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = spec.headers.length + 2;
+        td.colSpan = spec.headers.length + (reorderable ? 2 : 1);
         td.className = 'settings-table-empty';
-        td.textContent = '尚無資料，點選「新增一列」或「匯入 CSV」開始。';
+        td.textContent = spec.emptyText ?? '尚無資料，點選「新增一列」或「匯入 CSV」開始。';
         tr.appendChild(td);
         tbody.appendChild(tr);
     } else {
@@ -1633,23 +1757,25 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
             tr.dataset.rowIdx = String(rowIdx);
 
             // grip column —— 拖曳手柄
-            const gripTd = document.createElement('td');
-            gripTd.className = 'settings-table-grip-col';
-            const gripBtn = document.createElement('button');
-            gripBtn.type = 'button';
-            gripBtn.className = 'settings-table-grip';
-            gripBtn.title = '拖曳調整排序';
-            gripBtn.setAttribute('aria-label', '拖曳調整排序');
-            gripBtn.innerHTML = icon('grip', 16);
-            // 預設整列 draggable=false，僅當在 grip 上 mousedown 才暫時打開，避免影響輸入框文字選取
-            gripBtn.addEventListener('mousedown', () => {
-                tr.setAttribute('draggable', 'true');
-            });
-            gripBtn.addEventListener('mouseup', () => {
-                tr.setAttribute('draggable', 'false');
-            });
-            gripTd.appendChild(gripBtn);
-            tr.appendChild(gripTd);
+            if (reorderable) {
+                const gripTd = document.createElement('td');
+                gripTd.className = 'settings-table-grip-col';
+                const gripBtn = document.createElement('button');
+                gripBtn.type = 'button';
+                gripBtn.className = 'settings-table-grip';
+                gripBtn.title = '拖曳調整排序';
+                gripBtn.setAttribute('aria-label', '拖曳調整排序');
+                gripBtn.innerHTML = icon('grip', 16);
+                // 預設整列 draggable=false，僅當在 grip 上 mousedown 才暫時打開，避免影響輸入框文字選取
+                gripBtn.addEventListener('mousedown', () => {
+                    tr.setAttribute('draggable', 'true');
+                });
+                gripBtn.addEventListener('mouseup', () => {
+                    tr.setAttribute('draggable', 'false');
+                });
+                gripTd.appendChild(gripBtn);
+                tr.appendChild(gripTd);
+            }
 
             // 資料欄位
             const cells = spec.rowToCells(row);
@@ -1672,43 +1798,45 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
             const actions = document.createElement('div');
             actions.className = 'settings-table-actions';
 
-            const insertAboveBtn = document.createElement('button');
-            insertAboveBtn.type = 'button';
-            insertAboveBtn.className = 'settings-table-row-btn';
-            insertAboveBtn.title = '往上插入一筆';
-            insertAboveBtn.setAttribute('aria-label', '在此列上方插入一筆');
-            insertAboveBtn.innerHTML = icon('row-insert-above', 16);
-            insertAboveBtn.addEventListener('click', () => spec.onInsertAbove(rowIdx));
-            actions.appendChild(insertAboveBtn);
+            if (reorderable) {
+                const insertAboveBtn = document.createElement('button');
+                insertAboveBtn.type = 'button';
+                insertAboveBtn.className = 'settings-table-row-btn';
+                insertAboveBtn.title = '往上插入一筆';
+                insertAboveBtn.setAttribute('aria-label', '在此列上方插入一筆');
+                insertAboveBtn.innerHTML = icon('row-insert-above', 16);
+                insertAboveBtn.addEventListener('click', () => spec.onInsertAbove(rowIdx));
+                actions.appendChild(insertAboveBtn);
 
-            const upBtn = document.createElement('button');
-            upBtn.type = 'button';
-            upBtn.className = 'settings-table-row-btn';
-            upBtn.title = '上移';
-            upBtn.setAttribute('aria-label', '上移此列');
-            upBtn.innerHTML = icon('chevron-up', 16);
-            upBtn.disabled = rowIdx === 0;
-            upBtn.addEventListener('click', () => spec.onMoveRow(rowIdx, rowIdx - 1));
-            actions.appendChild(upBtn);
+                const upBtn = document.createElement('button');
+                upBtn.type = 'button';
+                upBtn.className = 'settings-table-row-btn';
+                upBtn.title = '上移';
+                upBtn.setAttribute('aria-label', '上移此列');
+                upBtn.innerHTML = icon('chevron-up', 16);
+                upBtn.disabled = rowIdx === 0;
+                upBtn.addEventListener('click', () => spec.onMoveRow(rowIdx, rowIdx - 1));
+                actions.appendChild(upBtn);
 
-            const downBtn = document.createElement('button');
-            downBtn.type = 'button';
-            downBtn.className = 'settings-table-row-btn';
-            downBtn.title = '下移';
-            downBtn.setAttribute('aria-label', '下移此列');
-            downBtn.innerHTML = icon('chevron-down', 16);
-            downBtn.disabled = rowIdx === spec.rows.length - 1;
-            downBtn.addEventListener('click', () => spec.onMoveRow(rowIdx, rowIdx + 1));
-            actions.appendChild(downBtn);
+                const downBtn = document.createElement('button');
+                downBtn.type = 'button';
+                downBtn.className = 'settings-table-row-btn';
+                downBtn.title = '下移';
+                downBtn.setAttribute('aria-label', '下移此列');
+                downBtn.innerHTML = icon('chevron-down', 16);
+                downBtn.disabled = rowIdx === spec.rows.length - 1;
+                downBtn.addEventListener('click', () => spec.onMoveRow(rowIdx, rowIdx + 1));
+                actions.appendChild(downBtn);
 
-            const insertBelowBtn = document.createElement('button');
-            insertBelowBtn.type = 'button';
-            insertBelowBtn.className = 'settings-table-row-btn';
-            insertBelowBtn.title = '往下插入一筆';
-            insertBelowBtn.setAttribute('aria-label', '在此列下方插入一筆');
-            insertBelowBtn.innerHTML = icon('row-insert-below', 16);
-            insertBelowBtn.addEventListener('click', () => spec.onInsertBelow(rowIdx));
-            actions.appendChild(insertBelowBtn);
+                const insertBelowBtn = document.createElement('button');
+                insertBelowBtn.type = 'button';
+                insertBelowBtn.className = 'settings-table-row-btn';
+                insertBelowBtn.title = '往下插入一筆';
+                insertBelowBtn.setAttribute('aria-label', '在此列下方插入一筆');
+                insertBelowBtn.innerHTML = icon('row-insert-below', 16);
+                insertBelowBtn.addEventListener('click', () => spec.onInsertBelow(rowIdx));
+                actions.appendChild(insertBelowBtn);
+            }
 
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
@@ -1726,7 +1854,7 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
         });
     }
 
-    attachDragHandlers(tbody, spec.onMoveRow);
+    if (reorderable) attachDragHandlers(tbody, spec.onMoveRow);
 
     table.appendChild(tbody);
 

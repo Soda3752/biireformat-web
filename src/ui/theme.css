@@ -1244,6 +1244,78 @@ p {
     font-variant-numeric: tabular-nums;
 }
 
+.settings-search-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    max-width: 360px;
+    width: 100%;
+    margin-bottom: var(--space-3);
+}
+
+.settings-search-input {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    padding-right: 32px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.settings-search-input::placeholder {
+    color: var(--color-text-muted);
+}
+
+.settings-search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+/* 移除瀏覽器 native search clear button，用自製按鈕替代 */
+.settings-search-input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.settings-search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0;
+}
+
+.settings-search-clear[hidden] {
+    display: none;
+}
+
+.settings-search-clear:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+}
+
+.settings-search-clear:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
+
 .settings-table-wrap {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -1279,6 +1351,28 @@ p {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
+}
+
+/* cursor / user-select / .sort-indicator 沿用全域的 th.is-sortable 樣式；
+   這裡只補：表頭底色與 .settings-table th 相同，hover 需改用文字色才看得出回饋 */
+.settings-table th.is-sortable:hover {
+    color: var(--color-text-primary);
+}
+
+.settings-table th.is-sortable:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+
+/* 共用的 .sort-indicator 是為「空白佔位」調的 opacity 0.4；
+   這裡未排序時放的是真的 ⇅ 符號，要看得見才知道表頭可以點 */
+.settings-table th.is-sortable .sort-indicator:not(.is-active) {
+    opacity: 0.7;
+}
+
+.settings-table th.is-sortable:hover .sort-indicator:not(.is-active) {
+    color: var(--color-text-primary);
+    opacity: 1;
 }
 
 .settings-table td {
