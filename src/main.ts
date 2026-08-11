@@ -22,6 +22,7 @@ import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderBankNameFormatV2Panel} from '@/tabs/bank-name-format-v2';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderHandfillPanel} from '@/tabs/handfill';
+import {renderHandfillTransferPanel} from '@/tabs/handfill-transfer';
 import {renderSfShippingPanel} from '@/tabs/sf-shipping';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
@@ -83,6 +84,8 @@ async function bootstrap(): Promise<void> {
       mainHost.appendChild(renderDailyCountPanel(tab));
     } else if (tab.id === 'handfill') {
         mainHost.appendChild(renderHandfillPanel(tab));
+    } else if (tab.id === 'handfill-transfer') {
+        mainHost.appendChild(renderHandfillTransferPanel(tab));
     } else if (tab.id === 'sf-shipping') {
         mainHost.appendChild(renderSfShippingPanel(tab));
     } else if (tab.id === 'analytics') {

@@ -16,6 +16,7 @@ export const TABS: readonly TabDefinition[] = [
     {id: 'bank-v2', label: '對帳 2.0', icon: 'bank', hash: '#bank-v2'},
     {id: 'daily', label: '單日數量', icon: 'clipboard-list', hash: '#daily'},
     {id: 'handfill', label: '生成手填本', icon: 'document', hash: '#handfill'},
+    {id: 'handfill-transfer', label: '手填本搬移', icon: 'transfer', hash: '#handfill-transfer'},
     {id: 'sf-shipping', label: '順豐託運單', icon: 'truck', hash: '#sf-shipping'},
   {id: 'analytics', label: '數據分析', icon: 'chart', hash: '#analytics', hidden: true},
     {

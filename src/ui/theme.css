@@ -4281,6 +4281,191 @@ td.cell-price-down {
     text-align: right;
 }
 
+/* ============================================================
+   手填本搬移
+   ============================================================ */
+
+.hf-transfer-books {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.hf-transfer-book-field {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+
+.hf-transfer-arrow {
+    display: inline-flex;
+    align-items: center;
+    padding-bottom: var(--space-2);
+    color: var(--color-text-muted);
+}
+
+.hf-transfer-reload {
+    margin-bottom: 1px;
+}
+
+.hf-transfer-hint {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-hover);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+.hf-transfer-list-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-2);
+    font-size: var(--font-size-sm);
+}
+
+.hf-transfer-checkall {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    user-select: none;
+}
+
+.hf-transfer-count {
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.hf-transfer-target-info {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.hf-transfer-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: var(--space-1);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.hf-transfer-item {
+    display: grid;
+    grid-template-columns: 24px 80px 180px 1fr 60px 72px;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    user-select: none;
+}
+
+.hf-transfer-item:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+}
+
+.hf-transfer-item-check {
+    cursor: pointer;
+}
+
+.hf-transfer-item-id {
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.hf-transfer-item-name {
+    color: var(--color-text-primary);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hf-transfer-item-products {
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hf-transfer-item-meta {
+    color: var(--color-text-muted);
+    text-align: right;
+}
+
+.hf-transfer-item-flag {
+    text-align: right;
+    font-size: var(--font-size-xs);
+}
+
+.hf-transfer-item-flag.is-dup {
+    color: var(--color-warning, var(--color-danger));
+}
+
+.hf-transfer-empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-6);
+}
+
+.hf-transfer-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+}
+
+.hf-transfer-optgroup {
+    flex: 1 1 260px;
+    margin: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.hf-transfer-optgroup legend {
+    padding: 0 var(--space-2);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+}
+
+.hf-transfer-optgroup label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    cursor: pointer;
+}
+
+.hf-transfer-footer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-top: var(--space-4);
+}
+
+.hf-transfer-result {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
 /* 歷史紀錄對話框 */
 .handfill-history-modal {
     width: min(640px, 90vw);

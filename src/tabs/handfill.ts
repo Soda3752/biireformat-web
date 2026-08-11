@@ -39,6 +39,8 @@ interface PanelState {
     saveStatusEl: HTMLElement | null;
     draggingIndex: number | null;
     cargoNames: ReadonlyArray<string>;
+    /** 上一次自動儲存失敗（例如 localStorage 已滿）：記憶體內容比儲存的新，不可被覆蓋 */
+    saveFailed: boolean;
 }
 
 function readCargoNamesFromCache(): ReadonlyArray<string> {
@@ -70,6 +72,7 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
         saveStatusEl: null,
         draggingIndex: null,
         cargoNames: readCargoNamesFromCache(),
+        saveFailed: false,
     };
 
     setActiveId(state.book.id);
@@ -200,6 +203,10 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
     }
 
     function setSaveStatus(text: string, variant: 'saving' | 'saved' | 'error' = 'saved'): void {
+        // 'saved' / 'error' 同時代表「記憶體與 localStorage 是否同步」，統一在這裡維護 saveFailed，
+        // 免得各存檔路徑各自漏掉而讓切分頁的重讀機制卡死（見 reloadFromStorage）
+        if (variant === 'saved') state.saveFailed = false;
+        else if (variant === 'error') state.saveFailed = true;
         if (!state.saveStatusEl) return;
         state.saveStatusEl.textContent = text;
         state.saveStatusEl.dataset.variant = variant;
@@ -440,7 +447,9 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
             setSaveStatus('解析中…', 'saving');
             applyImportedBook(await readHandfillBook(file));
         } catch (err) {
-            setSaveStatus('已儲存', 'saved');
+            // 解析失敗＝完全沒有寫入，只還原「解析中…」的文字，不可把狀態宣告成已同步
+            if (state.saveFailed) setSaveStatus('儲存失敗', 'error');
+            else setSaveStatus('已儲存', 'saved');
             showToast({
                 variant: 'error',
                 title: '匯入失敗',
@@ -492,6 +501,7 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
                     setActiveId(state.book.id);
                     syncToolbar();
                     renderCustBody();
+                    setSaveStatus('已儲存', 'saved');
                 }
             },
             // 合併匯入後：只有「當前編輯中的紀錄」確實被檔案覆蓋時才重載（採用檔案版本）；
@@ -596,6 +606,53 @@ export function renderHandfillPanel(tab: TabDefinition): HTMLElement {
         renderCustBody();
         scheduleSave();
     });
+
+    // ====== 與「手填本搬移」分頁的協調 ======
+    // 那一頁直接改 localStorage 裡的手填本，因此本頁切離時先把 debounce 中的變更寫回，
+    // 切回時再重讀（含 activeId 可能已被指向另一本），避免用舊的記憶體狀態覆蓋搬移結果。
+    function reloadFromStorage(): void {
+        // 上次存檔失敗時，記憶體才是最新的，重讀會把使用者的編輯救不回來
+        if (state.saveFailed) return;
+        const id = getActiveId();
+        const stored = (id && loadBook(id)) || null;
+        if (!stored) return;
+        const sameBook = stored.id === state.book.id;
+        // 內容沒變就不重繪，保住當前游標與輸入焦點
+        if (sameBook && JSON.stringify(stored) === JSON.stringify(state.book)) return;
+        state.book = stored;
+        if (state.book.customers.length === 0) {
+            state.book.customers.push(createEmptyCustomer());
+        }
+        if (!sameBook) {
+            state.cursor = 0;
+            state.viewMode = 'list';
+        }
+        syncToolbar();
+        renderCustBody();
+        setSaveStatus('已儲存', 'saved');
+    }
+
+    const activeObserver = new MutationObserver(() => {
+        if (panel.classList.contains('is-active')) {
+            reloadFromStorage();
+        } else if (state.saveTimer !== null) {
+            window.clearTimeout(state.saveTimer);
+            state.saveTimer = null;
+            try {
+                saveBook(state.book);
+                setActiveId(state.book.id);
+                setSaveStatus('已儲存', 'saved');
+            } catch (err) {
+                setSaveStatus('儲存失敗', 'error');
+                showToast({
+                    variant: 'error',
+                    title: '自動儲存失敗',
+                    message: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
+    });
+    activeObserver.observe(panel, {attributeFilter: ['class']});
 
     // ====== 初始 render ======
     syncToolbar();
