@@ -21,6 +21,8 @@ import {findMatchesFromCandidates} from '@/domain/bank-match-service';
 
 export const FEE = 15;
 export const RESULT_SHEET = '銀行對帳結果';
+/** 使用者確認「這是新客戶（清單沒有）」時的標記：照打的名字存，不做模糊比對。 */
+export const NEW_CUSTOMER_FLAG = '已確認（新客戶）';
 
 export type AutoReconcileStatus = 'OK' | '需確認' | '金額不符' | '找不到' | '不在明細';
 
@@ -79,6 +81,12 @@ export interface ReconcileEntry extends BankEntry {
     confirmed: boolean;
     who: string;
     custNames: string[];
+    /** 使用者在本次對帳對「金額不符」填的原因備註（填了即視為已對上）。 */
+    userNote?: string;
+    /** 金額不符可回填的期別（該客戶在明細有的期別）。 */
+    periodOptions?: string[];
+    /** 金額不符要回填的期別：使用者選的，否則預設原本紅字提醒那一期。 */
+    notePeriod?: string;
 }
 
 export interface AutoReconcileResult {
@@ -276,6 +284,10 @@ export interface ReconcileInput {
     bankInfos: ReadonlyArray<BankInfo>;
     memory?: Record<string, MemoryEntry>;
     rowMemory?: Record<number, MemoryEntry>;
+    /** 本次對帳的金額不符備註（以 idx 為鍵）；有備註的金額不符改算 OK。 */
+    rowNotes?: Record<number, string>;
+    /** 本次對帳金額不符的回填期別（以 idx 為鍵）；沒選用預設期別。 */
+    rowNotePeriods?: Record<number, string>;
     done?: Set<string>;
 }
 
@@ -283,6 +295,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const {bank, stmts, acct, bankInfos} = input;
     const memory = input.memory ?? {};
     const rowMemory = input.rowMemory ?? {};
+    const rowNotes = input.rowNotes ?? {};
+    const rowNotePeriods = input.rowNotePeriods ?? {};
     const done = input.done ?? new Set<string>();
     if (stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -369,7 +383,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     function candidates(key: string, idx: number): { c: string[]; missing: string[]; src: string } {
         const ov = rowMemory[idx] || override[key];
         if (ov) {
-            const t = ov.flag.includes('現付') ? [] : (cust[ov.name] ? [ov.name] : toCodes(ov.name));
+            const exact = cust[ov.name] ? ov.name : name2code[ov.name];
+            const t = (ov.flag.includes('現付') || ov.flag.includes('新客戶')) ? []
+                : (exact ? [exact] : toCodes(ov.name));
             return {c: t, missing: t.length ? [] : [ov.name], src: '已確認'};
         }
         let c: string[] = [];
@@ -575,7 +591,40 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             : r.alloc.map(([c]) => cust[c].name).join('、');
         r.custNames = r.alloc.map(([c]) => cust[c].name);
     }
+
+    // 金額不符：決定回填期別（預設＝原本紅字提醒那一期），填了備註就照一般 OK 回填
+    const used = new Set<string>();
+    for (const r of results) {
+        if (r.status !== 'OK' && r.status !== '需確認') continue;
+        r.alloc.forEach(([c, run]) => run.forEach((per) => used.add(c + '|' + per)));
+    }
+    for (const r of results) {
+        if (r.status !== '金額不符') continue;
+        const code = r.alloc[0][0];
+        const opts = PERIODS.filter((k) => cust[code].p[k]);
+        if (!opts.length) continue;
+        const def = [...opts].reverse().find((k) => !used.has(code + '|' + k)) ?? opts[opts.length - 1];
+        const want = rowNotePeriods[r.idx];
+        r.periodOptions = opts;
+        r.notePeriod = want && opts.includes(want) ? want : def;
+        const memo = rowNotes[r.idx]?.trim();
+        if (!memo) continue;
+        r.userNote = memo;
+        r.status = 'OK';
+        r.alloc = [[code, [r.notePeriod]]];
+        r.who = fmtAlloc(r.alloc);
+        r.note = `備註：${memo}；${r.note}`;
+    }
     return {results, cust, PERIODS, skipped, names: names.sort()};
+}
+
+/** 依相似度列出最接近的客戶名稱（「改成」找不到完全一致的名字時給使用者挑）。 */
+export function suggestNames(n: string, names: ReadonlyArray<string>, limit = 6): string[] {
+    return names.map((x) => [sim(n, x), x] as const)
+        .filter(([v]) => v >= 0.25)
+        .sort((a, b) => b[0] - a[0])
+        .slice(0, limit)
+        .map(([, x]) => x);
 }
 
 // ---------- 寫回 Excel

@@ -5599,6 +5599,49 @@ td.cell-price-down {
     font-size: var(--font-size-xs);
 }
 
+.auto-recon-act .auto-recon-memo {
+    width: 180px;
+}
+
+.auto-recon-act .auto-recon-period {
+    width: auto;
+    padding: 2px var(--space-1);
+    font-size: var(--font-size-xs);
+}
+
+.auto-recon-user-note {
+    color: var(--color-text);
+    font-weight: 600;
+}
+
+.auto-recon-pick-row > td {
+    background: var(--color-surface-muted, rgba(255, 242, 204, 0.35));
+}
+
+.auto-recon-pick {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+}
+
+.auto-recon-pick-title {
+    font-weight: 600;
+}
+
+.auto-recon-pick-body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.auto-recon-pick-select {
+    min-width: 160px;
+    max-width: 220px;
+    font-size: var(--font-size-xs);
+}
+
 .auto-recon-help {
     margin: 0;
     font-size: var(--font-size-xs);

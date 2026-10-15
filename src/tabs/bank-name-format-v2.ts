@@ -18,11 +18,13 @@ import type {AcctRow, AutoReconcileResult, AutoReconcileStatus, BankEntry, Memor
 import {
     cellVal,
     isStatementWorkbook,
+    NEW_CUSTOMER_FLAG,
     readAcct,
     readBankRows,
     readDone,
     readStmt,
     reconcile,
+    suggestNames,
     writeBack,
 } from '@/domain/auto-reconcile-engine';
 import {getBankInfos, loadBankInfos} from '@/domain/bank-info-loader';
@@ -194,6 +196,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     let stmtFiles: StmtFileEntry[] = [];
     let acctFile: { name: string; buf: ArrayBuffer; rows: AcctRow[] } | null = null;
     let rowMemory: Record<number, MemoryEntry> = {};
+    /** 金額不符原因備註：只記本次對帳，不寫進這台電腦的記憶 */
+    let rowNotes: Record<number, string> = {};
+    /** 金額不符要回填的期別（使用者在下拉選的）：只記本次對帳 */
+    let rowNotePeriods: Record<number, string> = {};
+    /** 本次取消的末五碼資料 .xlsx「已確認 / 現付」紀錄（帳號/備註）；不改原檔，下載時移除 */
+    const acctCancelled = new Set<string>();
+    /** 「改成」打的名字在明細找不到一模一樣的客戶，等使用者挑選 */
+    let pending: { idx: number; name: string } | null = null;
     let filter: FilterKey = 'all';
     let query = '';
     let lastResult: AutoReconcileResult | null = null;
@@ -409,10 +419,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             lastResult = reconcile({
                 bank,
                 stmts,
-                acct: acctFile?.rows ?? [],
+                acct: (acctFile?.rows ?? []).filter((x) => !isCancelledAcct(x)),
                 bankInfos: getBankInfos(),
                 memory,
                 rowMemory,
+                rowNotes,
+                rowNotePeriods,
                 done: latest ? readDone(latest) : new Set(),
             });
             lastStmts = ss;
@@ -424,6 +436,9 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
         render();
     };
+
+    const isConfirmFlag = (flag: string): boolean => /已確認|現付/.test(flag);
+    const isCancelledAcct = (x: AcctRow): boolean => isConfirmFlag(x.flag) && acctCancelled.has(x.val);
 
     /** 重算（不重讀檔）：確認紀錄變動時使用 */
     const rerun = () => void rebuild();
@@ -505,26 +520,68 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
         tbody.innerHTML = shown.map((x) => {
             const canOk = x.custNames.length === 1 && !x.confirmed;
+            const memoInput = x.status === '金額不符'
+                ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo" placeholder="原因備註（例：扣30手續費）"
+                          aria-label="金額不符原因備註" data-memo="${x.idx}">`
+                : '';
+            const periodSelect = x.periodOptions?.length && x.notePeriod
+                ? `<select class="reconcile-options-input auto-recon-period" data-memo-period="${x.idx}"
+                           aria-label="回填到哪一期" title="填了備註後，實收金額與收款日回填到這一期">
+                    ${x.periodOptions.map((k) => `<option value="${escapeHtml(k)}"${k === x.notePeriod ? ' selected' : ''}>回填 ${escapeHtml(k)}期</option>`).join('')}
+                   </select>`
+                : '';
+            const memoTag = x.userNote
+                ? `<span class="reconcile-status-pill is-partial" title="${escapeHtml(x.userNote)}">已填備註</span>
+                   <button type="button" class="btn btn-secondary btn-xs" data-memo-clear="${x.idx}">清除備註</button>`
+                : '';
+            const note = x.userNote
+                ? `<div class="auto-recon-user-note">備註：${escapeHtml(x.userNote)}</div>${escapeHtml(x.note.replace(`備註：${x.userNote}；`, ''))}`
+                : escapeHtml(x.note);
             return `<tr>
               <td class="auto-recon-date">${escapeHtml(x.date.slice(5))}</td>
               <td class="col-money">${x.amt.toLocaleString()}</td>
               <td class="auto-recon-key">${escapeHtml(x.key) || '—'}<div class="auto-recon-sub">${escapeHtml(x.kind)} ${escapeHtml(x.bank)}</div></td>
               <td>${escapeHtml(x.who) || '<span class="auto-recon-sub">—</span>'}</td>
               <td><span class="reconcile-status-pill ${STATUS_PILL[x.status]}">${STATUS_LABEL[x.status]}</span></td>
-              <td class="auto-recon-note">${escapeHtml(x.note)}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
+              <td class="auto-recon-note">${note}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
               <td><div class="auto-recon-act">
-                ${x.confirmed ? '<span class="reconcile-status-pill is-matched">✓ 已確認</span>' : ''}
+                ${x.confirmed ? `<span class="reconcile-status-pill is-matched">✓ 已確認</span>
+                  <button type="button" class="btn btn-secondary btn-xs" data-unconfirm="${x.idx}">取消</button>` : ''}
                 ${canOk ? `<button type="button" class="btn btn-secondary btn-xs" data-ok="${x.idx}">✓ 正確</button>` : ''}
+                ${memoTag}${memoInput}${periodSelect}
                 <input class="reconcile-search-input auto-recon-fix" list="auto-recon-names" placeholder="改成…" data-fix="${x.idx}">
               </div></td>
-            </tr>`;
+            </tr>${pending?.idx === x.idx ? pickRow(pending.name) : ''}`;
         }).join('');
+    };
+
+    /** 「改成」找不到一模一樣的客戶時，在該列下方列出候選讓使用者挑 */
+    const pickRow = (name: string): string => {
+        const names = lastResult?.names ?? [];
+        const sug = suggestNames(name, names);
+        return `<tr class="auto-recon-pick-row"><td colspan="7">
+          <div class="auto-recon-pick" role="group" aria-label="選擇正確客戶">
+            <div class="auto-recon-pick-title">明細裡沒有叫「${escapeHtml(name)}」的客戶，請選正確的客戶：</div>
+            <div class="auto-recon-pick-body">
+              ${sug.map((n) => `<button type="button" class="btn btn-secondary btn-xs" data-pick-name="${escapeHtml(n)}">${escapeHtml(n)}</button>`).join('')}
+              <select class="reconcile-options-input auto-recon-pick-select" data-pick-select aria-label="從全部客戶選">
+                <option value="">從全部客戶選…</option>
+                ${names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="auto-recon-pick-body">
+              <button type="button" class="btn btn-primary btn-xs" data-pick-new>這是新客戶（清單沒有），照「${escapeHtml(name)}」記下</button>
+              <button type="button" class="btn btn-secondary btn-xs" data-pick-cancel>取消</button>
+            </div>
+          </div>
+        </td></tr>`;
     };
 
     const byIdx = (i: string | undefined): ReconcileEntry | undefined =>
         lastResult?.results.find((x) => x.idx === Number(i));
 
     const remember = (entry: ReconcileEntry, name: string, flag: string) => {
+        pending = null;
         if (isGenericKey(entry.key)) {
             rowMemory[entry.idx] = {name, flag};
         } else {
@@ -534,13 +591,74 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         rerun();
     };
 
+    /** 取消確認：本次逐筆紀錄、這台電腦的記憶、上傳的末五碼資料（本次）一併取消，重新比對 */
+    const unconfirm = (entry: ReconcileEntry) => {
+        delete rowMemory[entry.idx];
+        if (entry.key in memory) {
+            delete memory[entry.key];
+            saveMemory();
+        }
+        if (acctFile?.rows.some((x) => x.val === entry.key && isConfirmFlag(x.flag))) acctCancelled.add(entry.key);
+        rerun();
+    };
+
     tbody.addEventListener('click', (e) => {
-        const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-ok]');
-        if (!btn) return;
-        const entry = byIdx(btn.dataset.ok);
-        if (entry) remember(entry, entry.custNames[0], '已確認');
+        const el = e.target as HTMLElement;
+        const okBtn = el.closest<HTMLButtonElement>('[data-ok]');
+        if (okBtn) {
+            const entry = byIdx(okBtn.dataset.ok);
+            if (entry) remember(entry, entry.custNames[0], '已確認');
+            return;
+        }
+        const unBtn = el.closest<HTMLButtonElement>('[data-unconfirm]');
+        if (unBtn) {
+            const entry = byIdx(unBtn.dataset.unconfirm);
+            if (entry) unconfirm(entry);
+            return;
+        }
+        const clearBtn = el.closest<HTMLButtonElement>('[data-memo-clear]');
+        if (clearBtn) {
+            delete rowNotes[Number(clearBtn.dataset.memoClear)];
+            delete rowNotePeriods[Number(clearBtn.dataset.memoClear)];
+            rerun();
+            return;
+        }
+        const pickBtn = el.closest<HTMLButtonElement>('[data-pick-name]');
+        const pendEntry = pending ? byIdx(String(pending.idx)) : undefined;
+        if (pickBtn && pendEntry) {
+            remember(pendEntry, pickBtn.dataset.pickName!, '已確認');
+            return;
+        }
+        if (el.closest('[data-pick-new]') && pending && pendEntry) {
+            remember(pendEntry, pending.name, NEW_CUSTOMER_FLAG);
+            return;
+        }
+        if (el.closest('[data-pick-cancel]')) {
+            pending = null;
+            renderRows();
+        }
     });
     tbody.addEventListener('change', (e) => {
+        const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-pick-select]');
+        if (sel) {
+            const entry = pending ? byIdx(String(pending.idx)) : undefined;
+            if (sel.value && entry) remember(entry, sel.value, '已確認');
+            return;
+        }
+        const perSel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-memo-period]');
+        if (perSel) {
+            rowNotePeriods[Number(perSel.dataset.memoPeriod)] = perSel.value;
+            rerun();
+            return;
+        }
+        const memoInput = (e.target as HTMLElement).closest<HTMLInputElement>('[data-memo]');
+        if (memoInput) {
+            const v = memoInput.value.trim();
+            if (!v) return;
+            rowNotes[Number(memoInput.dataset.memo)] = v;
+            rerun();
+            return;
+        }
         const input = (e.target as HTMLElement).closest<HTMLInputElement>('[data-fix]');
         if (!input) return;
         const v = input.value.trim();
@@ -551,8 +669,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 || window.prompt('這家現付店家的名稱？', entry.key)
                 || entry.key;
             remember(entry, nm, '現付（叫貨直接轉帳）');
-        } else {
+        } else if (lastResult && (lastResult.names.includes(v) || lastResult.cust[v])) {
             remember(entry, v, '已確認');
+        } else {
+            // 名字不完全一致：不自動猜，讓使用者挑或標成新客戶
+            pending = {idx: entry.idx, name: v};
+            renderRows();
         }
     });
 
@@ -647,6 +769,16 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             wb.addWorksheet('末五碼').addRow(['店名', '區域', '末五碼/帳號/備註', '標記']);
         }
         const ws = wb.worksheets[0];
+        // 本次取消的「已確認 / 現付」列：從下載的檔案移除（原檔不動）
+        if (acctFile && acctCancelled.size) {
+            const drop: number[] = [];
+            ws.eachRow((row, i) => {
+                const v = String(cellVal(row.getCell(3)) ?? '').trim();
+                const flag = String(cellVal(row.getCell(4)) ?? '').trim();
+                if (acctCancelled.has(v) && isConfirmFlag(flag)) drop.push(i);
+            });
+            for (const i of drop.reverse()) ws.spliceRows(i, 1);
+        }
         const rowOf: Record<string, number> = {};
         ws.eachRow((row, i) => {
             const v = cellVal(row.getCell(3));
@@ -672,6 +804,10 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         stmtFiles = [];
         acctFile = null;
         rowMemory = {};
+        rowNotes = {};
+        rowNotePeriods = {};
+        acctCancelled.clear();
+        pending = null;
         filter = 'all';
         query = '';
         searchInput.value = '';
