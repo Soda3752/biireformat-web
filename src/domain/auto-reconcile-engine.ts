@@ -11,7 +11,7 @@
  * （連續 1~6 期、跳期 2~3 期、扣手續費 15、多店合併、同客戶分筆加總）。
  * 帳號/備註都沒有紀錄的，最後再用金額在尚未收款的期別裡推測客戶（單期或連續 2~4 期，扣 0/15/30）。
  *
- * 輸出：回填各月明細的「實收金額 / 收款日」，並在最新月份檔加上「銀行對帳結果」工作表；
+ * 輸出：回填各月明細的「實收金額 / 收款日」，收款日右邊插入「備註」欄寫標記與使用者備註，並在最新月份檔加上「銀行對帳結果」工作表；
  * 下次放入回填後的檔案會依該表略過已處理的入帳（接續模式）。
  */
 
@@ -912,11 +912,195 @@ export function suggestNames(n: string, names: ReadonlyArray<string>, limit = 6)
 
 const fill = (argb: string): ExcelJS.Fill => ({type: 'pattern', pattern: 'solid', fgColor: {argb}});
 
+/** 收款日「一次付多期或多店合併」改用底色標示（與綠/黃底區分）。 */
+const MULTI_DATE_FILL = 'FFDDEBF7';
+const RED = 'FFC00000';
+const MEMO_HEADER = '備註';
+const MEMO_WIDTH = 24;
+
+// ---------- 明細插入「備註」欄（各區塊收款日右邊）
+
+const MAX_COL = 16384;
+const colNum = (l: string): number => [...l].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+const colLetter = (n: number): string => {
+    let out = '';
+    for (; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+    return out;
+};
+
+/** 純參照字串（A1、A1:K9、合併範圍、列印範圍）：欄號 ≥ at 的右移一欄；跨過插入點的範圍因此變寬（同 Excel 插入欄）。 */
+const shiftRefs = (ref: string, at: number): string =>
+    ref.replace(/(\$?)([A-Z]{1,3})(\$?\d+)/g, (m, d: string, c: string, r: string) =>
+        (colNum(c) >= at ? `${d}${colLetter(colNum(c) + 1)}${r}` : m));
+
+const unquote = (n: string): string => (n.startsWith("'") ? n.slice(1, -1).replace(/''/g, "'") : n);
+
+/** 公式內指向 target 工作表的參照右移（略過字串常值與外部活頁簿參照 [1]工作表!A1）。 */
+function shiftFormula(f: string, own: string, target: string, at: number): string {
+    const re = /("(?:[^"]|"")*")|(?<![\w.$\u0080-￿])((\[\d+\])?('(?:[^']|'')+'|[A-Za-z_\u0080-￿][\w.\u0080-￿]*)!)?(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)(?![\w(])/g;
+    return f.replace(re, (m, str: string | undefined, prefix: string | undefined, ext: string | undefined, sheet: string | undefined, ref: string) => {
+        if (str || ext) return m;
+        const to = prefix ? unquote(sheet!) : own;
+        return to === target ? (prefix ?? '') + shiftRefs(ref, at) : m;
+    });
+}
+
+/** 在 ws 第 at 欄插入空白欄：搬移儲存格、合併、欄寬，並調整整本活頁簿指向此工作表的公式。 */
+function insertCol(ws: ExcelJS.Worksheet, at: number): void {
+    const name = ws.name;
+    // 其他工作表只需改公式
+    for (const other of ws.workbook.worksheets) {
+        if (other === ws) continue;
+        other.eachRow((row) => row.eachCell((c) => {
+            // 合併格的從屬格會讀到主格的公式，只改主格；共用公式的從屬格跟著主格走
+            if (c.isMerged && c.master.address !== c.address) return;
+            const v = c.value as {formula?: string; sharedFormula?: string} | null;
+            if (!v || typeof v !== 'object' || typeof v.formula !== 'string' || v.sharedFormula) return;
+            const f = shiftFormula(v.formula, other.name, name, at);
+            if (f !== v.formula) c.value = {...v, formula: f} as ExcelJS.CellValue;
+        }));
+    }
+    const m = ws.model as ExcelJS.WorksheetModel & {
+        rows: Array<{cells: Array<Record<string, unknown> & {address: string}>}>;
+        cols?: Array<{min: number; max: number}>;
+        merges: string[];
+        mergeCells?: string[];
+    };
+    const merges = [...m.merges];
+    for (const r of merges) ws.unMergeCells(r);
+    for (const row of m.rows) {
+        for (const c of row.cells) {
+            c.address = shiftRefs(c.address, at);
+            if (typeof c.formula === 'string') c.formula = shiftFormula(c.formula, name, name, at);
+            if (typeof c.sharedFormula === 'string') c.sharedFormula = shiftRefs(c.sharedFormula, at);
+            if (typeof c.ref === 'string') c.ref = shiftRefs(c.ref, at);
+        }
+    }
+    m.mergeCells = merges.map((r) => shiftRefs(r, at));
+    m.cols = (m.cols ?? [])
+        .map((c) => ({...c, min: c.min >= at ? c.min + 1 : c.min, max: Math.min(MAX_COL, c.max >= at ? c.max + 1 : c.max)}))
+        .filter((c) => c.min <= MAX_COL);
+    // 原本跨過插入點的欄設定要拆開，新欄自己一段
+    m.cols = m.cols.flatMap((c) => (c.min < at && c.max >= at
+        ? [{...c, max: at - 1}, ...(c.max > at ? [{...c, min: at + 1}] : [])]
+        : [c]));
+    if (m.pageSetup?.printArea) m.pageSetup.printArea = shiftRefs(m.pageSetup.printArea, at);
+    ws.model = m;
+    ws.getColumn(at).width = MEMO_WIDTH;
+}
+
 const noteText = (note: ExcelJS.Cell['note']): string => {
     if (!note) return '';
     if (typeof note === 'string') return note;
     return (note.texts ?? []).map((t) => t.text).join('');
 };
+
+/** 舊版回填加的註解（每行都是「2026/10/17 匯入 …」）；使用者自己加的註解不動。 */
+const OLD_FILL_NOTE = /^\d{4}\/\d{1,2}\/\d{1,2} 匯入 /;
+
+/** 清掉舊版回填加在實收金額格的紅色註解（改成備註欄後不再需要）。 */
+function clearOldFillNotes(ws: ExcelJS.Worksheet): void {
+    ws.eachRow((row) => row.eachCell((c) => {
+        const lines = noteText(c.note).split('\n').filter((x) => x.trim());
+        if (!lines.length || !lines.every((x) => OLD_FILL_NOTE.test(x))) return;
+        // ExcelJS 沒有移除註解的 API：清內部欄位，連同 model 快取裡的 comment（寫檔時讀的是它）
+        const raw = c as unknown as {_comment?: unknown; _value?: {model?: {comment?: unknown}}};
+        raw._comment = undefined;
+        if (raw._value?.model) delete raw._value.model.comment;
+    }));
+}
+
+/**
+ * 明細各區塊收款日右邊插入「備註」欄（已有就沿用，接續對帳上傳回填檔時不會重複插）。
+ * 回傳本次插入位置（原欄號），供換算對帳時讀到的欄號；找不到標題列的舊版面不插欄（回傳 null）。
+ */
+function addMemoCols(ws: ExcelJS.Worksheet): number[] | null {
+    const {headerRow, blocks} = stmtLayout(ws);
+    if (blocks === LEGACY_BLOCKS) return null;
+    const at = blocks.map((b) => b.date + 1)
+        .filter((c) => s(cellVal(ws.getCell(headerRow, c))) !== MEMO_HEADER)
+        .sort((a, b) => b - a);
+    for (const c of at) {
+        insertCol(ws, c);
+        // 列印範圍剛好到收款日的，把新的備註欄也包進去
+        const pa = /^(.*:\$?)([A-Z]{1,3})(\$?\d+)$/.exec(ws.pageSetup.printArea ?? '');
+        if (pa && colNum(pa[2]) === c - 1) ws.pageSetup.printArea = pa[1] + colLetter(c) + pa[3];
+        const h = ws.getCell(headerRow, c);
+        h.value = MEMO_HEADER;
+        h.style = {...ws.getCell(headerRow, c - 1).style};
+        // 沿用收款日格的框線與字型，表格看起來是同一張
+        ws.eachRow((row, r) => {
+            if (r <= headerRow) return;
+            const src = row.getCell(c - 1);
+            if (!src.border || !Object.keys(src.border).length) return;
+            row.getCell(c).style = {border: src.border, font: src.font, alignment: {horizontal: 'left', vertical: 'middle'}};
+        });
+    }
+    return at;
+}
+
+type MemoPart = {text: string; red?: boolean};
+
+/** 備註欄寫入：標記黑字、使用者備註紅字，以「；」接在原有內容後面（front 時放前面；同樣的字不重複寫）。 */
+function writeMemo(c: ExcelJS.Cell, parts: ReadonlyArray<MemoPart>, front = false): void {
+    const prev = s(cellVal(c));
+    const have = new Set(prev.split('；'));
+    const add = parts.filter((p) => p.text && !have.has(p.text));
+    if (!add.length) return;
+    const font = c.font ?? {};
+    const old: ExcelJS.RichText[] = [];
+    if (prev) {
+        const v = c.value as {richText?: ExcelJS.RichText[]} | null;
+        old.push(...(v && typeof v === 'object' && v.richText ? v.richText : [{text: prev, font}]));
+    }
+    const rich: ExcelJS.RichText[] = front ? [] : [...old];
+    add.forEach((p, i) => {
+        if ((!front && prev) || i) rich.push({text: '；', font});
+        rich.push({text: p.text, font: p.red ? {...font, color: {argb: RED}} : font});
+    });
+    if (front && old.length) rich.push({text: '；', font}, ...old);
+    c.value = {richText: rich};
+    c.alignment = {...c.alignment, horizontal: 'left', vertical: 'middle', shrinkToFit: false};
+}
+
+/** 舊版回填的收款日文字：日期後接 (-15)/(月)/(2筆) 與結尾 ?，例如「10/12(-15)(月)」「10/5(2筆)?」。 */
+const OLD_DATE_TAGS = /^(\d{1,2}\/\d{1,2})((?:\((?:-\d+|月|\d+筆)\))*)(\?)?$/;
+
+/** 舊版小字收款日轉成新格式：收款日只留日期、取消縮字並恢復字體大小，(月) 改淺藍底，標記移到備註欄。 */
+function convertOldDateTags(ws: ExcelJS.Worksheet): void {
+    const {headerRow, blocks} = stmtLayout(ws);
+    ws.eachRow((row, r) => {
+        if (r <= headerRow) return;
+        for (const b of blocks) {
+            const ec = row.getCell(b.date);
+            const v = cellVal(ec);
+            const m = typeof v === 'string' ? OLD_DATE_TAGS.exec(v.trim()) : null;
+            if (!m || (!m[2] && !m[3])) continue;
+            const tags = m[2].slice(1, -1).split(')(').filter(Boolean);
+            const fee = tags.find((x) => x.startsWith('-'));
+            const cnt = tags.find((x) => x.endsWith('筆'));
+            const multi = tags.includes('月');
+            const parts: MemoPart[] = [
+                ...(multi ? [{text: '月'}] : []),
+                ...(fee ? [{text: `扣手續費${fee.slice(1)}`}] : []),
+                ...(cnt ? [{text: cnt}] : []),
+                ...(m[3] ? [{text: '待確認'}] : []),
+            ];
+            ec.value = m[1];
+            const size = row.getCell(b.paid).font?.size;
+            ec.style = {
+                ...ec.style,
+                font: {...ec.font, ...(size ? {size} : {})},
+                alignment: {...ec.alignment, shrinkToFit: false},
+                ...(multi ? {fill: fill(MULTI_DATE_FILL)} : {}),
+            };
+            // 備註格插欄時沿用了收款日的小字，跟著改回來
+            const mc = row.getCell(b.date + 1);
+            mc.style = {...mc.style, font: {...ec.font}};
+            writeMemo(mc, parts, true);
+        }
+    });
+}
 
 /**
  * 把對帳結果回填到各月明細 workbook（就地修改），並在最新月份 workbook 加上「銀行對帳結果」工作表。
@@ -927,6 +1111,25 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
     const {results, cust} = rec;
     const wbC = wbs[latestMonth];
     const wbOf = (per: string): ExcelJS.Workbook | undefined => wbs[parseInt(per, 10)];
+
+    // 先插好備註欄，再把對帳時讀到的欄號換算成插欄後的位置
+    const inserted = new Map<ExcelJS.Worksheet, number[] | null>();
+    for (const wb of Object.values(wbs)) {
+        for (const n of ['上期', '下期']) {
+            const ws = sheetByName(wb, n);
+            if (!ws) continue;
+            clearOldFillNotes(ws);
+            const at = addMemoCols(ws);
+            inserted.set(ws, at);
+            if (at) convertOldDateTags(ws);
+        }
+    }
+    const colOf = (ws: ExcelJS.Worksheet, c: number): number => c + (inserted.get(ws) ?? []).filter((p) => p <= c).length;
+    /** 備註格：收款日右邊；沒插欄的舊版面只在該格空白時寫。 */
+    const memoCell = (ws: ExcelJS.Worksheet, info: PeriodCell): ExcelJS.Cell | undefined => {
+        const c = ws.getCell(info.row, colOf(ws, info.dateCol) + 1);
+        return inserted.get(ws) || !s(cellVal(c)) ? c : undefined;
+    };
 
     const fills = new Map<string, Array<{ r: ReconcileEntry; share: number; multi: boolean }>>();
     for (const r of results) {
@@ -950,28 +1153,31 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         if (!wb) continue;
         const ws = sheetByName(wb, info.sheet);
         if (!ws) continue;
-        const dc = ws.getCell(info.row, info.paidCol);
-        const ec = ws.getCell(info.row, info.dateCol);
+        const dc = ws.getCell(info.row, colOf(ws, info.paidCol));
+        const ec = ws.getCell(info.row, colOf(ws, info.dateCol));
         const ok = lst0.every((x) => x.r.status === 'OK');
         const prevVal = cellVal(dc);
         const prev = typeof prevVal === 'number' ? prevVal : 0;
         dc.value = prev + lst0.reduce((t, x) => t + x.share, 0);
         const n = lst0.length + (prev ? 1 : 0);
-        let tag = '';
+        const multi = lst0.some((x) => x.multi);
         const feeOf = lst0.find((x) => x.r.fee)?.r.fee;
-        if (feeOf) tag += `(-${feeOf})`;
-        if (lst0.some((x) => x.multi)) tag += '(月)';
-        if (n > 1) tag += `(${n}筆)`;
-        if (!ok) tag += '?';
-        ec.value = md(lst0[lst0.length - 1].r.date) + tag;
+        const parts: MemoPart[] = [
+            ...(multi ? [{text: '月'}] : []),
+            ...(feeOf ? [{text: `扣手續費${feeOf}`}] : []),
+            ...(n > 1 ? [{text: `${n}筆`}] : []),
+            ...(ok ? [] : [{text: '待確認'}]),
+            ...[...new Set(lst0.map((x) => x.r.userNote).filter((x): x is string => !!x))].map((text) => ({text, red: true})),
+        ];
+        ec.value = md(lst0[lst0.length - 1].r.date);
         const color = ok ? COLORS.OK : COLORS.需確認;
         dc.style = {...dc.style, fill: fill(color)};
-        ec.style = {...ec.style, fill: fill(color), ...(tag ? {font: {...(ec.font || {}), size: 8}} : {})};
-        const old = dc.note ? noteText(dc.note) + '\n' : '';
-        dc.note = old + lst0.map((x) => `${x.r.date} 匯入 ${x.r.amt.toLocaleString()}（${x.r.key}）${x.r.who} ${x.r.note}`).join('\n');
+        ec.style = {...ec.style, fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, shrinkToFit: false}};
+        const mc = memoCell(ws, info);
+        if (mc && parts.length) writeMemo(mc, parts);
     }
 
-    // 金額不符：在收款日欄寫紅字提醒
+    // 金額不符：收款日標黃底，備註欄寫紅字提醒
     const mm: Record<string, ReconcileEntry[]> = {};
     for (const r of results) if (r.status === '金額不符') (mm[r.alloc[0][0]] = mm[r.alloc[0][0]] || []).push(r);
     for (const [code, lst] of Object.entries(mm)) {
@@ -983,13 +1189,10 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         const info = p[per];
         const ws = sheetByName(wb, info.sheet);
         if (!ws) continue;
-        const ec = ws.getCell(info.row, info.dateCol);
-        const dc = ws.getCell(info.row, info.paidCol);
-        const ev = cellVal(ec);
-        const prevTxt = typeof ev === 'string' && ev ? ev + '；' : '';
-        ec.value = prevTxt + lst.map((r) => `${md(r.date)}收${r.amt}?`).join('；');
-        ec.style = {...ec.style, fill: fill(COLORS.金額不符), font: {size: 8, color: {argb: 'FFC00000'}}};
-        dc.note = lst.map((r) => `${r.date} 匯入 ${r.amt.toLocaleString()}（${r.key}）金額對不上；${r.note}`).join('\n');
+        const ec = ws.getCell(info.row, colOf(ws, info.dateCol));
+        ec.style = {...ec.style, fill: fill(COLORS.金額不符), alignment: {...ec.alignment, shrinkToFit: false}};
+        const mc = memoCell(ws, info);
+        if (mc) writeMemo(mc, lst.map((r) => ({text: `${md(r.date)}收${r.amt.toLocaleString()}，金額對不上`, red: true})));
     }
 
     // 結果工作表
