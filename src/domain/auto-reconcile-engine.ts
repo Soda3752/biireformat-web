@@ -353,6 +353,40 @@ export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
     return out;
 }
 
+/** 兩份明細的下期中，兩邊都有的客戶金額相同的比例達此值，就判定新的那份下期還沒結帳（是複製上個月的佔位）。 */
+export const UNSETTLED_SAME_RATIO = 0.9;
+/** 兩邊都有的客戶少於此數時樣本太少，不自動判斷。 */
+export const UNSETTLED_MIN_COMMON = 3;
+
+/**
+ * 判斷 cur 這份明細的「下期」是否還沒結帳：與上一個月份檔 prev 的下期幾乎一樣
+ * （兩邊都有的客戶中，金額相同的比例 ≥ UNSETTLED_SAME_RATIO）。
+ */
+export function isLowerUnsettled(prev: StmtData, prevMonth: number, cur: StmtData, curMonth: number): boolean {
+    let common = 0;
+    let same = 0;
+    for (const [key, v] of Object.entries(cur)) {
+        const a = v.p[`${curMonth}下`];
+        const b = prev[key]?.p[`${prevMonth}下`];
+        if (!a || !b) continue;
+        common++;
+        if (a.amt === b.amt) same++;
+    }
+    return common >= UNSETTLED_MIN_COMMON && same >= common * UNSETTLED_SAME_RATIO;
+}
+
+/** 略過某月下期：拿掉該期的明細格（不產生期別、不比對、不回填）。 */
+export function dropLowerHalf(data: StmtData, month: number): StmtData {
+    const per = `${month}下`;
+    const out: StmtData = {};
+    for (const [key, v] of Object.entries(data)) {
+        const p = {...v.p};
+        delete p[per];
+        if (Object.keys(p).length) out[key] = {...v, p};
+    }
+    return out;
+}
+
 export function readAcct(wb: ExcelJS.Workbook): AcctRow[] {
     const ws = wb.worksheets[0];
     const rows: AcctRow[] = [];
@@ -393,8 +427,8 @@ export function readDone(wb: ExcelJS.Workbook): Set<string> {
 
 export interface ReconcileInput {
     bank: ReadonlyArray<BankEntry>;
-    /** 由舊到新排序。 */
-    stmts: ReadonlyArray<{ month: number; data: StmtData }>;
+    /** 由舊到新排序；skipLower＝該月下期還沒結帳，整個略過。 */
+    stmts: ReadonlyArray<{ month: number; data: StmtData; skipLower?: boolean }>;
     acct: ReadonlyArray<AcctRow>;
     bankInfos: ReadonlyArray<BankInfo>;
     memory?: Record<string, MemoryEntry>;
@@ -415,7 +449,7 @@ const add = (o: Record<string, Set<string>>, k: string, v: string) => {
 };
 
 export function reconcile(input: ReconcileInput): AutoReconcileResult {
-    const {bank, stmts, acct, bankInfos} = input;
+    const {bank, acct, bankInfos} = input;
     const memory = input.memory ?? {};
     const rowMemory = input.rowMemory ?? {};
     const rowNotes = input.rowNotes ?? {};
@@ -423,8 +457,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowCashMode = input.rowCashMode ?? {};
     const rowPick = input.rowPick ?? {};
     const done = input.done ?? new Set<string>();
-    if (stmts.length === 0) throw new Error('沒有月結明細');
+    if (input.stmts.length === 0) throw new Error('沒有月結明細');
 
+    const stmts = input.stmts.map((x) => (x.skipLower ? {...x, data: dropLowerHalf(x.data, x.month)} : x));
     const MC = stmts[stmts.length - 1].month;
     const cust: Record<string, StmtCustomer & { alias: string[] }> = {};
     for (const {data} of stmts) {
@@ -449,7 +484,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             cust[code].alias = [...new Set([...cust[code].alias, v.name])];
         }
     }
-    const PERIODS = stmts.flatMap(({month}) => [`${month}上`, `${month}下`]);
+    const PERIODS = stmts.flatMap(({month, skipLower}) => (skipLower ? [`${month}上`] : [`${month}上`, `${month}下`]));
     const monthsTxt = stmts.map((x) => x.month).join('、');
     const name2code: Record<string, string> = {};
     for (const [c, v] of Object.entries(cust)) for (const a of v.alias) if (!(a in name2code)) name2code[a] = c;

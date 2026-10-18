@@ -29,6 +29,7 @@ import {
     isStatementWorkbook,
     CASH_FLAG,
     DEPOSIT_FLAG,
+    isLowerUnsettled,
     NEW_CUSTOMER_FLAG,
     ONE_OFF_FLAG,
     readAcct,
@@ -82,7 +83,13 @@ interface StmtFileEntry {
     name: string;
     buf: ArrayBuffer;
     month: number | null;
+    /** 自動判斷下期還沒結帳時，比對的是哪個月的下期（null＝判斷為已結帳）。 */
+    autoSkipRef: number | null;
+    /** 使用者手動勾/取消「下期未結帳」（undefined＝照自動判斷）。 */
+    skipManual?: boolean;
 }
+
+const skipLowerOf = (x: StmtFileEntry): boolean => x.skipManual ?? x.autoSkipRef !== null;
 
 const monthOf = (name: string): number | null => {
     const m = /(\d{1,2})\s*月/.exec(name);
@@ -292,7 +299,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 const wb = await loadWorkbook(buf);
                 if (!isStatementWorkbook(wb)) throw new Error('找不到「上期」「下期」工作表，不像月結明細');
                 stmtFiles = stmtFiles.filter((x) => x.name !== file.name);
-                stmtFiles.push({name: file.name, buf, month: monthOf(file.name)});
+                stmtFiles.push({name: file.name, buf, month: monthOf(file.name), autoSkipRef: null});
                 renderStmtList();
                 void rebuild();
             } catch (err) {
@@ -402,11 +409,30 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 void rebuild();
             });
             meta.append(input, document.createTextNode(i === ss.length - 1 ? '月（本月）' : '月'));
-            stmtListEl.appendChild(listItem(entry.name, meta, () => {
+            const skipLabel = document.createElement('label');
+            skipLabel.className = 'auto-recon-skip';
+            const skip = document.createElement('input');
+            skip.type = 'checkbox';
+            skip.checked = skipLowerOf(entry);
+            skip.addEventListener('change', () => {
+                entry.skipManual = skip.checked === (entry.autoSkipRef !== null) ? undefined : skip.checked;
+                void rebuild();
+            });
+            skipLabel.append(skip, document.createTextNode('下期未結帳（略過）'));
+            meta.appendChild(skipLabel);
+            const item = listItem(entry.name, meta, () => {
                 stmtFiles = stmtFiles.filter((x) => x !== entry);
                 renderStmtList();
                 void rebuild();
-            }));
+            });
+            if (entry.autoSkipRef !== null) {
+                const hint = document.createElement('div');
+                hint.className = 'auto-recon-skip-hint';
+                hint.textContent = `下期與 ${entry.autoSkipRef}月下期相同，判定未結帳`;
+                item.classList.add('auto-recon-has-hint');
+                item.appendChild(hint);
+            }
+            stmtListEl.appendChild(item);
         });
     };
 
@@ -416,6 +442,21 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const seq = ++runSeq;
         lastError = null;
         const ss = sortedStmts();
+        // 先判斷各明細的下期是否還沒結帳（與上一個月份檔的下期幾乎一樣），上傳後不用等銀行檔就能看到
+        const datas: Array<ReturnType<typeof readStmt> | null> = [];
+        try {
+            for (const x of ss) datas.push(x.month ? readStmt(await loadWorkbook(x.buf), x.month) : null);
+        } catch {
+            datas.length = 0;
+        }
+        if (seq !== runSeq) return;
+        ss.forEach((x, i) => {
+            const prev = ss[i - 1];
+            const ok = i > 0 && !!datas[i] && !!datas[i - 1] && prev.month !== x.month
+                && isLowerUnsettled(datas[i - 1]!, prev.month!, datas[i]!, x.month!);
+            x.autoSkipRef = ok ? prev.month : null;
+        });
+        renderStmtList();
         const bank = mergeBankFiles(bankFiles);
         if (bank.length === 0 || ss.length === 0) {
             lastResult = null;
@@ -435,11 +476,11 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             return;
         }
         try {
-            const stmts: Array<{ month: number; data: ReturnType<typeof readStmt> }> = [];
+            const stmts: Array<{ month: number; data: ReturnType<typeof readStmt>; skipLower: boolean }> = [];
             let latest: ExcelJS.Workbook | null = null;
-            for (const x of ss) {
+            for (const [i, x] of ss.entries()) {
                 const wb = await loadWorkbook(x.buf);
-                stmts.push({month: x.month!, data: readStmt(wb, x.month!)});
+                stmts.push({month: x.month!, data: datas[i] ?? readStmt(wb, x.month!), skipLower: skipLowerOf(x)});
                 latest = wb;
             }
             if (seq !== runSeq) return;
