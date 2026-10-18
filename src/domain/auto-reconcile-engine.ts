@@ -9,6 +9,7 @@
  *
  * 比對：先依 已確認 → 歷史 → 末五碼 → 備註名稱 找出候選客戶，再用金額去湊期別組合
  * （連續 1~6 期、跳期 2~3 期、扣手續費 15、多店合併、同客戶分筆加總）。
+ * 帳號/備註都沒有紀錄的，最後再用金額在尚未收款的期別裡推測客戶（單期或連續 2~4 期，扣 0/15/30）。
  *
  * 輸出：回填各月明細的「實收金額 / 收款日」，並在最新月份檔加上「銀行對帳結果」工作表；
  * 下次放入回填後的檔案會依該表略過已處理的入帳（接續模式）。
@@ -60,6 +61,8 @@ export interface PeriodCell {
     /** 回填用的「實收金額」「收款日」欄。 */
     paidCol: number;
     dateCol: number;
+    /** 明細上原本已填的實收金額（依金額推測時略過已收款的期別）。 */
+    paid?: number;
 }
 
 export interface StmtCustomer {
@@ -113,6 +116,18 @@ export interface ReconcileEntry extends BankEntry {
     special?: SpecialKind;
     /** 不在明細時帳號對應到的名稱（記單次付款時當客戶名稱）。 */
     nameHint?: string;
+    /** 帳號/備註沒有紀錄、依金額推測出的候選（客戶期別）；只有一個時已放在 alloc。 */
+    guesses?: GuessPick[];
+    /** 候選太多沒列出的數量。 */
+    guessMore?: number;
+}
+
+/** 依金額推測的一個候選：客戶代號、期別（由舊到新）、扣的手續費。 */
+export interface GuessPick {
+    code: string;
+    run: string[];
+    fee: number;
+    label?: string;
 }
 
 export interface AutoReconcileResult {
@@ -327,8 +342,10 @@ export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
                     key = NAME_KEY_PREFIX + name;
                 }
                 out[key] = out[key] || {name, p: {}};
+                const paid = cellVal(row.getCell(b.paid));
                 out[key].p[`${month}${half}`] = {
                     sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), paidCol: b.paid, dateCol: b.date,
+                    ...(typeof paid === 'number' && paid > 0 ? {paid} : {}),
                 };
             }
         }
@@ -388,6 +405,8 @@ export interface ReconcileInput {
     rowNotePeriods?: Record<number, string[]>;
     /** 本次對帳記為現付、但金額等於某期明細的入帳：cash＝確認當現付；period＝這筆照月結回填。 */
     rowCashMode?: Record<number, 'cash' | 'period'>;
+    /** 本次對帳使用者確認的金額推測（以 idx 為鍵）：照選的客戶期別回填。 */
+    rowPick?: Record<number, GuessPick>;
     done?: Set<string>;
 }
 
@@ -402,6 +421,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowNotes = input.rowNotes ?? {};
     const rowNotePeriods = input.rowNotePeriods ?? {};
     const rowCashMode = input.rowCashMode ?? {};
+    const rowPick = input.rowPick ?? {};
     const done = input.done ?? new Set<string>();
     if (stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -617,6 +637,24 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         return null;
     }
 
+    // 依金額推測：單期或連續 2~4 期，容許扣手續費 15 / 30
+    const GUESS_RUNS = RUNS.filter((r) => r.length <= 4 && contiguous(r));
+    const GUESS_FEES = [0, FEE, FEE * 2];
+    const GUESS_LIMIT = 8;
+    function guess(amt: number, date: string, used: ReadonlySet<string>): GuessPick[] {
+        const out: Array<GuessPick & { k: number[] }> = [];
+        for (const [code, v] of Object.entries(cust)) {
+            for (const run of GUESS_RUNS) {
+                if (!run.every((x) => v.p[x] && !v.p[x].paid && !used.has(code + '|' + x))) continue;
+                if (!avail(run[run.length - 1], date)) continue;
+                const tot = run.reduce((t, x) => t + v.p[x].amt, 0);
+                const fee = GUESS_FEES.find((f) => tot - f === amt);
+                if (fee !== undefined) out.push({code, run, fee, k: [fee, run.length, pref(run)]});
+            }
+        }
+        return out.sort((a, b) => cmpArr(a.k, b.k)).map(({code, run, fee}) => ({code, run, fee}));
+    }
+
     const OLD = new RegExp('(' + [MC - 1, MC - 2]
         .flatMap((m) => mforms(m))
         .flatMap((f) => ['月', '上', '下'].map((x) => f + x))
@@ -631,6 +669,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const results: ReconcileEntry[] = [];
     /** 現付列對不到明細客戶時，顯示記住的名稱 */
     const cashNames: Record<number, string> = {};
+    const toGuess: ReconcileEntry[] = [];
     bank.forEach((b, idx) => {
         if (done.has(doneKey(b))) {
             skipped++;
@@ -677,6 +716,14 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             results.push(res);
             return;
         }
+        const pick = rowPick[idx];
+        if (pick && cust[pick.code] && pick.run.length && pick.run.every((x) => cust[pick.code].p[x])) {
+            results.push({
+                ...b, idx, alloc: [[pick.code, pick.run]], fee: pick.fee, status: 'OK', cand: [pick.code],
+                src: '已確認', note: '依金額推測，已確認', confirmed: true, who: '', custNames: [],
+            });
+            return;
+        }
         const {c, missing, src} = candidates(b.key, idx);
         const res: ReconcileEntry = {
             ...b, idx, alloc: [], fee: 0, status: '找不到', note: '', cand: c, src,
@@ -708,19 +755,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             } else if (b.kind === '現金' && b.bank === '存款機') {
                 Object.assign(res, {status: '不在明細', note: '存款機現金存入（可能是自己存現金/收現）'});
             } else {
-                const g: Array<[string, string[]]> = [];
-                for (const x of Object.keys(cust)) {
-                    const r = classify(b.amt, x, b.date);
-                    if (r && !r.fee && r.run.length === 1 && isCur(r.run[0])) g.push([x, r.run]);
-                }
-                if (g.length === 1 && !OLD.test(b.key)) {
-                    Object.assign(res, {alloc: g, status: '需確認', note: '帳號沒有紀錄，依金額推測'});
-                } else {
-                    Object.assign(res, {
-                        status: '找不到',
-                        note: '帳號/備註沒有紀錄' + (g.length ? '；金額相同的有：' + g.slice(0, 8).map(([x]) => cust[x].name).join('、') : ''),
-                    });
-                }
+                // 等其他入帳都比對完，再用金額在尚未收款的期別裡推測（避免搶走已明確對到的期別）
+                Object.assign(res, {status: '找不到', note: '帳號/備註沒有紀錄'});
+                toGuess.push(res);
             }
         }
         if (src === '已確認' && res.status === '需確認' && res.alloc.length) res.status = 'OK';
@@ -746,6 +783,33 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             }));
         }
     }
+    // 找不到的入帳：依金額推測
+    const taken = new Set<string>();
+    for (const r of results) {
+        if (r.status !== 'OK' && r.status !== '需確認') continue;
+        r.alloc.forEach(([c, run]) => run.forEach((per) => taken.add(c + '|' + per)));
+    }
+    for (const r of toGuess) {
+        const gs = guess(r.amt, r.date, taken);
+        if (!gs.length) continue;
+        gs.forEach((g) => {
+            g.label = fmtAlloc([[g.code, g.run]]) + (g.fee ? `（扣手續費${g.fee}）` : '');
+        });
+        r.status = '需確認';
+        r.src = '金額推測';
+        r.guesses = gs.slice(0, GUESS_LIMIT);
+        if (gs.length > GUESS_LIMIT) r.guessMore = gs.length - GUESS_LIMIT;
+        if (gs.length === 1) {
+            r.alloc = [[gs[0].code, gs[0].run]];
+            r.fee = gs[0].fee;
+            r.note = '帳號/備註沒有紀錄，依金額推測';
+            gs[0].run.forEach((per) => taken.add(gs[0].code + '|' + per));
+        } else {
+            r.note = `帳號/備註沒有紀錄，依金額推測有 ${gs.length} 個可能：`
+                + r.guesses.map((g) => g.label).join('、')
+                + (r.guessMore ? `…等（其他請用「改成」自己輸入）` : '');
+        }
+    }
     for (const r of results) {
         if (r.special) continue;
         if (r.status === '金額不符') {
@@ -753,7 +817,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             r.note = (OLD.test(r.key) ? '備註寫舊月份；' : '') + '明細金額：'
                 + PERIODS.filter((k) => p[k]).map((k) => `${k} ${p[k].amt.toLocaleString()}`).join('、');
         }
-        if (r.fee) r.note = ('扣手續費15；' + r.note).replace(/；$/, '');
+        if (r.fee) r.note = (`扣手續費${r.fee}；` + r.note).replace(/；$/, '');
         r.who = (r.alloc.length && r.alloc[0][1].length)
             ? fmtAlloc(r.alloc)
             : r.alloc.map(([c]) => cust[c].name).join('、');
@@ -834,7 +898,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         if (!(r.status === 'OK' || r.status === '需確認') || !r.alloc.length || !r.alloc[0][1].length) continue;
         r.alloc.forEach(([code, run], ai) => run.forEach((per, i) => {
             let share = cust[code].p[per].amt;
-            if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= FEE;
+            if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= r.fee;
             if (r.alloc.length === 1 && run.length === 1) share = r.amt;
             if (r.noteShares) share = r.noteShares[i];
             const k = code + '|' + per;
@@ -859,7 +923,8 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         dc.value = prev + lst0.reduce((t, x) => t + x.share, 0);
         const n = lst0.length + (prev ? 1 : 0);
         let tag = '';
-        if (lst0.some((x) => x.r.fee)) tag += '(-15)';
+        const feeOf = lst0.find((x) => x.r.fee)?.r.fee;
+        if (feeOf) tag += `(-${feeOf})`;
         if (lst0.some((x) => x.multi)) tag += '(月)';
         if (n > 1) tag += `(${n}筆)`;
         if (!ok) tag += '?';

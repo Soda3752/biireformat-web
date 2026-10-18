@@ -19,6 +19,7 @@ import type {
     AutoReconcileResult,
     AutoReconcileStatus,
     BankEntry,
+    GuessPick,
     MemoryEntry,
     ReconcileEntry,
     SpecialKind,
@@ -171,6 +172,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
           <p class="auto-recon-help">
             「需確認」的請核對：對的按「✓ 正確」；不對就在框裡輸入正確客戶（可從清單選），或選「現付店家」。
             叫貨時直接付款、不屬於任何一期的，按「現付（不歸期別）」：這筆算已對上、不回填明細，之後這個帳號的入帳都自動當現付；改回月結按「取消」。
+            帳號/備註沒有紀錄的，會用金額在還沒收款的期別裡推測客戶（可扣手續費 15/30）：只推到一個就按「✓ 正確」；推到好幾個就從「是哪一個？」挑。
             「不在明細」「找不到」的入帳：自己存的現金按「現金存款」（只算這一筆）；不是月結客戶、單次付款的按「單次付款」（記住帳號，下次自動確認）；兩者都算已對上、不回填明細，可在框裡填備註。
             用帳號確認過的會記在這台電腦，下次自動對上；只寫「青坊」「麵包」這類共用備註的，只套用這一筆。
             明細表回填後：綠色是確定的、黃色是推測或金額不符；收款日標記 (-15) 扣手續費、(月) 一次付多期或多店合併、(2筆) 多筆、? 待確認。
@@ -219,6 +221,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     let rowNotePeriods: Record<number, string[]> = {};
     /** 記為現付、但金額等於某期明細的入帳，使用者選的處理方式：只記本次對帳 */
     let rowCashMode: Record<number, 'cash' | 'period'> = {};
+    /** 依金額推測、使用者確認（或從候選挑）的客戶期別：只記本次對帳 */
+    let rowPick: Record<number, GuessPick> = {};
     /** 備註框打到一半還沒送出的字（重繪時保留） */
     let memoDrafts: Record<number, string> = {};
     /** 重繪中：瀏覽器移除有焦點的備註框時會補發 change，這時不能當成送出 */
@@ -449,6 +453,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 rowNotes,
                 rowNotePeriods,
                 rowCashMode,
+                rowPick,
                 done: latest ? readDone(latest) : new Set(),
             });
             lastStmts = ss;
@@ -551,8 +556,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         repainting = true;
         tbody.innerHTML = shown.map((x) => {
             const canOk = x.custNames.length === 1 && !x.confirmed;
-            const canCash = (x.status === '金額不符' || x.status === '需確認') && x.custNames.length === 1 && !x.cash;
-            const canSpecial = (x.status === '不在明細' || x.status === '找不到') && !x.special;
+            const canCash = (x.status === '金額不符' || x.status === '需確認') && x.custNames.length === 1 && !x.cash && !x.guesses;
+            // 依金額推測的原本是「找不到」，推錯時一樣可以當現金存款 / 單次付款
+            const canSpecial = (x.status === '不在明細' || x.status === '找不到' || !!x.guesses) && !x.special;
+            const guessPicker = x.guesses && x.guesses.length > 1
+                ? `<div class="auto-recon-period" role="group" aria-label="從推測的客戶挑一個">
+                    <span class="auto-recon-sub">是哪一個？</span>
+                    ${x.guesses.map((g, gi) => `<button type="button" class="auto-recon-period-chip"
+                                    data-guess="${x.idx}" data-guess-i="${gi}">${escapeHtml(g.label ?? '')}</button>`).join('')}
+                    ${x.guessMore ? `<span class="auto-recon-sub">還有 ${x.guessMore} 個沒列出，請用「改成」自己輸入</span>` : ''}
+                   </div>`
+                : '';
             const memoInput = (x.status === '金額不符' || x.cash === 'ok' || x.special || canSpecial) && !x.userNote
                 ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo"
                           placeholder="${x.status === '金額不符' ? '原因備註（例：扣30手續費）' : '備註（選填）'}"
@@ -599,7 +613,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                   <button type="button" class="btn btn-secondary btn-xs" data-special="${ONE_OFF_FLAG}" data-special-idx="${x.idx}"
                           title="不是月結客戶的單次付款：算已對上、不回填明細，並記住這個帳號">單次付款</button>` : ''}
                 ${x.cash === 'period' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="" data-cash-idx="${x.idx}">改回現付</button>` : ''}
-                ${memoTag}${memoInput}${periodSelect}
+                ${guessPicker}${memoTag}${memoInput}${periodSelect}
                 <input class="reconcile-search-input auto-recon-fix" list="auto-recon-names" placeholder="改成…" data-fix="${x.idx}">
               </div></td>
             </tr>${pending?.idx === x.idx ? pickRow(pending.name) : ''}`;
@@ -637,8 +651,10 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const byIdx = (i: string | undefined): ReconcileEntry | undefined =>
         lastResult?.results.find((x) => x.idx === Number(i));
 
-    const remember = (entry: ReconcileEntry, name: string, flag: string) => {
+    const remember = (entry: ReconcileEntry, name: string, flag: string, pick?: GuessPick) => {
         pending = null;
+        delete rowPick[entry.idx];
+        if (pick) rowPick[entry.idx] = pick;
         if (isGenericKey(entry.key)) {
             rowMemory[entry.idx] = {name, flag};
         } else {
@@ -652,6 +668,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const unconfirm = (entry: ReconcileEntry) => {
         delete rowMemory[entry.idx];
         delete rowCashMode[entry.idx];
+        delete rowPick[entry.idx];
         if (entry.special) delete rowNotes[entry.idx];
         if (entry.key in memory) {
             delete memory[entry.key];
@@ -666,7 +683,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const okBtn = el.closest<HTMLButtonElement>('[data-ok]');
         if (okBtn) {
             const entry = byIdx(okBtn.dataset.ok);
-            if (entry) remember(entry, entry.custNames[0], '已確認');
+            if (entry) remember(entry, entry.custNames[0], '已確認', entry.guesses?.length === 1 ? entry.guesses[0] : undefined);
+            return;
+        }
+        const guessBtn = el.closest<HTMLButtonElement>('[data-guess]');
+        if (guessBtn) {
+            const entry = byIdx(guessBtn.dataset.guess);
+            const g = entry?.guesses?.[Number(guessBtn.dataset.guessI)];
+            if (entry && g && lastResult) remember(entry, lastResult.cust[g.code].name, '已確認', g);
             return;
         }
         const cashBtn = el.closest<HTMLButtonElement>('[data-cash]');
@@ -696,7 +720,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 rerun();
             } else {
                 // 單次付款：客戶名稱優先用對到的名稱，沒有就用帳號/備註文字
-                const nm = entry.custNames[0] || entry.nameHint || entry.key || `${entry.kind}${entry.bank}`;
+                const nm = (entry.guesses ? '' : entry.custNames[0]) || entry.nameHint || entry.key || `${entry.kind}${entry.bank}`;
                 remember(entry, nm, ONE_OFF_FLAG);
             }
             return;
@@ -773,7 +797,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const i = Number(memoInput.dataset.memo);
             const entry = byIdx(memoInput.dataset.memo);
             // 不在明細 / 找不到：先留著，按「現金存款」「單次付款」時一併帶入
-            if (entry && (entry.status === '不在明細' || entry.status === '找不到') && !entry.special) return;
+            if (entry && (entry.status === '不在明細' || entry.status === '找不到' || entry.guesses) && !entry.special) return;
             rowNotes[i] = v;
             delete memoDrafts[i];
             rerun();
@@ -927,6 +951,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         rowNotes = {};
         rowNotePeriods = {};
         rowCashMode = {};
+        rowPick = {};
         memoDrafts = {};
         acctCancelled.clear();
         pending = null;
