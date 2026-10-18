@@ -45,8 +45,12 @@ export interface BankEntry {
 export interface PeriodCell {
     sheet: string;
     row: number;
+    /** 客戶名稱欄。 */
     col: number;
     amt: number;
+    /** 回填用的「實收金額」「收款日」欄。 */
+    paidCol: number;
+    dateCol: number;
 }
 
 export interface StmtCustomer {
@@ -221,23 +225,95 @@ export function readBankRows(rows: ReadonlyArray<ReadonlyArray<string>>): BankEn
     })).filter((r) => r.amt > 0 && /^\d{4}\/\d{1,2}\/\d{1,2}$/.test(r.date));
 }
 
+/** 明細沒有店家編號的客戶，用此前綴加客戶名稱當內部鍵（不會與數字編號衝突）。 */
+export const NAME_KEY_PREFIX = '名:';
+const isNameKey = (code: string): boolean => code.startsWith(NAME_KEY_PREFIX);
+
+interface StmtBlock {
+    /** 店家編號欄（0 表示沒有）。 */
+    code: number;
+    /** 標題列寫明了店家編號欄。 */
+    codeLabeled: boolean;
+    name: number;
+    amt: number;
+    paid: number;
+    date: number;
+}
+
+/** 舊版面：A/G=店家編號、B/H=客戶名稱、C/I=金額、D/J=實收金額、E/K=收款日。 */
+const LEGACY_BLOCKS: StmtBlock[] = [2, 8].map((bc) => ({code: bc - 1, codeLabeled: false, name: bc, amt: bc + 1, paid: bc + 2, date: bc + 3}));
+const STMT_JUNK_NAMES = /^(小計|總計|合計|總營收)$/;
+
+/** 依標題列（含「客戶名稱」的那列）找出左右區塊各欄位置；找不到標題列就用舊版面固定欄號。 */
+function stmtLayout(ws: ExcelJS.Worksheet): { headerRow: number; blocks: StmtBlock[] } {
+    for (let r = 1; r <= 5; r++) {
+        const row = ws.getRow(r);
+        const h: string[] = [];
+        row.eachCell({includeEmpty: false}, (c, col) => {
+            h[col] = s(cellVal(c));
+        });
+        const nameCols = h.map((x, i) => (x === '客戶名稱' ? i : 0)).filter((i) => i > 0);
+        if (!nameCols.length) continue;
+        const blocks = nameCols.map((nc, bi) => {
+            const endCol = nameCols[bi + 1] ?? h.length;
+            const find = (label: string, def: number): number => {
+                for (let c = nc + 1; c < endCol; c++) if (h[c] === label) return c;
+                return def;
+            };
+            const amt = find('金額', nc + 1);
+            const paid = find('實收金額', amt + 1);
+            const date = find('收款日', paid + 1);
+            return {code: nc > 1 ? nc - 1 : 0, codeLabeled: /編號|代號|代碼/.test(h[nc - 1] ?? ''), name: nc, amt, paid, date};
+        });
+        return {headerRow: r, blocks};
+    }
+    return {headerRow: 2, blocks: LEGACY_BLOCKS};
+}
+
+/**
+ * 讀一個月的明細。有店家編號的區塊只收編號為數字的列（舊行為）；
+ * 沒有店家編號的區塊改以 NAME_KEY_PREFIX + 客戶名稱 當鍵，由 reconcile 依名稱併到其他月份的同名客戶。
+ */
 export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
     const out: StmtData = {};
     for (const [half, sname] of [['上', '上期'], ['下', '下期']] as const) {
         const ws = sheetByName(wb, sname);
         if (!ws) throw new Error(`明細表找不到「${sname}」工作表`);
+        const {headerRow, blocks} = stmtLayout(ws);
+        const rows: Array<[ExcelJS.Row, number]> = [];
         ws.eachRow({includeEmpty: false}, (row, r) => {
-            if (r < 3) return;
-            for (const bc of [2, 8]) {
-                const code = s(cellVal(row.getCell(bc - 1)));
-                const name = s(cellVal(row.getCell(bc)));
-                const amt = cellVal(row.getCell(bc + 1));
-                if (code && /^\d+$/.test(code) && name && typeof amt === 'number') {
-                    out[code] = out[code] || {name, p: {}};
-                    out[code].p[`${month}${half}`] = {sheet: ws.name, row: r, col: bc, amt: Math.round(amt)};
-                }
-            }
+            if (r > headerRow) rows.push([row, r]);
         });
+        const codeOf = (b: StmtBlock, row: ExcelJS.Row): string => (b.code ? s(cellVal(row.getCell(b.code))) : '');
+        const filled = (b: StmtBlock, row: ExcelJS.Row): boolean =>
+            !!s(cellVal(row.getCell(b.name))) && typeof cellVal(row.getCell(b.amt)) === 'number';
+        const coded = (b: StmtBlock, row: ExcelJS.Row): boolean => /^\d+$/.test(codeOf(b, row)) && filled(b, row);
+        // 標題寫了店家編號，或過半的客戶列帶數字編號，就是舊版面（有編號），行為與以前相同；
+        // 沒編號的版面在編號位置可能有零星數字（頁碼標記等），不能一有數字就當成有編號
+        const count = (f: (b: StmtBlock, row: ExcelJS.Row) => boolean): number =>
+            blocks.reduce((t, b) => t + rows.filter(([row]) => f(b, row)).length, 0);
+        const hasCode = blocks.some((b) => b.codeLabeled) || count(coded) * 2 >= count(filled);
+        for (const b of blocks) {
+            for (const [row, r] of rows) {
+                const name = s(cellVal(row.getCell(b.name)));
+                const amtCell = row.getCell(b.amt);
+                const amt = cellVal(amtCell);
+                if (!name || typeof amt !== 'number') continue;
+                let key: string;
+                if (hasCode) {
+                    if (!coded(b, row)) continue;
+                    key = codeOf(b, row);
+                } else {
+                    // 沒編號的版面：略過小計/總計列與公式加總列（各區域合計）
+                    if (STMT_JUNK_NAMES.test(name) || /^\d+$/.test(name) || amtCell.formula) continue;
+                    key = NAME_KEY_PREFIX + name;
+                }
+                out[key] = out[key] || {name, p: {}};
+                out[key].p[`${month}${half}`] = {
+                    sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), paidCol: b.paid, dateCol: b.date,
+                };
+            }
+        }
     }
     return out;
 }
@@ -295,6 +371,10 @@ export interface ReconcileInput {
     done?: Set<string>;
 }
 
+const add = (o: Record<string, Set<string>>, k: string, v: string) => {
+    (o[k] = o[k] || new Set()).add(v);
+};
+
 export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const {bank, stmts, acct, bankInfos} = input;
     const memory = input.memory ?? {};
@@ -308,9 +388,23 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const cust: Record<string, StmtCustomer & { alias: string[] }> = {};
     for (const {data} of stmts) {
         for (const [code, v] of Object.entries(data)) {
+            if (isNameKey(code)) continue;
             cust[code] = cust[code] || {name: v.name, p: {}, alias: []};
             Object.assign(cust[code].p, v.p);
             cust[code].name = v.name;
+            cust[code].alias = [...new Set([...cust[code].alias, v.name])];
+        }
+    }
+    // 沒有店家編號的明細列：名稱只對到一個有編號的客戶就併進去，否則保留名稱鍵自成一個客戶
+    const byName: Record<string, Set<string>> = {};
+    for (const [c, v] of Object.entries(cust)) for (const a of v.alias) add(byName, norm(a), c);
+    for (const {data} of stmts) {
+        for (const [key, v] of Object.entries(data)) {
+            if (!isNameKey(key)) continue;
+            const hit = byName[norm(v.name)];
+            const code = hit?.size === 1 ? [...hit][0] : key;
+            cust[code] = cust[code] || {name: v.name, p: {}, alias: []};
+            Object.assign(cust[code].p, v.p);
             cust[code].alias = [...new Set([...cust[code].alias, v.name])];
         }
     }
@@ -349,9 +443,6 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const tail: Record<string, Set<string>> = {};
     const namekey: Record<string, Set<string>> = {};
     const override: Record<string, MemoryEntry> = {};
-    const add = (o: Record<string, Set<string>>, k: string, v: string) => {
-        (o[k] = o[k] || new Set()).add(v);
-    };
     for (const r of acct) {
         if (/已確認|現付/.test(r.flag)) override[r.val] = {name: r.name, flag: r.flag};
         if (r.flag === '歷史') {
@@ -678,14 +769,16 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         }));
     }
     for (const [k, lst0] of fills) {
-        const [code, per] = k.split('|');
+        const cut = k.lastIndexOf('|');
+        const code = k.slice(0, cut);
+        const per = k.slice(cut + 1);
         const info = cust[code].p[per];
         const wb = wbOf(per);
         if (!wb) continue;
         const ws = sheetByName(wb, info.sheet);
         if (!ws) continue;
-        const dc = ws.getCell(info.row, info.col + 2);
-        const ec = ws.getCell(info.row, info.col + 3);
+        const dc = ws.getCell(info.row, info.paidCol);
+        const ec = ws.getCell(info.row, info.dateCol);
         const ok = lst0.every((x) => x.r.status === 'OK');
         const prevVal = cellVal(dc);
         const prev = typeof prevVal === 'number' ? prevVal : 0;
@@ -716,8 +809,8 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         const info = p[per];
         const ws = sheetByName(wb, info.sheet);
         if (!ws) continue;
-        const ec = ws.getCell(info.row, info.col + 3);
-        const dc = ws.getCell(info.row, info.col + 2);
+        const ec = ws.getCell(info.row, info.dateCol);
+        const dc = ws.getCell(info.row, info.paidCol);
         const ev = cellVal(ec);
         const prevTxt = typeof ev === 'string' && ev ? ev + '；' : '';
         ec.value = prevTxt + lst.map((r) => `${md(r.date)}收${r.amt}?`).join('；');
