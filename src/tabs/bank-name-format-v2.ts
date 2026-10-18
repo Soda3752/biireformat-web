@@ -198,8 +198,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     let rowMemory: Record<number, MemoryEntry> = {};
     /** 金額不符原因備註：只記本次對帳，不寫進這台電腦的記憶 */
     let rowNotes: Record<number, string> = {};
-    /** 金額不符要回填的期別（使用者在下拉選的）：只記本次對帳 */
-    let rowNotePeriods: Record<number, string> = {};
+    /** 金額不符要回填的期別（使用者勾的，可多期）：只記本次對帳 */
+    let rowNotePeriods: Record<number, string[]> = {};
+    /** 備註框打到一半還沒送出的字（重繪時保留） */
+    let memoDrafts: Record<number, string> = {};
+    /** 重繪中：瀏覽器移除有焦點的備註框時會補發 change，這時不能當成送出 */
+    let repainting = false;
     /** 本次取消的末五碼資料 .xlsx「已確認 / 現付」紀錄（帳號/備註）；不改原檔，下載時移除 */
     const acctCancelled = new Set<string>();
     /** 「改成」打的名字在明細找不到一模一樣的客戶，等使用者挑選 */
@@ -518,17 +522,26 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             tbody.innerHTML = `<tr><td colspan="7" class="reconcile-empty">${q ? '沒有符合搜尋的資料' : '沒有資料'}</td></tr>`;
             return;
         }
+        const act = document.activeElement as HTMLInputElement | null;
+        const focusMemo = act?.dataset?.memo !== undefined && tbody.contains(act)
+            ? {idx: act.dataset.memo, pos: act.selectionStart} : null;
+        repainting = true;
         tbody.innerHTML = shown.map((x) => {
             const canOk = x.custNames.length === 1 && !x.confirmed;
-            const memoInput = x.status === '金額不符'
+            const memoInput = x.status === '金額不符' && !x.userNote
                 ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo" placeholder="原因備註（例：扣30手續費）"
-                          aria-label="金額不符原因備註" data-memo="${x.idx}">`
+                          aria-label="金額不符原因備註" data-memo="${x.idx}" value="${escapeHtml(memoDrafts[x.idx] ?? '')}">`
                 : '';
-            const periodSelect = x.periodOptions?.length && x.notePeriod
-                ? `<select class="reconcile-options-input auto-recon-period" data-memo-period="${x.idx}"
-                           aria-label="回填到哪一期" title="填了備註後，實收金額與收款日回填到這一期">
-                    ${x.periodOptions.map((k) => `<option value="${escapeHtml(k)}"${k === x.notePeriod ? ' selected' : ''}>回填 ${escapeHtml(k)}期</option>`).join('')}
-                   </select>`
+            const periodSelect = x.periodOptions?.length && x.notePeriods
+                ? `<div class="auto-recon-period" role="group" aria-label="回填到哪幾期"
+                        title="填了備註後，實收金額與收款日回填到勾選的期別；勾多期時差額落在最後一期">
+                    <span class="auto-recon-sub">回填</span>
+                    ${x.periodOptions.map((k) => {
+                        const on = x.notePeriods!.includes(k);
+                        return `<button type="button" class="auto-recon-period-chip${on ? ' is-on' : ''}" aria-pressed="${on}"
+                                        data-memo-period="${x.idx}" data-period="${escapeHtml(k)}">${escapeHtml(k)}</button>`;
+                    }).join('')}
+                   </div>${x.noteError ? `<div class="auto-recon-period-error" role="alert">⚠ ${escapeHtml(x.noteError)}</div>` : ''}`
                 : '';
             const memoTag = x.userNote
                 ? `<span class="reconcile-status-pill is-partial" title="${escapeHtml(x.userNote)}">已填備註</span>
@@ -553,6 +566,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
               </div></td>
             </tr>${pending?.idx === x.idx ? pickRow(pending.name) : ''}`;
         }).join('');
+        repainting = false;
+        if (focusMemo) {
+            const el = tbody.querySelector<HTMLInputElement>(`[data-memo="${focusMemo.idx}"]`);
+            el?.focus();
+            if (el && focusMemo.pos !== null) el.setSelectionRange(focusMemo.pos, focusMemo.pos);
+        }
     };
 
     /** 「改成」找不到一模一樣的客戶時，在該列下方列出候選讓使用者挑 */
@@ -623,6 +642,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             rerun();
             return;
         }
+        const chip = el.closest<HTMLButtonElement>('[data-memo-period]');
+        const chipEntry = chip ? byIdx(chip.dataset.memoPeriod) : undefined;
+        if (chip && chipEntry?.notePeriods && chipEntry.periodOptions) {
+            const k = chip.dataset.period!;
+            const cur = chipEntry.notePeriods;
+            const next = cur.includes(k) ? cur.filter((p) => p !== k) : [...cur, k];
+            if (!next.length) return; // 至少留一期
+            rowNotePeriods[chipEntry.idx] = chipEntry.periodOptions.filter((p) => next.includes(p));
+            rerun();
+            return;
+        }
         const pickBtn = el.closest<HTMLButtonElement>('[data-pick-name]');
         const pendEntry = pending ? byIdx(String(pending.idx)) : undefined;
         if (pickBtn && pendEntry) {
@@ -638,6 +668,15 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             renderRows();
         }
     });
+    // 備註框打到一半就記下，重繪（例如切換期別）時不會被清掉
+    tbody.addEventListener('input', (e) => {
+        const memoInput = (e.target as HTMLElement).closest<HTMLInputElement>('[data-memo]');
+        if (memoInput) memoDrafts[Number(memoInput.dataset.memo)] = memoInput.value;
+    });
+    // 點期別按鈕不讓備註框失焦：避免打到一半就被當成送出
+    tbody.addEventListener('mousedown', (e) => {
+        if ((e.target as HTMLElement).closest('[data-memo-period]')) e.preventDefault();
+    });
     tbody.addEventListener('change', (e) => {
         const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-pick-select]');
         if (sel) {
@@ -645,17 +684,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             if (sel.value && entry) remember(entry, sel.value, '已確認');
             return;
         }
-        const perSel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-memo-period]');
-        if (perSel) {
-            rowNotePeriods[Number(perSel.dataset.memoPeriod)] = perSel.value;
-            rerun();
-            return;
-        }
         const memoInput = (e.target as HTMLElement).closest<HTMLInputElement>('[data-memo]');
         if (memoInput) {
+            if (repainting) return;
             const v = memoInput.value.trim();
             if (!v) return;
-            rowNotes[Number(memoInput.dataset.memo)] = v;
+            const i = Number(memoInput.dataset.memo);
+            rowNotes[i] = v;
+            delete memoDrafts[i];
             rerun();
             return;
         }
@@ -806,6 +842,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         rowMemory = {};
         rowNotes = {};
         rowNotePeriods = {};
+        memoDrafts = {};
         acctCancelled.clear();
         pending = null;
         filter = 'all';

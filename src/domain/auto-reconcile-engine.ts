@@ -85,8 +85,12 @@ export interface ReconcileEntry extends BankEntry {
     userNote?: string;
     /** 金額不符可回填的期別（該客戶在明細有的期別）。 */
     periodOptions?: string[];
-    /** 金額不符要回填的期別：使用者選的，否則預設原本紅字提醒那一期。 */
-    notePeriod?: string;
+    /** 金額不符要回填的期別（由舊到新）：使用者勾的，否則預設原本紅字提醒那一期。 */
+    notePeriods?: string[];
+    /** 多期回填時各期的實收金額（與 notePeriods 同序）；最後一期＝入帳金額減前面各期。 */
+    noteShares?: number[];
+    /** 勾的期別無法回填的原因（例：勾太多期，剩餘金額 ≤ 0）。 */
+    noteError?: string;
 }
 
 export interface AutoReconcileResult {
@@ -286,8 +290,8 @@ export interface ReconcileInput {
     rowMemory?: Record<number, MemoryEntry>;
     /** 本次對帳的金額不符備註（以 idx 為鍵）；有備註的金額不符改算 OK。 */
     rowNotes?: Record<number, string>;
-    /** 本次對帳金額不符的回填期別（以 idx 為鍵）；沒選用預設期別。 */
-    rowNotePeriods?: Record<number, string>;
+    /** 本次對帳金額不符的回填期別（以 idx 為鍵，可多期）；沒選用預設期別。 */
+    rowNotePeriods?: Record<number, string[]>;
     done?: Set<string>;
 }
 
@@ -604,16 +608,29 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         const opts = PERIODS.filter((k) => cust[code].p[k]);
         if (!opts.length) continue;
         const def = [...opts].reverse().find((k) => !used.has(code + '|' + k)) ?? opts[opts.length - 1];
-        const want = rowNotePeriods[r.idx];
+        const want = opts.filter((k) => rowNotePeriods[r.idx]?.includes(k));
         r.periodOptions = opts;
-        r.notePeriod = want && opts.includes(want) ? want : def;
+        r.notePeriods = want.length ? want : [def];
         const memo = rowNotes[r.idx]?.trim();
         if (!memo) continue;
         r.userNote = memo;
+        const pers = r.notePeriods;
+        // 多期：前面各期填明細金額，差額落在最後一期
+        const before = pers.slice(0, -1).reduce((t, k) => t + cust[code].p[k].amt, 0);
+        const last = r.amt - before;
+        if (last <= 0) {
+            r.noteError = `勾了 ${pers.join('、')} 共${pers.length}期，前${pers.length - 1}期明細合計 ${before.toLocaleString()} 已超過入帳 ${r.amt.toLocaleString()}，請少勾幾期`;
+            r.note = `備註：${memo}；${r.note}`;
+            continue;
+        }
+        r.noteShares = [...pers.slice(0, -1).map((k) => cust[code].p[k].amt), last];
         r.status = 'OK';
-        r.alloc = [[code, [r.notePeriod]]];
+        r.alloc = [[code, pers]];
         r.who = fmtAlloc(r.alloc);
-        r.note = `備註：${memo}；${r.note}`;
+        const fillTxt = pers.length > 1
+            ? '回填 ' + pers.map((k, i) => `${k} ${r.noteShares![i].toLocaleString()}`).join('、')
+            : `回填 ${pers[0]}`;
+        r.note = `備註：${memo}；${fillTxt}；${r.note}`;
     }
     return {results, cust, PERIODS, skipped, names: names.sort()};
 }
@@ -654,6 +671,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
             let share = cust[code].p[per].amt;
             if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= FEE;
             if (r.alloc.length === 1 && run.length === 1) share = r.amt;
+            if (r.noteShares) share = r.noteShares[i];
             const k = code + '|' + per;
             if (!fills.has(k)) fills.set(k, []);
             fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1});
