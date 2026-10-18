@@ -26,6 +26,12 @@ export const NEW_CUSTOMER_FLAG = '已確認（新客戶）';
 /** 現付店家（叫貨時直接付款，不歸任何期別）的標記。 */
 export const CASH_FLAG = '現付（叫貨直接轉帳）';
 export const isCashFlag = (flag: string): boolean => flag.includes('現付');
+/** 不在明細的入帳：單次付款（記住帳號）、現金存款（自己存的，只算這一筆）。 */
+export const ONE_OFF_FLAG = '單次付款';
+export const DEPOSIT_FLAG = '現金存款';
+export type SpecialKind = typeof ONE_OFF_FLAG | typeof DEPOSIT_FLAG;
+export const specialOf = (flag: string): SpecialKind | undefined =>
+    flag.includes(ONE_OFF_FLAG) ? ONE_OFF_FLAG : flag.includes(DEPOSIT_FLAG) ? DEPOSIT_FLAG : undefined;
 
 export type AutoReconcileStatus = 'OK' | '需確認' | '金額不符' | '找不到' | '不在明細';
 
@@ -103,6 +109,10 @@ export interface ReconcileEntry extends BankEntry {
      * period＝使用者選這筆照月結回填。
      */
     cash?: 'ok' | 'warn' | 'period';
+    /** 使用者確認為單次付款 / 現金存款：算已對上、不回填明細。 */
+    special?: SpecialKind;
+    /** 不在明細時帳號對應到的名稱（記單次付款時當客戶名稱）。 */
+    nameHint?: string;
 }
 
 export interface AutoReconcileResult {
@@ -455,7 +465,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const namekey: Record<string, Set<string>> = {};
     const override: Record<string, MemoryEntry> = {};
     for (const r of acct) {
-        if (/已確認|現付/.test(r.flag)) override[r.val] = {name: r.name, flag: r.flag};
+        if (/已確認|現付|單次付款/.test(r.flag)) override[r.val] = {name: r.name, flag: r.flag};
         if (r.flag === '歷史') {
             add(hist, r.val, r.name);
             continue;
@@ -626,7 +636,20 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             skipped++;
             return;
         }
-        const cashOv = rowMemory[idx] || override[b.key];
+        const spOv = rowMemory[idx] || override[b.key];
+        const special = spOv && specialOf(spOv.flag);
+        if (special) {
+            const memo = rowNotes[idx]?.trim();
+            results.push({
+                ...b, idx, alloc: [], fee: 0, status: 'OK', cand: [], src: `已確認（${special}）`,
+                confirmed: true, custNames: [], special,
+                who: special === ONE_OFF_FLAG ? `${spOv.name}（單次付款）` : DEPOSIT_FLAG,
+                note: (memo ? `備註：${memo}；` : '') + special,
+                ...(memo ? {userNote: memo} : {}),
+            });
+            return;
+        }
+        const cashOv = spOv;
         if (cashOv && isCashFlag(cashOv.flag) && rowCashMode[idx] !== 'period') {
             // 現付：不歸期別，直接算已對上；但金額剛好等於某期（或可組合期別）明細時，可能改月結了，先請使用者確認
             const codes = codesOfName(cashOv.name);
@@ -679,9 +702,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 Object.assign(res, {status: '需確認', note: '可能客戶：' + c.map((x) => cust[x].name).join('、') + '，金額皆對不上'});
             } else if (missing.length && src === '已確認') {
                 const ov = rowMemory[idx] || override[b.key];
-                Object.assign(res, {status: '不在明細', note: `${missing[0]}：${ov?.flag ?? ''}`});
+                Object.assign(res, {status: '不在明細', note: `${missing[0]}：${ov?.flag ?? ''}`, nameHint: missing[0]});
             } else if (missing.length) {
-                Object.assign(res, {status: '不在明細', note: `帳號對應到「${missing.join('、')}」，但不在${monthsTxt}月明細表`});
+                Object.assign(res, {status: '不在明細', nameHint: missing[0], note: `帳號對應到「${missing.join('、')}」，但不在${monthsTxt}月明細表`});
             } else if (b.kind === '現金' && b.bank === '存款機') {
                 Object.assign(res, {status: '不在明細', note: '存款機現金存入（可能是自己存現金/收現）'});
             } else {
@@ -724,6 +747,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         }
     }
     for (const r of results) {
+        if (r.special) continue;
         if (r.status === '金額不符') {
             const p = cust[r.alloc[0][0]].p;
             r.note = (OLD.test(r.key) ? '備註寫舊月份；' : '') + '明細金額：'
@@ -888,7 +912,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
     const order: Record<AutoReconcileStatus, number> = {找不到: 0, 需確認: 1, 金額不符: 2, 不在明細: 3, OK: 4};
     const sorted = [...results].sort((a, b) => (order[a.status] - order[b.status]) || cmpDate(a.date, b.date));
     for (const r of sorted) {
-        const row = ws.addRow([r.date, r.kind, r.amt, r.bank, r.key, r.who, r.status, r.src, r.note, r.confirmed ? '✓' : '']);
+        const row = ws.addRow([r.date, r.kind, r.amt, r.bank, r.key, r.who, r.special ?? r.status, r.src, r.note, r.confirmed ? '✓' : '']);
         row.eachCell({includeEmpty: true}, (c) => {
             c.fill = fill(COLORS[r.status]);
         });

@@ -14,12 +14,22 @@
 import ExcelJS from 'exceljs';
 import {saveAs} from 'file-saver';
 
-import type {AcctRow, AutoReconcileResult, AutoReconcileStatus, BankEntry, MemoryEntry, ReconcileEntry} from '@/domain/auto-reconcile-engine';
+import type {
+    AcctRow,
+    AutoReconcileResult,
+    AutoReconcileStatus,
+    BankEntry,
+    MemoryEntry,
+    ReconcileEntry,
+    SpecialKind,
+} from '@/domain/auto-reconcile-engine';
 import {
     cellVal,
     isStatementWorkbook,
     CASH_FLAG,
+    DEPOSIT_FLAG,
     NEW_CUSTOMER_FLAG,
+    ONE_OFF_FLAG,
     readAcct,
     readBankRows,
     readDone,
@@ -38,9 +48,11 @@ import type {TabDefinition} from '@/ui/tabs';
 const MEMORY_KEY = 'bii.reconcileV2.memory';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-type FilterKey = 'all' | AutoReconcileStatus;
+type FilterKey = 'all' | AutoReconcileStatus | SpecialKind;
 
 const STATUS_ORDER: ReadonlyArray<AutoReconcileStatus> = ['需確認', '金額不符', '找不到', '不在明細', 'OK'];
+/** 狀態分頁：「已對上」後面另列單次付款、現金存款（這些列仍算在已對上與全部裡） */
+const FILTER_ORDER: ReadonlyArray<FilterKey> = ['all', ...STATUS_ORDER, ONE_OFF_FLAG, DEPOSIT_FLAG];
 const STATUS_LABEL: Record<FilterKey, string> = {
     all: '全部',
     OK: '已對上',
@@ -48,6 +60,8 @@ const STATUS_LABEL: Record<FilterKey, string> = {
     金額不符: '金額不符',
     找不到: '找不到',
     不在明細: '不在明細',
+    單次付款: '單次付款',
+    現金存款: '現金存款',
 };
 /** 沿用 reconcile-status-pill 的配色 */
 const STATUS_PILL: Record<AutoReconcileStatus, string> = {
@@ -157,6 +171,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
           <p class="auto-recon-help">
             「需確認」的請核對：對的按「✓ 正確」；不對就在框裡輸入正確客戶（可從清單選），或選「現付店家」。
             叫貨時直接付款、不屬於任何一期的，按「現付（不歸期別）」：這筆算已對上、不回填明細，之後這個帳號的入帳都自動當現付；改回月結按「取消」。
+            「不在明細」「找不到」的入帳：自己存的現金按「現金存款」（只算這一筆）；不是月結客戶、單次付款的按「單次付款」（記住帳號，下次自動確認）；兩者都算已對上、不回填明細，可在框裡填備註。
             用帳號確認過的會記在這台電腦，下次自動對上；只寫「青坊」「麵包」這類共用備註的，只套用這一筆。
             明細表回填後：綠色是確定的、黃色是推測或金額不符；收款日標記 (-15) 扣手續費、(月) 一次付多期或多店合併、(2筆) 多筆、? 待確認。
             下次有新入帳，把這次下載的各月檔和新的銀行對帳單一起放進來，會自動略過已處理的入帳並接著填。
@@ -446,7 +461,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         render();
     };
 
-    const isConfirmFlag = (flag: string): boolean => /已確認|現付/.test(flag);
+    const isConfirmFlag = (flag: string): boolean => /已確認|現付|單次付款/.test(flag);
     const isCancelledAcct = (x: AcctRow): boolean => isConfirmFlag(x.flag) && acctCancelled.has(x.val);
 
     /** 重算（不重讀檔）：確認紀錄變動時使用 */
@@ -494,13 +509,16 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
 
         const cnt: Record<string, number> = {all: r.results.length};
-        for (const x of r.results) cnt[x.status] = (cnt[x.status] ?? 0) + 1;
+        for (const x of r.results) {
+            cnt[x.status] = (cnt[x.status] ?? 0) + 1;
+            if (x.special) cnt[x.special] = (cnt[x.special] ?? 0) + 1;
+        }
         const ok = cnt.OK ?? 0;
         const pending = r.results.length - ok;
         overallStatus.textContent = `入帳 ${r.results.length} 筆　已對上 ${ok}　待處理 ${pending}`
             + (lastStmts.length > 1 ? `（明細 ${lastStmts.map((x) => x.month).join('、')} 月）` : '');
 
-        tabsEl.innerHTML = (['all', ...STATUS_ORDER] as FilterKey[]).map((k) => {
+        tabsEl.innerHTML = FILTER_ORDER.map((k) => {
             const n = cnt[k] ?? 0;
             const tone = k === '找不到' ? 'is-danger' : (k === '需確認' || k === '金額不符') ? 'is-warn' : '';
             return `<button type="button" class="reconcile-tab ${filter === k ? 'is-active' : ''}" role="tab"
@@ -519,7 +537,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         if (!r) return;
         const q = query.trim();
         const shown = r.results
-            .filter((x) => (filter === 'all' || x.status === filter)
+            .filter((x) => (filter === 'all' || x.status === filter || x.special === filter)
                 && (!q || [x.key, x.who, x.amt, x.note, x.date, x.kind, x.bank].join(' ').includes(q)))
             .sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.idx - b.idx);
         searchClear.hidden = query === '';
@@ -534,9 +552,10 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         tbody.innerHTML = shown.map((x) => {
             const canOk = x.custNames.length === 1 && !x.confirmed;
             const canCash = (x.status === '金額不符' || x.status === '需確認') && x.custNames.length === 1 && !x.cash;
-            const memoInput = (x.status === '金額不符' || x.cash === 'ok') && !x.userNote
+            const canSpecial = (x.status === '不在明細' || x.status === '找不到') && !x.special;
+            const memoInput = (x.status === '金額不符' || x.cash === 'ok' || x.special || canSpecial) && !x.userNote
                 ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo"
-                          placeholder="${x.cash === 'ok' ? '備註（選填）' : '原因備註（例：扣30手續費）'}"
+                          placeholder="${x.status === '金額不符' ? '原因備註（例：扣30手續費）' : '備註（選填）'}"
                           aria-label="金額不符原因備註" data-memo="${x.idx}" value="${escapeHtml(memoDrafts[x.idx] ?? '')}">`
                 : '';
             const periodSelect = x.periodOptions?.length && x.notePeriods
@@ -565,14 +584,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
               <td><span class="reconcile-status-pill ${STATUS_PILL[x.status]}">${STATUS_LABEL[x.status]}</span></td>
               <td class="auto-recon-note">${note}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
               <td><div class="auto-recon-act">
-                ${x.confirmed ? `<span class="reconcile-status-pill is-matched">${x.cash === 'ok' || x.cash === 'warn' ? '現付' : '✓ 已確認'}</span>
+                ${x.confirmed ? `<span class="reconcile-status-pill is-matched">${x.special ?? (x.cash === 'ok' || x.cash === 'warn' ? '現付' : '✓ 已確認')}</span>
                   <button type="button" class="btn btn-secondary btn-xs" data-unconfirm="${x.idx}"
-                          title="${x.cash ? '忘掉這個帳號的現付紀錄，恢復照期別比對' : '取消確認，重新比對'}">取消</button>` : ''}
+                          title="${x.cash ? '忘掉這個帳號的現付紀錄，恢復照期別比對'
+                              : x.special === ONE_OFF_FLAG ? '忘掉這個帳號的單次付款紀錄，恢復原狀'
+                              : x.special ? '恢復原狀' : '取消確認，重新比對'}">取消</button>` : ''}
                 ${canOk ? `<button type="button" class="btn btn-secondary btn-xs" data-ok="${x.idx}">✓ 正確</button>` : ''}
                 ${canCash ? `<button type="button" class="btn btn-secondary btn-xs auto-recon-cash" data-cash="${x.idx}"
                           title="叫貨時直接付款，不屬於任何一期：算已對上、不回填明細，並記住這個帳號">現付（不歸期別）</button>` : ''}
                 ${x.cash === 'warn' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="cash" data-cash-idx="${x.idx}">✓ 正確（當現付）</button>
                   <button type="button" class="btn btn-secondary btn-xs" data-cash-mode="period" data-cash-idx="${x.idx}">回填 ${escapeHtml(x.alloc[0]?.[1].join('+') ?? '')}（這筆照月結）</button>` : ''}
+                ${canSpecial ? `<button type="button" class="btn btn-secondary btn-xs" data-special="${DEPOSIT_FLAG}" data-special-idx="${x.idx}"
+                          title="自己存的現金：算已對上、不回填明細，只算這一筆">現金存款</button>
+                  <button type="button" class="btn btn-secondary btn-xs" data-special="${ONE_OFF_FLAG}" data-special-idx="${x.idx}"
+                          title="不是月結客戶的單次付款：算已對上、不回填明細，並記住這個帳號">單次付款</button>` : ''}
                 ${x.cash === 'period' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="" data-cash-idx="${x.idx}">改回現付</button>` : ''}
                 ${memoTag}${memoInput}${periodSelect}
                 <input class="reconcile-search-input auto-recon-fix" list="auto-recon-names" placeholder="改成…" data-fix="${x.idx}">
@@ -627,6 +652,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const unconfirm = (entry: ReconcileEntry) => {
         delete rowMemory[entry.idx];
         delete rowCashMode[entry.idx];
+        if (entry.special) delete rowNotes[entry.idx];
         if (entry.key in memory) {
             delete memory[entry.key];
             saveMemory();
@@ -654,6 +680,25 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             delete rowNotePeriods[entry.idx];
             delete rowCashMode[entry.idx];
             remember(entry, entry.custNames[0], CASH_FLAG);
+            return;
+        }
+        const spBtn = el.closest<HTMLButtonElement>('[data-special]');
+        if (spBtn) {
+            const entry = byIdx(spBtn.dataset.specialIdx);
+            if (!entry) return;
+            const draft = memoDrafts[entry.idx]?.trim();
+            if (draft) rowNotes[entry.idx] = draft;
+            delete memoDrafts[entry.idx];
+            if (spBtn.dataset.special === DEPOSIT_FLAG) {
+                // 現金存款：只算這一筆，不記到這台電腦
+                pending = null;
+                rowMemory[entry.idx] = {name: DEPOSIT_FLAG, flag: DEPOSIT_FLAG};
+                rerun();
+            } else {
+                // 單次付款：客戶名稱優先用對到的名稱，沒有就用帳號/備註文字
+                const nm = entry.custNames[0] || entry.nameHint || entry.key || `${entry.kind}${entry.bank}`;
+                remember(entry, nm, ONE_OFF_FLAG);
+            }
             return;
         }
         const modeBtn = el.closest<HTMLButtonElement>('[data-cash-mode]');
@@ -726,6 +771,9 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const v = memoInput.value.trim();
             if (!v) return;
             const i = Number(memoInput.dataset.memo);
+            const entry = byIdx(memoInput.dataset.memo);
+            // 不在明細 / 找不到：先留著，按「現金存款」「單次付款」時一併帶入
+            if (entry && (entry.status === '不在明細' || entry.status === '找不到') && !entry.special) return;
             rowNotes[i] = v;
             delete memoDrafts[i];
             rerun();
