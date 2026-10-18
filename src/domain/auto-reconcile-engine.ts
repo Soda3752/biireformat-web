@@ -23,6 +23,9 @@ export const FEE = 15;
 export const RESULT_SHEET = '銀行對帳結果';
 /** 使用者確認「這是新客戶（清單沒有）」時的標記：照打的名字存，不做模糊比對。 */
 export const NEW_CUSTOMER_FLAG = '已確認（新客戶）';
+/** 現付店家（叫貨時直接付款，不歸任何期別）的標記。 */
+export const CASH_FLAG = '現付（叫貨直接轉帳）';
+export const isCashFlag = (flag: string): boolean => flag.includes('現付');
 
 export type AutoReconcileStatus = 'OK' | '需確認' | '金額不符' | '找不到' | '不在明細';
 
@@ -95,6 +98,11 @@ export interface ReconcileEntry extends BankEntry {
     noteShares?: number[];
     /** 勾的期別無法回填的原因（例：勾太多期，剩餘金額 ≤ 0）。 */
     noteError?: string;
+    /**
+     * 記為現付的帳號：ok＝當現付算已對上（不回填）；warn＝金額剛好等於某期明細，待使用者確認；
+     * period＝使用者選這筆照月結回填。
+     */
+    cash?: 'ok' | 'warn' | 'period';
 }
 
 export interface AutoReconcileResult {
@@ -368,6 +376,8 @@ export interface ReconcileInput {
     rowNotes?: Record<number, string>;
     /** 本次對帳金額不符的回填期別（以 idx 為鍵，可多期）；沒選用預設期別。 */
     rowNotePeriods?: Record<number, string[]>;
+    /** 本次對帳記為現付、但金額等於某期明細的入帳：cash＝確認當現付；period＝這筆照月結回填。 */
+    rowCashMode?: Record<number, 'cash' | 'period'>;
     done?: Set<string>;
 }
 
@@ -381,6 +391,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowMemory = input.rowMemory ?? {};
     const rowNotes = input.rowNotes ?? {};
     const rowNotePeriods = input.rowNotePeriods ?? {};
+    const rowCashMode = input.rowCashMode ?? {};
     const done = input.done ?? new Set<string>();
     if (stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -475,12 +486,16 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         return t;
     };
 
+    const codesOfName = (n: string): string[] => {
+        const exact = cust[n] ? n : name2code[n];
+        return exact ? [exact] : toCodes(n);
+    };
+
     function candidates(key: string, idx: number): { c: string[]; missing: string[]; src: string } {
         const ov = rowMemory[idx] || override[key];
         if (ov) {
-            const exact = cust[ov.name] ? ov.name : name2code[ov.name];
-            const t = (ov.flag.includes('現付') || ov.flag.includes('新客戶')) ? []
-                : (exact ? [exact] : toCodes(ov.name));
+            // 現付帳號走到這裡表示使用者選了這筆照月結回填，照客戶名稱找期別
+            const t = ov.flag.includes('新客戶') ? [] : codesOfName(ov.name);
             return {c: t, missing: t.length ? [] : [ov.name], src: '已確認'};
         }
         let c: string[] = [];
@@ -604,9 +619,39 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
 
     let skipped = 0;
     const results: ReconcileEntry[] = [];
+    /** 現付列對不到明細客戶時，顯示記住的名稱 */
+    const cashNames: Record<number, string> = {};
     bank.forEach((b, idx) => {
         if (done.has(doneKey(b))) {
             skipped++;
+            return;
+        }
+        const cashOv = rowMemory[idx] || override[b.key];
+        if (cashOv && isCashFlag(cashOv.flag) && rowCashMode[idx] !== 'period') {
+            // 現付：不歸期別，直接算已對上；但金額剛好等於某期（或可組合期別）明細時，可能改月結了，先請使用者確認
+            const codes = codesOfName(cashOv.name);
+            const res: ReconcileEntry = {
+                ...b, idx, alloc: [], fee: 0, status: 'OK', note: '', cand: codes, src: '已確認（現付）',
+                confirmed: true, who: '', custNames: [],
+            };
+            const hit = rowCashMode[idx] === 'cash' ? undefined
+                : codes.map((x) => ({x, r: classify(b.amt, x, b.date)}))
+                    .find((h): h is { x: string; r: { run: string[]; fee: number } } => h.r !== null);
+            if (hit) {
+                Object.assign(res, {
+                    alloc: [[hit.x, hit.r.run]], fee: hit.r.fee, status: '需確認', cash: 'warn',
+                    note: `此帳號記為現付，但金額剛好等於 ${hit.r.run.join('+')} 明細，可能改月結了`,
+                });
+            } else {
+                const memo = rowNotes[idx]?.trim();
+                Object.assign(res, {
+                    alloc: codes.length ? [[codes[0], []]] : [], cash: 'ok',
+                    note: (memo ? `備註：${memo}；` : '') + CASH_FLAG,
+                    ...(memo ? {userNote: memo} : {}),
+                });
+                cashNames[idx] = cashOv.name;
+            }
+            results.push(res);
             return;
         }
         const {c, missing, src} = candidates(b.key, idx);
@@ -657,6 +702,10 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         }
         if (src === '已確認' && res.status === '需確認' && res.alloc.length) res.status = 'OK';
         res.confirmed = src === '已確認';
+        if (cashOv && isCashFlag(cashOv.flag)) {
+            res.cash = 'period';
+            res.note = '此帳號記為現付，這筆照月結比對' + (res.note ? '；' + res.note : '');
+        }
         results.push(res);
     });
 
@@ -685,6 +734,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             ? fmtAlloc(r.alloc)
             : r.alloc.map(([c]) => cust[c].name).join('、');
         r.custNames = r.alloc.map(([c]) => cust[c].name);
+        if (r.cash === 'ok') r.who = (r.who || cashNames[r.idx]) + '（現付）';
     }
 
     // 金額不符：決定回填期別（預設＝原本紅字提醒那一期），填了備註就照一般 OK 回填
