@@ -8,7 +8,7 @@
  *  - 末五碼：設定頁對照表（以「店家編號 = 明細代號」直接對）＋選用的末五碼資料 .xlsx（含「歷史 / 已確認 / 現付」標記）
  *
  * 比對：先依 已確認 → 歷史 → 末五碼 → 備註名稱 找出候選客戶，再用金額去湊期別組合
- * （連續 1~6 期、跳期 2~3 期、扣手續費 15、多店合併、同客戶分筆加總）。
+ * （連續 1~6 期、跳期 2~3 期、扣手續費 15、同客戶分筆加總；多店合併每家連續 1~4 期未收期別、扣 0/15/30）。
  * 帳號/備註都沒有紀錄的，最後再用金額在尚未收款的期別裡推測客戶（單期或連續 2~4 期，扣 0/15/30）。
  *
  * 輸出：回填各月明細的「實收金額 / 收款日」，收款日右邊插入「備註」欄寫標記與使用者備註，並在最新月份檔加上「銀行對帳結果」工作表；
@@ -87,7 +87,12 @@ export interface MemoryEntry {
     name: string;
     flag: string;
     at?: string;
+    /** 多家店合併匯款的帳號：對應的各店名稱（name 為以 MULTI_SEP 串起的名稱）。 */
+    names?: string[];
 }
+
+/** 記憶/末五碼資料裡一個帳號對應多家店時，店名之間的分隔字。 */
+export const MULTI_SEP = '＋';
 
 export interface ReconcileEntry extends BankEntry {
     idx: number;
@@ -128,6 +133,28 @@ export interface ReconcileEntry extends BankEntry {
     paidDup?: PaidDup[];
     /** 使用者對「已收過」的處理：pick＝照勾的期別回填；stack＝照原本對到的期別疊加。 */
     paidChoice?: 'pick' | 'stack';
+    /** 多店候選時可手動選的各店未收期別。 */
+    multiOptions?: MultiOption[];
+    /** 多店合併有多種期別組合都對得上：各組合（第一組＝採用的）。 */
+    multiAlts?: MultiAlt[];
+    /** 多店（或手動選期別）各期回填的實收金額（與 alloc 同形）。 */
+    allocShares?: number[][];
+    /** 使用者手動選各店期別確認的。 */
+    manualMulti?: boolean;
+}
+
+/** 手動選多店期別時，一家店與它可選的未收期別。 */
+export interface MultiOption {
+    code: string;
+    name: string;
+    periods: Array<{ per: string; amt: number }>;
+}
+
+/** 多店合併的一組可能：各店期別、扣的手續費。 */
+export interface MultiAlt {
+    alloc: Array<[string, string[]]>;
+    fee: number;
+    label: string;
 }
 
 /** 已收過款的期別：客戶代號、期別、原本的實收金額、收款日。 */
@@ -476,6 +503,8 @@ export interface ReconcileInput {
     rowPick?: Record<number, GuessPick>;
     /** 本次對帳「已收過」的處理（以 idx 為鍵）：pick＝照 rowNotePeriods 勾的期別回填；stack＝照原期別疊加。 */
     rowPaidChoice?: Record<number, 'pick' | 'stack'>;
+    /** 本次對帳使用者手動選的各店期別（以 idx 為鍵）：差額 0/-15/-30 或填了備註就照選的回填。 */
+    rowMulti?: Record<number, Array<[string, string[]]>>;
     done?: Set<string>;
 }
 
@@ -492,6 +521,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowCashMode = input.rowCashMode ?? {};
     const rowPick = input.rowPick ?? {};
     const rowPaidChoice = input.rowPaidChoice ?? {};
+    const rowMulti = input.rowMulti ?? {};
     const done = input.done ?? new Set<string>();
     if (input.stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -596,7 +626,11 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         const ov = rowMemory[idx] || override[key];
         if (ov) {
             // 現付帳號走到這裡表示使用者選了這筆照月結回填，照客戶名稱找期別
-            const t = ov.flag.includes('新客戶') ? [] : codesOfName(ov.name);
+            // 多店帳號：名稱以 MULTI_SEP 串起（店名本身含此字的照整個名稱找）
+            const nms = ov.names?.length ? ov.names
+                : (name2code[ov.name] || !ov.name.includes(MULTI_SEP)) ? [ov.name]
+                    : ov.name.split(MULTI_SEP).map((x) => x.trim()).filter(Boolean);
+            const t = ov.flag.includes('新客戶') ? [] : [...new Set(nms.flatMap(codesOfName))];
             return {c: t, missing: t.length ? [] : [ov.name], src: '已確認'};
         }
         let c: string[] = [];
@@ -702,39 +736,54 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         return best ? (best as { hit: ClassHit }).hit : null;
     }
 
-    /** 多家店合併匯款：優先所有期別都還沒收款的組合；只有含已收過期別的對得上時，stale 列出 [客戶, 期別]。 */
-    function combo(amt: number, codes: ReadonlyArray<string>, date: string):
-        { alloc: Array<[string, string[]]>; fee: number; stale: Array<[string, string]> } | null {
-        let staleHit: { alloc: Array<[string, string[]]>; fee: number; stale: Array<[string, string]> } | null = null;
+    /** 某店可回填的未收期別（已收過的不算；付款日早於結帳日的期別也不算）。 */
+    const openPers = (code: string, date: string): string[] =>
+        PERIODS.filter((k) => cust[code].p[k] && !cust[code].p[k].paid && avail(k, date));
+
+    // 多家店合併匯款：每家連續 1~4 期未收期別，容許扣手續費 0 / 15 / 30
+    const COMBO_RUNS = RUNS.filter((r) => r.length <= 4 && contiguous(r));
+    const COMBO_FEES = [0, FEE, FEE * 2];
+    /** 解太多就不再找（都會列為需確認）。 */
+    const COMBO_CAP = 20;
+    type ComboHit = { alloc: Array<[string, string[]]>; fee: number; k: number[] };
+    /**
+     * 2~3 家店的期別組合湊入帳金額；回傳依偏好（店數少、期別舊、手續費少）排序的所有解。
+     * 最後一家用「金額 → 期別」索引直接查，3 家 × 每家數十種連續段也只要幾千次運算。
+     */
+    function combo(amt: number, codes: ReadonlyArray<string>, date: string): ComboHit[] {
+        const open = new Map(codes.map((c) => [c, new Set(openPers(c, date))]));
+        const opts = new Map(codes.map((c) => [c, COMBO_RUNS
+            .filter((r) => r.every((x) => open.get(c)!.has(x)))
+            .map((run) => ({run, sum: run.reduce((t, x) => t + cust[c].p[x].amt, 0)}))]));
+        const out: ComboHit[] = [];
         for (const n of [2, 3]) {
             for (const cs of combos(codes, n)) {
-                const choices = cs.map((c) => RUNS.filter((r) =>
-                    r.length <= 2 && r.every((x) => cust[c].p[x]) && avail(r[r.length - 1], date)));
-                const rec = (i: number, pick: string[][]): { alloc: Array<[string, string[]]>; fee: number } | null => {
-                    if (i === cs.length) {
-                        const tot = cs.reduce((t, c, j) => t + pick[j].reduce((u, x) => u + cust[c].p[x].amt, 0), 0);
-                        for (const fee of [0, FEE]) {
-                            if (tot - fee !== amt) continue;
-                            const alloc: Array<[string, string[]]> = cs.map((c, j) => [c, pick[j]]);
-                            const stale = alloc.flatMap(([c, run]) => run.filter((x) => cust[c].p[x].paid)
-                                .map((x): [string, string] => [c, x]));
-                            if (!stale.length) return {alloc, fee};
-                            staleHit = staleHit ?? {alloc, fee, stale};
+                const last = cs[n - 1];
+                const bySum = new Map<number, string[][]>();
+                for (const o of opts.get(last)!) bySum.set(o.sum, [...(bySum.get(o.sum) ?? []), o.run]);
+                const rec = (i: number, pick: string[][], tot: number): void => {
+                    if (out.length >= COMBO_CAP) return;
+                    if (i === n - 1) {
+                        for (const fee of COMBO_FEES) {
+                            for (const run of bySum.get(amt + fee - tot) ?? []) {
+                                const alloc: Array<[string, string[]]> = cs.map((c, j) => [c, j < n - 1 ? pick[j] : run]);
+                                const old = alloc.reduce((t, [, r]) => t + PERIODS.indexOf(r[r.length - 1]), 0);
+                                out.push({alloc, fee, k: [n, old, fee]});
+                            }
                         }
-                        return null;
+                        return;
                     }
-                    for (const r of choices[i]) {
-                        const v = rec(i + 1, [...pick, r]);
-                        if (v) return v;
-                    }
-                    return null;
+                    for (const o of opts.get(cs[i])!) rec(i + 1, [...pick, o.run], tot + o.sum);
                 };
-                const v = rec(0, []);
-                if (v) return {...v, stale: []};
+                rec(0, [], 0);
             }
         }
-        return staleHit;
+        return out.sort((a, b) => cmpArr(a.k, b.k));
     }
+    /** 手動選期別的候選：每家店與它的未收期別。 */
+    const multiOptionsOf = (codes: ReadonlyArray<string>, date: string): MultiOption[] => codes.map((code) => ({
+        code, name: cust[code].name, periods: openPers(code, date).map((per) => ({per, amt: cust[code].p[per].amt})),
+    }));
     /** 已收過期別的說明資料。 */
     const dupOf = (code: string, pers: ReadonlyArray<string>): PaidDup[] => pers.map((per) => {
         const c = cust[code].p[per];
@@ -828,6 +877,26 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             });
             return;
         }
+        const mp = rowMulti[idx];
+        if (mp?.length && mp.every(([cd, run]) => cust[cd] && run.length && run.every((x) => cust[cd].p[x]))) {
+            // 手動選各店期別：每期填明細金額，差額落在最後一期；差額 0/-15/-30 當手續費，其他差額要有備註
+            const shares = mp.map(([cd, run]) => run.map((x) => cust[cd].p[x].amt));
+            const diff = b.amt - shares.flat().reduce((t, v) => t + v, 0);
+            const fee = COMBO_FEES.includes(-diff) ? -diff : 0;
+            const memo = rowNotes[idx]?.trim();
+            const lastShares = shares[shares.length - 1];
+            lastShares[lastShares.length - 1] += diff;
+            if ((fee || !diff || memo) && lastShares[lastShares.length - 1] > 0) {
+                const codes = [...new Set([...candidates(b.key, idx).c, ...mp.map(([cd]) => cd)])];
+                results.push({
+                    ...b, idx, alloc: mp, fee, status: 'OK', cand: codes, src: '已確認', confirmed: true, who: '', custNames: [],
+                    allocShares: shares, manualMulti: true, multiOptions: multiOptionsOf(codes, b.date),
+                    note: (memo ? `備註：${memo}；` : '') + '手動選各店期別' + (diff && !fee ? `，差額 ${diff.toLocaleString()} 落在 ${cust[mp[mp.length - 1][0]].name} ${mp[mp.length - 1][1].slice(-1)[0]}` : ''),
+                    ...(memo ? {userNote: memo} : {}),
+                });
+                return;
+            }
+        }
         const {c, missing, src} = candidates(b.key, idx);
         const res: ReconcileEntry = {
             ...b, idx, alloc: [], fee: 0, status: '找不到', note: '', cand: c, src,
@@ -857,12 +926,16 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 res.status = '需確認';
             }
         } else {
-            const cm = c.length > 1 ? combo(b.amt, c, b.date) : null;
-            if (cm) {
-                Object.assign(res, {alloc: cm.alloc, fee: cm.fee, status: 'OK', note: '多家店合併匯款'});
-                if (cm.stale.length) {
-                    res.paidDup = cm.stale.flatMap(([cd, per]) => dupOf(cd, [per]));
+            const cms = c.length > 1 ? combo(b.amt, c, b.date) : [];
+            if (cms.length) {
+                Object.assign(res, {alloc: cms[0].alloc, fee: cms[0].fee, status: 'OK', note: '多家店合併匯款'});
+                if (cms.length > 1) {
+                    // 不同期別組合都對得上：列為需確認，讓使用者挑
+                    const lab = (h: ComboHit): string => fmtAlloc(h.alloc) + (h.fee ? `（扣手續費${h.fee}）` : '');
+                    res.multiAlts = cms.slice(0, GUESS_LIMIT).map((h) => ({alloc: h.alloc, fee: h.fee, label: lab(h)}));
                     res.status = '需確認';
+                    res.note = `多家店合併匯款，有 ${cms.length >= COMBO_CAP ? `${COMBO_CAP} 種以上` : `${cms.length} 種`}期別組合對得上；採用 ${lab(cms[0])}；其他可能：`
+                        + res.multiAlts.slice(1).map((x) => x.label).join('、');
                 }
             } else if (c.length === 1) {
                 Object.assign(res, {alloc: [[c[0], []]], status: '金額不符'});
@@ -881,7 +954,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 toGuess.push(res);
             }
         }
-        if (src === '已確認' && res.status === '需確認' && res.alloc.length && !res.paidDup) res.status = 'OK';
+        if (src === '已確認' && res.status === '需確認' && res.alloc.length && !res.paidDup && !res.multiAlts) res.status = 'OK';
+        if (c.length > 1 && !(cashOv && isCashFlag(cashOv.flag))) res.multiOptions = multiOptionsOf(c, b.date);
         res.confirmed = src === '已確認';
         if (cashOv && isCashFlag(cashOv.flag)) {
             res.cash = 'period';
@@ -1324,6 +1398,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
             if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= r.fee;
             if (r.alloc.length === 1 && run.length === 1) share = r.amt;
             if (r.noteShares) share = r.noteShares[i];
+            if (r.allocShares) share = r.allocShares[ai][i];
             const k = code + '|' + per;
             if (!fills.has(k)) fills.set(k, []);
             fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1});

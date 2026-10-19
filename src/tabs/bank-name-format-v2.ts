@@ -21,6 +21,7 @@ import type {
     BankEntry,
     GuessPick,
     MemoryEntry,
+    MultiOption,
     ReconcileEntry,
     SpecialKind,
 } from '@/domain/auto-reconcile-engine';
@@ -30,6 +31,7 @@ import {
     CASH_FLAG,
     DEPOSIT_FLAG,
     isLowerUnsettled,
+    MULTI_SEP,
     NEW_CUSTOMER_FLAG,
     ONE_OFF_FLAG,
     readAcct,
@@ -180,6 +182,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             「需確認」的請核對：對的按「✓ 正確」；不對就在框裡輸入正確客戶（可從清單選），或選「現付店家」。
             叫貨時直接付款、不屬於任何一期的，按「現付（不歸期別）」：這筆算已對上、不回填明細，之後這個帳號的入帳都自動當現付；改回月結按「取消」。
             金額只對得上明細「已收過款」的那期時，會列為「需確認」並寫出那期的實收金額與收款日：通常是付別期，勾要回填的期別後按「✓ 回填」（可填原因備註）；真的是補付同一期就按「✓ 正確（疊加）」。
+            一個帳號對到多家店時，會試各店連續 1～4 期未收的期別合起來（可扣手續費 15/30）：只有一組對得上就自動對上；好幾組都對得上就從「是哪一組？」挑；都對不上（或想改）就按「手動選各店期別」，勾每家店付哪幾期，差額是 0、-15、-30 可直接確認，其他差額要填原因備註。確認後會記住這個帳號對應這幾家店。
             帳號/備註沒有紀錄的，會用金額在還沒收款的期別裡推測客戶（可扣手續費 15/30）：只推到一個就按「✓ 正確」；推到好幾個就從「是哪一個？」挑。
             「不在明細」「找不到」的入帳：自己存的現金按「現金存款」（只算這一筆）；不是月結客戶、單次付款的按「單次付款」（記住帳號，下次自動確認）；兩者都算已對上、不回填明細，可在框裡填備註。
             用帳號確認過的會記在這台電腦，下次自動對上；只寫「青坊」「麵包」這類共用備註的，只套用這一筆。
@@ -233,6 +236,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     let rowPick: Record<number, GuessPick> = {};
     /** 金額只對得上已收過款的期別：使用者選照勾的期別回填（pick）或照原期別疊加（stack）：只記本次對帳 */
     let rowPaidChoice: Record<number, 'pick' | 'stack'> = {};
+    /** 多家店合併：使用者確認的各店期別：只記本次對帳 */
+    let rowMulti: Record<number, Array<[string, string[]]>> = {};
+    /** 手動選各店期別：勾到一半的選擇（店代號 → 期別）、打開選單的列、差額原因備註草稿 */
+    let multiDraft: Record<number, Record<string, string[]>> = {};
+    let multiOpen = new Set<number>();
+    let multiMemo: Record<number, string> = {};
     /** 備註框打到一半還沒送出的字（重繪時保留） */
     let memoDrafts: Record<number, string> = {};
     /** 重繪中：瀏覽器移除有焦點的備註框時會補發 change，這時不能當成送出 */
@@ -499,6 +508,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 rowCashMode,
                 rowPick,
                 rowPaidChoice,
+                rowMulti,
                 done: latest ? readDone(latest) : new Set(),
             });
             lastStmts = ss;
@@ -596,13 +606,29 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             return;
         }
         const act = document.activeElement as HTMLInputElement | null;
-        const focusMemo = act?.dataset?.memo !== undefined && tbody.contains(act)
-            ? {idx: act.dataset.memo, pos: act.selectionStart} : null;
+        const focusSel = !act || !tbody.contains(act) ? null
+            : act.dataset.memo !== undefined ? `[data-memo="${act.dataset.memo}"]`
+                : act.dataset.multiMemo !== undefined ? `[data-multi-memo="${act.dataset.multiMemo}"]` : null;
+        const focusMemo = focusSel ? {sel: focusSel, pos: act!.selectionStart} : null;
         repainting = true;
         tbody.innerHTML = shown.map((x) => {
             // 已收過、還沒選怎麼處理：改用下面的「✓ 回填」「✓ 正確（疊加）」
             const paidOpen = !!x.paidDup && !x.paidChoice;
             const canOk = x.custNames.length === 1 && !x.confirmed && !paidOpen;
+            // 多家店合併自動對上的（只有一組解）：按「✓ 正確」記住這個帳號對應這幾家店
+            const canOkMulti = x.alloc.length > 1 && x.alloc.every(([, run]) => run.length) && !x.confirmed && !paidOpen && !x.multiAlts;
+            const multiShown = isMultiOpen(x);
+            const multiToggle = canMulti(x) && !multiShown
+                ? `<button type="button" class="btn btn-secondary btn-xs" data-multi-open="${x.idx}"
+                          title="自己勾每家店各付哪幾期">${x.manualMulti ? '改選各店期別' : '手動選各店期別'}</button>`
+                : '';
+            const altPicker = x.multiAlts && !x.manualMulti
+                ? `<div class="auto-recon-period auto-recon-multi-alts" role="group" aria-label="從對得上的組合挑一組">
+                    <span class="auto-recon-sub">是哪一組？</span>
+                    ${x.multiAlts.map((a, ai) => `<button type="button" class="auto-recon-period-chip"
+                                    data-multi-alt="${x.idx}" data-alt-i="${ai}">${escapeHtml(a.label)}</button>`).join('')}
+                   </div>`
+                : '';
             const canCash = (x.status === '金額不符' || x.status === '需確認') && x.custNames.length === 1 && !x.cash && !x.guesses;
             // 依金額推測的原本是「找不到」，推錯時一樣可以當現金存款 / 單次付款
             const canSpecial = (x.status === '不在明細' || x.status === '找不到' || !!x.guesses) && !x.special;
@@ -661,6 +687,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                               : x.special === ONE_OFF_FLAG ? '忘掉這個帳號的單次付款紀錄，恢復原狀'
                               : x.special ? '恢復原狀' : '取消確認，重新比對'}">取消</button>` : ''}
                 ${canOk ? `<button type="button" class="btn btn-secondary btn-xs" data-ok="${x.idx}">✓ 正確</button>` : ''}
+                ${canOkMulti ? `<button type="button" class="btn btn-secondary btn-xs" data-multi-ok="${x.idx}">✓ 正確</button>` : ''}
                 ${canCash ? `<button type="button" class="btn btn-secondary btn-xs auto-recon-cash" data-cash="${x.idx}"
                           title="叫貨時直接付款，不屬於任何一期：算已對上、不回填明細，並記住這個帳號">現付（不歸期別）</button>` : ''}
                 ${x.cash === 'warn' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="cash" data-cash-idx="${x.idx}">✓ 正確（當現付）</button>
@@ -670,17 +697,82 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                   <button type="button" class="btn btn-secondary btn-xs" data-special="${ONE_OFF_FLAG}" data-special-idx="${x.idx}"
                           title="不是月結客戶的單次付款：算已對上、不回填明細，並記住這個帳號">單次付款</button>` : ''}
                 ${x.cash === 'period' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="" data-cash-idx="${x.idx}">改回現付</button>` : ''}
-                ${paidAct}${guessPicker}${memoTag}${memoInput}${periodSelect}
+                ${paidAct}${guessPicker}${altPicker}${multiToggle}${memoTag}${memoInput}${periodSelect}
                 <input class="reconcile-search-input auto-recon-fix" list="auto-recon-names" placeholder="改成…" data-fix="${x.idx}">
               </div></td>
-            </tr>${pending?.idx === x.idx ? pickRow(pending.name) : ''}`;
+            </tr>${multiShown ? multiRow(x) : ''}${pending?.idx === x.idx ? pickRow(pending.name) : ''}`;
         }).join('');
         repainting = false;
         if (focusMemo) {
-            const el = tbody.querySelector<HTMLInputElement>(`[data-memo="${focusMemo.idx}"]`);
+            const el = tbody.querySelector<HTMLInputElement>(focusMemo.sel);
             el?.focus();
             if (el && focusMemo.pos !== null) el.setSelectionRange(focusMemo.pos, focusMemo.pos);
         }
+    };
+
+    /** 手動選各店期別：差額（入帳 − 已選合計）是這些值時當手續費，可直接確認 */
+    const MULTI_OK_DIFFS = [0, -15, -30];
+    const canMulti = (x: ReconcileEntry): boolean => (x.multiOptions?.length ?? 0) > 1 && !x.special && !x.cash;
+    /** 多店候選都對不上時直接展開；其他（自動對上、已手動確認）要按「手動選各店期別」才展開 */
+    const isMultiOpen = (x: ReconcileEntry): boolean => canMulti(x)
+        && (multiOpen.has(x.idx) || (x.status === '需確認' && !x.alloc.some(([, run]) => run.length) && !x.paidDup));
+    /** 目前勾的期別（還沒勾過就帶入對到的期別） */
+    const multiSel = (x: ReconcileEntry): Record<string, string[]> => multiDraft[x.idx]
+        ?? Object.fromEntries((x.multiOptions ?? []).map((o) => [o.code, x.alloc.find(([c]) => c === o.code)?.[1] ?? []]));
+    const multiCalc = (x: ReconcileEntry) => {
+        const opts: ReadonlyArray<MultiOption> = x.multiOptions ?? [];
+        const sel = multiSel(x);
+        const alloc = opts
+            .map((o): [string, string[]] => [o.code, o.periods.filter((p) => sel[o.code]?.includes(p.per)).map((p) => p.per)])
+            .filter(([, run]) => run.length);
+        const amtOf = (code: string, per: string): number =>
+            opts.find((o) => o.code === code)?.periods.find((p) => p.per === per)?.amt ?? 0;
+        const total = alloc.reduce((t, [c, run]) => t + run.reduce((u, per) => u + amtOf(c, per), 0), 0);
+        const diff = x.amt - total;
+        const needMemo = !MULTI_OK_DIFFS.includes(diff);
+        const last = alloc[alloc.length - 1];
+        const lastPer = last?.[1][last[1].length - 1];
+        const error = !alloc.length ? '請至少勾一期'
+            : last && amtOf(last[0], lastPer!) + diff <= 0
+                ? `已選合計比入帳多 ${(-diff).toLocaleString()}，超過最後一期（${lastPer}）的金額，請少勾幾期` : '';
+        return {alloc, total, diff, needMemo, error};
+    };
+    /** 差額原因備註（改選時帶入上次填的） */
+    const memoOf = (x: ReconcileEntry): string => multiMemo[x.idx] ?? (x.manualMulti ? x.userNote ?? '' : '');
+    const multiReady = (x: ReconcileEntry): boolean => {
+        const m = multiCalc(x);
+        return !m.error && (!m.needMemo || !!memoOf(x).trim());
+    };
+
+    /** 手動選各店期別：列在該列下方，勾每家店付哪幾期，即時顯示合計與差額 */
+    const multiRow = (x: ReconcileEntry): string => {
+        const sel = multiSel(x);
+        const m = multiCalc(x);
+        const sign = (n: number): string => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toLocaleString();
+        return `<tr class="auto-recon-pick-row"><td colspan="7">
+          <div class="auto-recon-pick auto-recon-multi" role="group" aria-label="手動選各店付哪幾期">
+            <div class="auto-recon-pick-title">多家店合併匯款：勾每家店各付哪幾期（只列還沒收款的期別）</div>
+            ${(x.multiOptions ?? []).map((o) => `<div class="auto-recon-pick-body auto-recon-multi-store">
+                <span class="auto-recon-multi-name">${escapeHtml(o.name)}</span>
+                ${o.periods.length ? o.periods.map((p) => {
+                    const on = !!sel[o.code]?.includes(p.per);
+                    return `<button type="button" class="auto-recon-period-chip${on ? ' is-on' : ''}" aria-pressed="${on}"
+                                    data-multi-chip="${x.idx}" data-code="${escapeHtml(o.code)}" data-period="${escapeHtml(p.per)}">${escapeHtml(p.per)} ${p.amt.toLocaleString()}</button>`;
+                }).join('') : '<span class="auto-recon-sub">沒有未收的期別</span>'}
+              </div>`).join('')}
+            <div class="auto-recon-multi-sum ${m.needMemo ? 'is-warn' : 'is-ok'}" data-multi-sum="${x.idx}">
+              已選合計 <b>${m.total.toLocaleString()}</b>　/　入帳 <b>${x.amt.toLocaleString()}</b>　/　差額 <b>${sign(m.diff)}</b>
+              ${!m.needMemo && m.diff ? `（扣手續費${-m.diff}，落在最後一期）` : m.needMemo && m.total ? '（差額落在最後一期，需填原因備註）' : ''}
+            </div>
+            ${m.error ? `<div class="auto-recon-period-error" role="alert">⚠ ${escapeHtml(m.error)}</div>` : ''}
+            <div class="auto-recon-pick-body">
+              ${m.needMemo && !m.error ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo" data-multi-memo="${x.idx}"
+                       placeholder="差額原因備註（必填）" aria-label="差額原因備註" value="${escapeHtml(memoOf(x))}">` : ''}
+              <button type="button" class="btn btn-primary btn-xs" data-multi-confirm="${x.idx}" ${multiReady(x) ? '' : 'disabled'}>✓ 確認各店期別</button>
+              ${multiOpen.has(x.idx) ? `<button type="button" class="btn btn-secondary btn-xs" data-multi-close="${x.idx}">收起</button>` : ''}
+            </div>
+          </div>
+        </td></tr>`;
     };
 
     /** 「改成」找不到一模一樣的客戶時，在該列下方列出候選讓使用者挑 */
@@ -711,14 +803,32 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const remember = (entry: ReconcileEntry, name: string, flag: string, pick?: GuessPick) => {
         pending = null;
         delete rowPick[entry.idx];
+        delete rowMulti[entry.idx];
         if (pick) rowPick[entry.idx] = pick;
+        saveConfirm(entry, {name, flag});
+    };
+
+    const saveConfirm = (entry: ReconcileEntry, m: MemoryEntry) => {
         if (isGenericKey(entry.key)) {
-            rowMemory[entry.idx] = {name, flag};
+            rowMemory[entry.idx] = m;
         } else {
-            memory[entry.key] = {name, flag, at: new Date().toISOString().slice(0, 10)};
+            memory[entry.key] = {...m, at: new Date().toISOString().slice(0, 10)};
             saveMemory();
         }
         rerun();
+    };
+
+    /** 多家店合併確認：照選的各店期別回填，並記住此帳號對應這幾家店 */
+    const confirmMulti = (entry: ReconcileEntry, alloc: Array<[string, string[]]>) => {
+        if (!lastResult || !alloc.length) return;
+        const names = [...new Set(alloc.map(([c]) => lastResult!.cust[c].name))];
+        pending = null;
+        delete rowPick[entry.idx];
+        delete multiDraft[entry.idx];
+        delete multiMemo[entry.idx];
+        multiOpen.delete(entry.idx);
+        rowMulti[entry.idx] = alloc;
+        saveConfirm(entry, {name: names.join(MULTI_SEP), flag: '已確認', ...(names.length > 1 ? {names} : {})});
     };
 
     /** 取消確認：本次逐筆紀錄、這台電腦的記憶、上傳的末五碼資料（本次）一併取消，重新比對 */
@@ -726,7 +836,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         delete rowMemory[entry.idx];
         delete rowCashMode[entry.idx];
         delete rowPick[entry.idx];
-        if (entry.special) delete rowNotes[entry.idx];
+        delete rowMulti[entry.idx];
+        if (entry.special || entry.manualMulti) delete rowNotes[entry.idx];
         if (entry.key in memory) {
             delete memory[entry.key];
             saveMemory();
@@ -741,6 +852,57 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         if (okBtn) {
             const entry = byIdx(okBtn.dataset.ok);
             if (entry) remember(entry, entry.custNames[0], '已確認', entry.guesses?.length === 1 ? entry.guesses[0] : undefined);
+            return;
+        }
+        const multiChip = el.closest<HTMLButtonElement>('[data-multi-chip]');
+        if (multiChip) {
+            const entry = byIdx(multiChip.dataset.multiChip);
+            if (!entry) return;
+            const code = multiChip.dataset.code!;
+            const per = multiChip.dataset.period!;
+            const sel = {...multiSel(entry)};
+            const cur = sel[code] ?? [];
+            sel[code] = cur.includes(per) ? cur.filter((p) => p !== per) : [...cur, per];
+            multiDraft[entry.idx] = sel;
+            renderRows();
+            return;
+        }
+        const multiOpenBtn = el.closest<HTMLButtonElement>('[data-multi-open]');
+        if (multiOpenBtn) {
+            multiOpen.add(Number(multiOpenBtn.dataset.multiOpen));
+            renderRows();
+            return;
+        }
+        const multiCloseBtn = el.closest<HTMLButtonElement>('[data-multi-close]');
+        if (multiCloseBtn) {
+            const i = Number(multiCloseBtn.dataset.multiClose);
+            multiOpen.delete(i);
+            delete multiDraft[i];
+            renderRows();
+            return;
+        }
+        const multiConfirmBtn = el.closest<HTMLButtonElement>('[data-multi-confirm]');
+        if (multiConfirmBtn) {
+            const entry = byIdx(multiConfirmBtn.dataset.multiConfirm);
+            if (!entry || !multiReady(entry)) return;
+            const m = multiCalc(entry);
+            const memo = memoOf(entry).trim();
+            if (m.needMemo && memo) rowNotes[entry.idx] = memo;
+            else delete rowNotes[entry.idx];
+            confirmMulti(entry, m.alloc);
+            return;
+        }
+        const multiAltBtn = el.closest<HTMLButtonElement>('[data-multi-alt]');
+        if (multiAltBtn) {
+            const entry = byIdx(multiAltBtn.dataset.multiAlt);
+            const alt = entry?.multiAlts?.[Number(multiAltBtn.dataset.altI)];
+            if (entry && alt) confirmMulti(entry, alt.alloc);
+            return;
+        }
+        const multiOkBtn = el.closest<HTMLButtonElement>('[data-multi-ok]');
+        if (multiOkBtn) {
+            const entry = byIdx(multiOkBtn.dataset.multiOk);
+            if (entry) confirmMulti(entry, entry.alloc);
             return;
         }
         const guessBtn = el.closest<HTMLButtonElement>('[data-guess]');
@@ -816,6 +978,12 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
         const clearBtn = el.closest<HTMLButtonElement>('[data-memo-clear]');
         if (clearBtn) {
+            const cleared = byIdx(clearBtn.dataset.memoClear);
+            if (cleared?.manualMulti) {
+                multiDraft[cleared.idx] = Object.fromEntries(cleared.alloc);
+                multiOpen.add(cleared.idx);
+                delete rowMulti[cleared.idx];
+            }
             delete rowNotes[Number(clearBtn.dataset.memoClear)];
             delete rowNotePeriods[Number(clearBtn.dataset.memoClear)];
             delete rowPaidChoice[Number(clearBtn.dataset.memoClear)];
@@ -852,10 +1020,18 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     tbody.addEventListener('input', (e) => {
         const memoInput = (e.target as HTMLElement).closest<HTMLInputElement>('[data-memo]');
         if (memoInput) memoDrafts[Number(memoInput.dataset.memo)] = memoInput.value;
+        const multiMemoInput = (e.target as HTMLElement).closest<HTMLInputElement>('[data-multi-memo]');
+        if (multiMemoInput) {
+            const entry = byIdx(multiMemoInput.dataset.multiMemo);
+            if (!entry) return;
+            multiMemo[entry.idx] = multiMemoInput.value;
+            const btn = tbody.querySelector<HTMLButtonElement>(`[data-multi-confirm="${entry.idx}"]`);
+            if (btn) btn.disabled = !multiReady(entry);
+        }
     });
     // 點期別按鈕不讓備註框失焦：避免打到一半就被當成送出
     tbody.addEventListener('mousedown', (e) => {
-        if ((e.target as HTMLElement).closest('[data-memo-period]')) e.preventDefault();
+        if ((e.target as HTMLElement).closest('[data-memo-period], [data-multi-chip]')) e.preventDefault();
     });
     tbody.addEventListener('change', (e) => {
         const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-pick-select]');
@@ -1028,6 +1204,10 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         rowCashMode = {};
         rowPick = {};
         rowPaidChoice = {};
+        rowMulti = {};
+        multiDraft = {};
+        multiOpen = new Set();
+        multiMemo = {};
         memoDrafts = {};
         acctCancelled.clear();
         pending = null;

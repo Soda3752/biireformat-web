@@ -5685,6 +5685,31 @@ td.cell-price-down {
     gap: var(--space-1);
 }
 
+.auto-recon-multi-name {
+    min-width: 96px;
+    font-weight: 600;
+}
+
+.auto-recon-multi .auto-recon-memo {
+    width: 260px;
+}
+
+.auto-recon-multi-alts {
+    max-width: 320px;
+}
+
+.auto-recon-multi-sum {
+    font-size: var(--font-size-sm, 13px);
+}
+
+.auto-recon-multi-sum.is-ok b:last-child {
+    color: var(--color-success, #2e7d32);
+}
+
+.auto-recon-multi-sum.is-warn b:last-child {
+    color: var(--color-danger, #c00000);
+}
+
 .auto-recon-pick-select {
     min-width: 160px;
     max-width: 220px;
