@@ -1304,6 +1304,9 @@ const OLD_DATE_TAGS = /^(\d{1,2}\/\d{1,2})((?:\((?:-\d+|月|\d+筆)\))*)(\?)?$/;
 /** 格子的字級（沒設定就回空物件，不覆蓋原字型）。 */
 const sizeOf = (c: ExcelJS.Cell): Partial<ExcelJS.Font> => (c.font?.size ? {size: c.font.size} : {});
 
+/** 格子的水平、垂直對齊（給回填格跟同列金額格對齊用）。 */
+const alignOf = (c: ExcelJS.Cell): Partial<ExcelJS.Alignment> => ({horizontal: c.alignment?.horizontal, vertical: c.alignment?.vertical});
+
 /** 舊版小字收款日轉成新格式：收款日只留日期、取消縮字並放大到金額欄字級，(月) 改淺藍底，標記移到備註欄。 */
 function convertOldDateTags(ws: ExcelJS.Worksheet): void {
     const {headerRow, blocks} = stmtLayout(ws);
@@ -1329,7 +1332,7 @@ function convertOldDateTags(ws: ExcelJS.Worksheet): void {
             ec.style = {
                 ...ec.style,
                 font: {...ec.font, ...sizeOf(row.getCell(b.amt))},
-                alignment: {...ec.alignment, shrinkToFit: false},
+                alignment: {...ec.alignment, ...alignOf(row.getCell(b.amt)), shrinkToFit: false},
                 ...(multi ? {fill: fill(MULTI_DATE_FILL)} : {}),
             };
             // 備註格插欄時沿用了收款日的小字，改回實收金額欄原本的字級
@@ -1340,7 +1343,7 @@ function convertOldDateTags(ws: ExcelJS.Worksheet): void {
     });
 }
 
-/** 舊版已回填的實收金額、收款日（帶回填底色、內容是數字或單一日期）放大到同列金額格的字級。 */
+/** 舊版已回填的實收金額、收款日（帶回填底色、內容是數字或單一日期）放大到同列金額格的字級，對齊也跟金額格一致。 */
 function enlargeOldFills(ws: ExcelJS.Worksheet): void {
     const {headerRow, blocks} = stmtLayout(ws);
     ws.eachRow((row, r) => {
@@ -1348,14 +1351,34 @@ function enlargeOldFills(ws: ExcelJS.Worksheet): void {
         for (const b of blocks) {
             const size = sizeOf(row.getCell(b.amt));
             if (!size.size) continue;
+            const align = alignOf(row.getCell(b.amt));
             for (const c of [row.getCell(b.paid), row.getCell(b.date)]) {
                 const fg = (c.fill as ExcelJS.FillPattern | undefined)?.fgColor?.argb;
                 const v = cellVal(c);
                 if (!fg || !FILL_MARKS.has(fg) || !(typeof v === 'number' || /^\d{1,2}\/\d{1,2}$/.test(s(v)))) continue;
-                c.style = {...c.style, font: {...c.font, ...size}, alignment: {...c.alignment, shrinkToFit: false}};
+                c.style = {...c.style, font: {...c.font, ...size}, alignment: {...c.alignment, ...align, shrinkToFit: false}};
             }
         }
     });
+}
+
+/** 收款日欄寬：16 號字的「12/31」與標題「收款日」不被切。 */
+const DATE_WIDTH = 10;
+
+/** 收款日欄加寬；各段標題列的「收款日」取消縮字、字級放大到同列實收金額標題（沒設定就看金額標題）。 */
+function widenDateCols(ws: ExcelJS.Worksheet): void {
+    const {headerRow, blocks} = stmtLayout(ws);
+    for (const b of blocks) {
+        const col = ws.getColumn(b.date);
+        if ((col.width ?? 0) < DATE_WIDTH) col.width = DATE_WIDTH;
+        ws.eachRow((row, r) => {
+            const c = row.getCell(b.date);
+            if (r < headerRow || s(cellVal(c)) !== '收款日') return;
+            const paid = sizeOf(row.getCell(b.paid));
+            const size = paid.size ? paid : sizeOf(row.getCell(b.amt));
+            c.style = {...c.style, font: {...c.font, ...size}, alignment: {...c.alignment, shrinkToFit: false}};
+        });
+    }
 }
 
 /**
@@ -1379,6 +1402,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
             inserted.set(ws, at);
             if (at) convertOldDateTags(ws);
             enlargeOldFills(ws);
+            widenDateCols(ws);
         }
     }
     const colOf = (ws: ExcelJS.Worksheet, c: number): number => c + (inserted.get(ws) ?? []).filter((p) => p <= c).length;
@@ -1415,8 +1439,10 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         if (!ws) continue;
         const dc = ws.getCell(info.row, colOf(ws, info.paidCol));
         const ec = ws.getCell(info.row, colOf(ws, info.dateCol));
-        // 實收金額、收款日字級與同列金額格一致
-        const size = sizeOf(ws.getCell(info.row, colOf(ws, info.amtCol)));
+        // 實收金額、收款日字級、對齊與同列金額格一致
+        const amtCell = ws.getCell(info.row, colOf(ws, info.amtCol));
+        const size = sizeOf(amtCell);
+        const align = alignOf(amtCell);
         const big = (c: ExcelJS.Cell): Partial<ExcelJS.Style> => (size.size ? {font: {...c.font, ...size}} : {});
         const ok = lst0.every((x) => x.r.status === 'OK');
         const prevVal = cellVal(dc);
@@ -1434,8 +1460,8 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         ];
         ec.value = md(lst0[lst0.length - 1].r.date);
         const color = ok ? COLORS.OK : COLORS.需確認;
-        dc.style = {...dc.style, ...big(dc), fill: fill(color)};
-        ec.style = {...ec.style, ...big(ec), fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, shrinkToFit: false}};
+        dc.style = {...dc.style, ...big(dc), fill: fill(color), alignment: {...dc.alignment, ...align}};
+        ec.style = {...ec.style, ...big(ec), fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, ...align, shrinkToFit: false}};
         const mc = memoCell(ws, info);
         if (mc && parts.length) writeMemo(mc, parts);
     }

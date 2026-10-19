@@ -43,6 +43,7 @@ import {
     writeBack,
 } from '@/domain/auto-reconcile-engine';
 import {getBankInfos, loadBankInfos} from '@/domain/bank-info-loader';
+import {restoreExternalLinks} from '@/domain/xlsx-external-links';
 import {localSettings} from '@/infra/local-settings-store';
 import {parseTransRecord} from '@/readers/trans-record-reader';
 import {createDropZone} from '@/ui/drop-zone';
@@ -1152,7 +1153,11 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const latestMonth = ss[ss.length - 1].month!;
         writeBack(wbs, latestMonth, rec);
         const isLatest = target.month === latestMonth;
-        await saveWorkbook(wbs[target.month!], `${target.month}月_${isLatest ? '已自動對帳' : '補收款'}.xlsx`);
+        const filename = `${target.month}月_${isLatest ? '已自動對帳' : '補收款'}.xlsx`;
+        // ExcelJS 會丟掉外部活頁簿連結，從原檔搬回去，否則 Excel 打不開
+        const buf = await restoreExternalLinks(await wbs[target.month!].xlsx.writeBuffer() as ArrayBuffer, target.buf);
+        saveAs(new Blob([buf], {type: XLSX_MIME}), filename);
+        showToast({variant: 'success', title: '已輸出', message: filename});
     });
 
     downloadAcctBtn.addEventListener('click', () => void withBusy(downloadAcctBtn, async () => {
