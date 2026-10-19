@@ -58,6 +58,8 @@ export interface PeriodCell {
     /** 客戶名稱欄。 */
     col: number;
     amt: number;
+    /** 「金額」欄（回填的字級照它）。 */
+    amtCol: number;
     /** 回填用的「實收金額」「收款日」欄。 */
     paidCol: number;
     dateCol: number;
@@ -344,7 +346,7 @@ export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
                 out[key] = out[key] || {name, p: {}};
                 const paid = cellVal(row.getCell(b.paid));
                 out[key].p[`${month}${half}`] = {
-                    sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), paidCol: b.paid, dateCol: b.date,
+                    sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), amtCol: b.amt, paidCol: b.paid, dateCol: b.date,
                     ...(typeof paid === 'number' && paid > 0 ? {paid} : {}),
                 };
             }
@@ -1025,18 +1027,42 @@ function addMemoCols(ws: ExcelJS.Worksheet): number[] | null {
         // 列印範圍剛好到收款日的，把新的備註欄也包進去
         const pa = /^(.*:\$?)([A-Z]{1,3})(\$?\d+)$/.exec(ws.pageSetup.printArea ?? '');
         if (pa && colNum(pa[2]) === c - 1) ws.pageSetup.printArea = pa[1] + colLetter(c) + pa[3];
-        const h = ws.getCell(headerRow, c);
-        h.value = MEMO_HEADER;
-        h.style = {...ws.getCell(headerRow, c - 1).style};
-        // 沿用收款日格的框線與字型，表格看起來是同一張
-        ws.eachRow((row, r) => {
-            if (r <= headerRow) return;
-            const src = row.getCell(c - 1);
-            if (!src.border || !Object.keys(src.border).length) return;
-            row.getCell(c).style = {border: src.border, font: src.font, alignment: {horizontal: 'left', vertical: 'middle'}};
-        });
+        ws.getCell(headerRow, c).value = MEMO_HEADER;
     }
+    // 已有備註欄（含 2.12.8 版下載、框線缺漏的檔）也重新套一次，修好舊檔
+    for (const b of stmtLayout(ws).blocks) styleMemoCol(ws, headerRow, b.date + 1);
     return at;
+}
+
+/** 回填時加上的底色；備註欄沿用收款日格樣式時不跟著帶過去。 */
+const FILL_MARKS = new Set([...Object.values(COLORS), MULTI_DATE_FILL]);
+
+/**
+ * 備註欄每一格的框線、字型、底色都照左邊收款日格（含沒有儲存格、靠欄樣式畫框的空白列與合計區），
+ * 欄樣式也照抄，表格框線跟插欄前同一個形狀，只是多一欄。
+ */
+function styleMemoCol(ws: ExcelJS.Worksheet, headerRow: number, c: number): void {
+    const memoStyle = (src: Partial<ExcelJS.Style>, isHeader: boolean): Partial<ExcelJS.Style> => {
+        const st = JSON.parse(JSON.stringify(src ?? {})) as Partial<ExcelJS.Style>;
+        const fg = (st.fill as ExcelJS.FillPattern | undefined)?.fgColor?.argb;
+        if (fg && FILL_MARKS.has(fg)) delete st.fill;
+        st.alignment = {...st.alignment, horizontal: isHeader ? 'center' : 'left', vertical: 'middle', shrinkToFit: false};
+        return st;
+    };
+    const col = ws.getColumn(c);
+    col.style = memoStyle(ws.getColumn(c - 1).style, false);
+    for (let r = 1; r <= ws.rowCount; r++) {
+        const cell = ws.getCell(r, c);
+        const src = ws.getCell(r, c - 1);
+        // 下方每段表格重複的標題列也補上「備註」
+        const isHeader = r === headerRow || s(cellVal(src)) === '收款日';
+        const font = cell.font;
+        const keepFont = !isHeader && !!s(cellVal(cell));
+        cell.style = memoStyle(src.style, isHeader);
+        if (isHeader && !s(cellVal(cell))) cell.value = MEMO_HEADER;
+        // 已寫好的備註保留自己的字型（convertOldDateTags 會另外把小字改回來）
+        if (keepFont && font) cell.font = font;
+    }
 }
 
 type MemoPart = {text: string; red?: boolean};
@@ -1066,7 +1092,10 @@ function writeMemo(c: ExcelJS.Cell, parts: ReadonlyArray<MemoPart>, front = fals
 /** 舊版回填的收款日文字：日期後接 (-15)/(月)/(2筆) 與結尾 ?，例如「10/12(-15)(月)」「10/5(2筆)?」。 */
 const OLD_DATE_TAGS = /^(\d{1,2}\/\d{1,2})((?:\((?:-\d+|月|\d+筆)\))*)(\?)?$/;
 
-/** 舊版小字收款日轉成新格式：收款日只留日期、取消縮字並恢復字體大小，(月) 改淺藍底，標記移到備註欄。 */
+/** 格子的字級（沒設定就回空物件，不覆蓋原字型）。 */
+const sizeOf = (c: ExcelJS.Cell): Partial<ExcelJS.Font> => (c.font?.size ? {size: c.font.size} : {});
+
+/** 舊版小字收款日轉成新格式：收款日只留日期、取消縮字並放大到金額欄字級，(月) 改淺藍底，標記移到備註欄。 */
 function convertOldDateTags(ws: ExcelJS.Worksheet): void {
     const {headerRow, blocks} = stmtLayout(ws);
     ws.eachRow((row, r) => {
@@ -1087,17 +1116,35 @@ function convertOldDateTags(ws: ExcelJS.Worksheet): void {
                 ...(m[3] ? [{text: '待確認'}] : []),
             ];
             ec.value = m[1];
-            const size = row.getCell(b.paid).font?.size;
+            const memoFont = {...ec.font, ...sizeOf(row.getCell(b.paid))};
             ec.style = {
                 ...ec.style,
-                font: {...ec.font, ...(size ? {size} : {})},
+                font: {...ec.font, ...sizeOf(row.getCell(b.amt))},
                 alignment: {...ec.alignment, shrinkToFit: false},
                 ...(multi ? {fill: fill(MULTI_DATE_FILL)} : {}),
             };
-            // 備註格插欄時沿用了收款日的小字，跟著改回來
+            // 備註格插欄時沿用了收款日的小字，改回實收金額欄原本的字級
             const mc = row.getCell(b.date + 1);
-            mc.style = {...mc.style, font: {...ec.font}};
+            mc.style = {...mc.style, font: memoFont};
             writeMemo(mc, parts, true);
+        }
+    });
+}
+
+/** 舊版已回填的實收金額、收款日（帶回填底色、內容是數字或單一日期）放大到同列金額格的字級。 */
+function enlargeOldFills(ws: ExcelJS.Worksheet): void {
+    const {headerRow, blocks} = stmtLayout(ws);
+    ws.eachRow((row, r) => {
+        if (r <= headerRow) return;
+        for (const b of blocks) {
+            const size = sizeOf(row.getCell(b.amt));
+            if (!size.size) continue;
+            for (const c of [row.getCell(b.paid), row.getCell(b.date)]) {
+                const fg = (c.fill as ExcelJS.FillPattern | undefined)?.fgColor?.argb;
+                const v = cellVal(c);
+                if (!fg || !FILL_MARKS.has(fg) || !(typeof v === 'number' || /^\d{1,2}\/\d{1,2}$/.test(s(v)))) continue;
+                c.style = {...c.style, font: {...c.font, ...size}, alignment: {...c.alignment, shrinkToFit: false}};
+            }
         }
     });
 }
@@ -1122,6 +1169,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
             const at = addMemoCols(ws);
             inserted.set(ws, at);
             if (at) convertOldDateTags(ws);
+            enlargeOldFills(ws);
         }
     }
     const colOf = (ws: ExcelJS.Worksheet, c: number): number => c + (inserted.get(ws) ?? []).filter((p) => p <= c).length;
@@ -1155,6 +1203,9 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         if (!ws) continue;
         const dc = ws.getCell(info.row, colOf(ws, info.paidCol));
         const ec = ws.getCell(info.row, colOf(ws, info.dateCol));
+        // 實收金額、收款日字級與同列金額格一致
+        const size = sizeOf(ws.getCell(info.row, colOf(ws, info.amtCol)));
+        const big = (c: ExcelJS.Cell): Partial<ExcelJS.Style> => (size.size ? {font: {...c.font, ...size}} : {});
         const ok = lst0.every((x) => x.r.status === 'OK');
         const prevVal = cellVal(dc);
         const prev = typeof prevVal === 'number' ? prevVal : 0;
@@ -1171,8 +1222,8 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         ];
         ec.value = md(lst0[lst0.length - 1].r.date);
         const color = ok ? COLORS.OK : COLORS.需確認;
-        dc.style = {...dc.style, fill: fill(color)};
-        ec.style = {...ec.style, fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, shrinkToFit: false}};
+        dc.style = {...dc.style, ...big(dc), fill: fill(color)};
+        ec.style = {...ec.style, ...big(ec), fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, shrinkToFit: false}};
         const mc = memoCell(ws, info);
         if (mc && parts.length) writeMemo(mc, parts);
     }
