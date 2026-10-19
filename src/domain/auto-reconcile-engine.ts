@@ -143,6 +143,11 @@ export interface ReconcileEntry extends BankEntry {
     manualMulti?: boolean;
     /** 引擎自動寫進回填期別備註欄的字（例：含補上期少付64）。 */
     autoMemo?: string[];
+    /**
+     * 同客戶多筆加總才對上明細：noteShares＝這一筆實際填進各期的金額（與 alloc 的期別同序，沒碰到的期別為 0）；
+     * feeHere＝手續費算在這一筆（整組只算一次，落在最後一期有填到的那筆）。
+     */
+    sumGroup?: { feeHere: boolean };
 }
 
 /** 一期少付（實收 < 明細）：要帶到下一期提醒補收。 */
@@ -549,6 +554,7 @@ function collectFills(results: ReadonlyArray<ReconcileEntry>, cust: Record<strin
         // 已收過、還沒確認要回填哪期：不疊加，只在該期備註提醒
         if (r.paidDup && !r.paidChoice) continue;
         r.alloc.forEach(([code, run], ai) => run.forEach((per, i) => {
+            if (r.sumGroup && !r.noteShares![i]) return;
             let share = cust[code].p[per].amt;
             const lastOfLast = i === run.length - 1 && ai === r.alloc.length - 1;
             if (r.fee && lastOfLast) share -= r.fee;
@@ -557,7 +563,7 @@ function collectFills(results: ReadonlyArray<ReconcileEntry>, cust: Record<strin
             if (r.allocShares) share = r.allocShares[ai][i];
             const k = code + '|' + per;
             if (!fills.has(k)) fills.set(k, []);
-            fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1, fee: lastOfLast ? r.fee : 0});
+            fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1, fee: lastOfLast && (!r.sumGroup || r.sumGroup.feeHere) ? r.fee : 0});
         }));
     }
     return fills;
@@ -1070,8 +1076,26 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         const tot = lst.reduce((t, r) => t + r.amt, 0);
         const r = classify(tot, code, lst[lst.length - 1].date);
         if (r && !r.stale.length) {
-            lst.forEach((x) => Object.assign(x, {
-                alloc: [[code, r.run]], fee: r.fee, status: 'OK',
+            // 各期應收（有補付尾款的照 shares，手續費扣在最後一期）依序由各筆入帳接力填滿，每筆只填自己實際的金額
+            const need = r.run.map((per, j) => (r.shares ? r.shares[j] : cust[code].p[per].amt - (j === r.run.length - 1 ? r.fee : 0)));
+            let j = 0;
+            let left = need[0];
+            const shares = lst.map((x) => {
+                const sh = r.run.map(() => 0);
+                let rest = x.amt;
+                while (rest > 0 && j < need.length) {
+                    const take = Math.min(rest, left);
+                    sh[j] += take;
+                    rest -= take;
+                    left -= take;
+                    if (!left && ++j < need.length) left = need[j];
+                }
+                return sh;
+            });
+            const feeAt = shares.map((sh) => sh[sh.length - 1] > 0).lastIndexOf(true);
+            lst.forEach((x, n) => Object.assign(x, {
+                alloc: [[code, r.run]], fee: r.fee, status: 'OK', noteShares: shares[n],
+                sumGroup: {feeHere: n === feeAt},
                 note: `分${lst.length}筆匯款，合計${tot.toLocaleString()}`,
             }));
         }
