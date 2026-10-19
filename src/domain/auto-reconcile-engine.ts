@@ -63,8 +63,10 @@ export interface PeriodCell {
     /** 回填用的「實收金額」「收款日」欄。 */
     paidCol: number;
     dateCol: number;
-    /** 明細上原本已填的實收金額（依金額推測時略過已收款的期別）。 */
+    /** 明細上原本已填的實收金額（依金額推測時略過已收款的期別；比對時優先對未收的期別）。 */
     paid?: number;
+    /** 明細上原本已填的收款日（M/D）。 */
+    paidDate?: string;
 }
 
 export interface StmtCustomer {
@@ -122,6 +124,18 @@ export interface ReconcileEntry extends BankEntry {
     guesses?: GuessPick[];
     /** 候選太多沒列出的數量。 */
     guessMore?: number;
+    /** 金額只對得上明細已收過款的期別（可能是付別期）：該期與原本的實收金額、收款日。 */
+    paidDup?: PaidDup[];
+    /** 使用者對「已收過」的處理：pick＝照勾的期別回填；stack＝照原本對到的期別疊加。 */
+    paidChoice?: 'pick' | 'stack';
+}
+
+/** 已收過款的期別：客戶代號、期別、原本的實收金額、收款日。 */
+export interface PaidDup {
+    code: string;
+    per: string;
+    paid: number;
+    date?: string;
 }
 
 /** 依金額推測的一個候選：客戶代號、期別（由舊到新）、扣的手續費。 */
@@ -130,6 +144,16 @@ export interface GuessPick {
     run: string[];
     fee: number;
     label?: string;
+}
+
+/** 單一客戶依金額比對的結果。 */
+interface ClassHit {
+    run: string[];
+    fee: number;
+    /** 對到但明細已收過款的期別（空＝都還沒收）。 */
+    stale: string[];
+    /** 有補付尾款時各期回填的金額（與 run 同序）。 */
+    shares?: number[];
 }
 
 export interface AutoReconcileResult {
@@ -199,6 +223,12 @@ function mforms(m0: number): string[] {
 const md = (d: string): string => {
     const p = d.split('/');
     return `${+p[1]}/${+p[2]}`;
+};
+/** 明細收款日格的內容轉成 M/D（Date 或「10/4」「10/4(2筆)」等文字）；看不出日期回空字串。 */
+const mdOf = (v: unknown): string => {
+    if (v instanceof Date) return `${v.getUTCMonth() + 1}/${v.getUTCDate()}`;
+    const m = /^(\d{1,2})\/(\d{1,2})/.exec(s(v));
+    return m ? `${+m[1]}/${+m[2]}` : '';
 };
 const dateKey = (d: string): number[] => d.split('/').map(Number);
 
@@ -345,9 +375,10 @@ export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
                 }
                 out[key] = out[key] || {name, p: {}};
                 const paid = cellVal(row.getCell(b.paid));
+                const paidDate = mdOf(cellVal(row.getCell(b.date)));
                 out[key].p[`${month}${half}`] = {
                     sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), amtCol: b.amt, paidCol: b.paid, dateCol: b.date,
-                    ...(typeof paid === 'number' && paid > 0 ? {paid} : {}),
+                    ...(typeof paid === 'number' && paid > 0 ? {paid: Math.round(paid), ...(paidDate ? {paidDate} : {})} : {}),
                 };
             }
         }
@@ -443,6 +474,8 @@ export interface ReconcileInput {
     rowCashMode?: Record<number, 'cash' | 'period'>;
     /** 本次對帳使用者確認的金額推測（以 idx 為鍵）：照選的客戶期別回填。 */
     rowPick?: Record<number, GuessPick>;
+    /** 本次對帳「已收過」的處理（以 idx 為鍵）：pick＝照 rowNotePeriods 勾的期別回填；stack＝照原期別疊加。 */
+    rowPaidChoice?: Record<number, 'pick' | 'stack'>;
     done?: Set<string>;
 }
 
@@ -458,6 +491,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowNotePeriods = input.rowNotePeriods ?? {};
     const rowCashMode = input.rowCashMode ?? {};
     const rowPick = input.rowPick ?? {};
+    const rowPaidChoice = input.rowPaidChoice ?? {};
     const done = input.done ?? new Set<string>();
     if (input.stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -630,25 +664,48 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const PREF = new Map([...RUNS].sort((a, b) => cmpArr(prefKey(a), prefKey(b))).map((r, i) => [r.join(), i]));
     const pref = (run: ReadonlyArray<string>): number => PREF.get(run.join()) ?? 0;
 
-    function classify(amt: number, code: string, date: string): { run: string[]; fee: number } | null {
+    /**
+     * 一期可對的金額：未收＝明細金額；已收過（實收金額 > 0）＝明細金額但標為已收過；
+     * 部分付款（實收 < 明細）另可對差額＝補付尾款，不算已收過。
+     */
+    const amtsOf = (c: PeriodCell): Array<{ v: number; stale: boolean }> => (!c.paid
+        ? [{v: c.amt, stale: false}]
+        : [...(c.paid < c.amt ? [{v: c.amt - c.paid, stale: false}] : []), {v: c.amt, stale: true}]);
+
+    /**
+     * 單一客戶依金額找期別：優先所有期別都還沒收款、也還沒被本次其他入帳對到的組合；
+     * 只有含已收過期別的組合對得上時，stale 列出已收過的期別。shares＝有補付尾款時各期回填金額。
+     */
+    function classify(amt: number, code: string, date: string, busy?: ReadonlySet<string>): ClassHit | null {
         const p = cust[code].p;
-        let best: { k: number[]; run: string[]; fee: number } | null = null;
+        let best: { k: number[]; hit: ClassHit } | null = null;
         for (const run of RUNS) {
             if (!run.every((x) => p[x])) continue;
             if (!avail(run[run.length - 1], date)) continue;
-            const tot = run.reduce((t, x) => t + p[x].amt, 0);
-            for (const fee of [0, FEE]) {
-                if (tot - fee === amt) {
-                    const k = [pref(run), fee];
-                    if (!best || cmpArr(k, best.k) < 0) best = {k, run, fee};
+            const isBusy = run.some((x) => busy?.has(code + '|' + x)) ? 1 : 0;
+            const walk = (i: number, vals: number[], stale: string[]): void => {
+                if (i < run.length) {
+                    for (const a of amtsOf(p[run[i]])) walk(i + 1, [...vals, a.v], a.stale ? [...stale, run[i]] : stale);
+                    return;
                 }
-            }
+                const tot = vals.reduce((t, v) => t + v, 0);
+                const tail = vals.some((v, j) => v !== p[run[j]].amt);
+                for (const fee of [0, FEE]) {
+                    if (tot - fee !== amt) continue;
+                    const k = [stale.length ? 1 : 0, isBusy, pref(run), fee];
+                    if (best && cmpArr(k, best.k) >= 0) continue;
+                    best = {k, hit: {run, fee, stale, ...(tail ? {shares: vals.map((v, j) => (j === vals.length - 1 ? v - fee : v))} : {})}};
+                }
+            };
+            walk(0, [], []);
         }
-        return best ? {run: best.run, fee: best.fee} : null;
+        return best ? (best as { hit: ClassHit }).hit : null;
     }
 
+    /** 多家店合併匯款：優先所有期別都還沒收款的組合；只有含已收過期別的對得上時，stale 列出 [客戶, 期別]。 */
     function combo(amt: number, codes: ReadonlyArray<string>, date: string):
-        { alloc: Array<[string, string[]]>; fee: number } | null {
+        { alloc: Array<[string, string[]]>; fee: number; stale: Array<[string, string]> } | null {
+        let staleHit: { alloc: Array<[string, string[]]>; fee: number; stale: Array<[string, string]> } | null = null;
         for (const n of [2, 3]) {
             for (const cs of combos(codes, n)) {
                 const choices = cs.map((c) => RUNS.filter((r) =>
@@ -657,7 +714,12 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                     if (i === cs.length) {
                         const tot = cs.reduce((t, c, j) => t + pick[j].reduce((u, x) => u + cust[c].p[x].amt, 0), 0);
                         for (const fee of [0, FEE]) {
-                            if (tot - fee === amt) return {alloc: cs.map((c, j) => [c, pick[j]]), fee};
+                            if (tot - fee !== amt) continue;
+                            const alloc: Array<[string, string[]]> = cs.map((c, j) => [c, pick[j]]);
+                            const stale = alloc.flatMap(([c, run]) => run.filter((x) => cust[c].p[x].paid)
+                                .map((x): [string, string] => [c, x]));
+                            if (!stale.length) return {alloc, fee};
+                            staleHit = staleHit ?? {alloc, fee, stale};
                         }
                         return null;
                     }
@@ -668,11 +730,16 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                     return null;
                 };
                 const v = rec(0, []);
-                if (v) return v;
+                if (v) return {...v, stale: []};
             }
         }
-        return null;
+        return staleHit;
     }
+    /** 已收過期別的說明資料。 */
+    const dupOf = (code: string, pers: ReadonlyArray<string>): PaidDup[] => pers.map((per) => {
+        const c = cust[code].p[per];
+        return {code, per, paid: c.paid ?? 0, ...(c.paidDate ? {date: c.paidDate} : {})};
+    });
 
     // 依金額推測：單期或連續 2~4 期，容許扣手續費 15 / 30
     const GUESS_RUNS = RUNS.filter((r) => r.length <= 4 && contiguous(r));
@@ -735,7 +802,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             };
             const hit = rowCashMode[idx] === 'cash' ? undefined
                 : codes.map((x) => ({x, r: classify(b.amt, x, b.date)}))
-                    .find((h): h is { x: string; r: { run: string[]; fee: number } } => h.r !== null);
+                    .find((h): h is { x: string; r: ClassHit } => h.r !== null);
             if (hit) {
                 Object.assign(res, {
                     alloc: [[hit.x, hit.r.run]], fee: hit.r.fee, status: '需確認', cash: 'warn',
@@ -766,20 +833,37 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             ...b, idx, alloc: [], fee: 0, status: '找不到', note: '', cand: c, src,
             confirmed: false, who: '', custNames: [],
         };
-        const hits = c.map((x) => ({x, r: classify(b.amt, x, b.date)}))
-            .filter((h): h is { x: string; r: { run: string[]; fee: number } } => h.r !== null);
+        // 本次前面的入帳已對到的期別（比對時排在未被對到的期別後面）
+        const busy = new Set(results.flatMap((r) => (r.status === 'OK' || r.status === '需確認')
+            ? r.alloc.flatMap(([cd, run]) => run.map((per) => cd + '|' + per)) : []));
+        const hits = c.map((x) => ({x, r: classify(b.amt, x, b.date, busy)}))
+            .filter((h): h is { x: string; r: ClassHit } => h.r !== null);
         if (hits.length) {
-            hits.sort((a, b2) => cmpArr([pref(a.r.run), a.r.fee], [pref(b2.r.run), b2.r.fee]));
+            const hk = (h: { r: ClassHit }): number[] => [h.r.stale.length ? 1 : 0, pref(h.r.run), h.r.fee];
+            hits.sort((a, b2) => cmpArr(hk(a), hk(b2)));
             const h = hits[0];
             res.alloc = [[h.x, h.r.run]];
             res.fee = h.r.fee;
             res.status = ((hits.length === 1 && src !== '末五碼') || c.length === 1) ? 'OK' : '需確認';
             if (hits.length > 1 && c.length > 1) res.note = '其他可能：' + hits.slice(1).map((h2) => cust[h2.x].name).join('、');
             if (src === '末五碼' && c.length > 1 && hits.length === 1) res.status = 'OK';
+            if (h.r.shares) {
+                res.noteShares = h.r.shares;
+                res.note = [`補付尾款（${h.r.run.filter((x) => cust[h.x].p[x].paid).join('、')}）`, res.note].filter(Boolean).join('；');
+            }
+            // 只對得上已收過款的期別：可能是付別期，請使用者確認
+            if (h.r.stale.length) {
+                res.paidDup = dupOf(h.x, h.r.stale);
+                res.status = '需確認';
+            }
         } else {
             const cm = c.length > 1 ? combo(b.amt, c, b.date) : null;
             if (cm) {
                 Object.assign(res, {alloc: cm.alloc, fee: cm.fee, status: 'OK', note: '多家店合併匯款'});
+                if (cm.stale.length) {
+                    res.paidDup = cm.stale.flatMap(([cd, per]) => dupOf(cd, [per]));
+                    res.status = '需確認';
+                }
             } else if (c.length === 1) {
                 Object.assign(res, {alloc: [[c[0], []]], status: '金額不符'});
             } else if (c.length) {
@@ -797,7 +881,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 toGuess.push(res);
             }
         }
-        if (src === '已確認' && res.status === '需確認' && res.alloc.length) res.status = 'OK';
+        if (src === '已確認' && res.status === '需確認' && res.alloc.length && !res.paidDup) res.status = 'OK';
         res.confirmed = src === '已確認';
         if (cashOv && isCashFlag(cashOv.flag)) {
             res.cash = 'period';
@@ -813,7 +897,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         if (lst.length < 2) continue;
         const tot = lst.reduce((t, r) => t + r.amt, 0);
         const r = classify(tot, code, lst[lst.length - 1].date);
-        if (r) {
+        if (r && !r.stale.length) {
             lst.forEach((x) => Object.assign(x, {
                 alloc: [[code, r.run]], fee: r.fee, status: 'OK',
                 note: `分${lst.length}筆匯款，合計${tot.toLocaleString()}`,
@@ -867,6 +951,57 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     for (const r of results) {
         if (r.status !== 'OK' && r.status !== '需確認') continue;
         r.alloc.forEach(([c, run]) => run.forEach((per) => used.add(c + '|' + per)));
+    }
+    // 已收過：預設回填該客戶最舊的未收期別；使用者選了期別（或填了備註）照選的回填，選疊加就照原本對到的期別
+    for (const r of results) {
+        if (!r.paidDup) continue;
+        const single = r.alloc.length === 1;
+        const dupTxt = r.paidDup.map((d) => `${single ? '' : cust[d.code].name + ' '}${d.per} 已收過（實收 ${d.paid.toLocaleString()}`
+            + `${d.date ? `，收款日 ${d.date}` : ''}）`).join('、');
+        const memo = rowNotes[r.idx]?.trim();
+        const choice = rowPaidChoice[r.idx] ?? (memo && single ? 'pick' : undefined);
+        let code = '';
+        if (single) {
+            code = r.alloc[0][0];
+            const p = cust[code].p;
+            const opts = PERIODS.filter((k) => p[k]);
+            const def = opts.find((k) => !p[k].paid && !used.has(code + '|' + k) && avail(k, r.date))
+                ?? opts.find((k) => !p[k].paid && avail(k, r.date)) ?? r.alloc[0][1][0];
+            const want = opts.filter((k) => rowNotePeriods[r.idx]?.includes(k));
+            r.periodOptions = opts;
+            r.notePeriods = want.length ? want : [def];
+        }
+        if (!choice || (choice === 'pick' && !single)) {
+            r.note = `${dupTxt}，可能是付別期` + (r.note ? '；' + r.note : '');
+            continue;
+        }
+        if (memo) r.userNote = memo;
+        const memoTxt = memo ? `備註：${memo}；` : '';
+        if (choice === 'stack') {
+            r.status = 'OK';
+            r.paidChoice = 'stack';
+            r.note = `${memoTxt}${dupTxt}，已確認是補付同一期（疊加）` + (r.note ? '；' + r.note : '');
+            continue;
+        }
+        const pers = r.notePeriods!;
+        const p = cust[code].p;
+        const before = pers.slice(0, -1).reduce((t, k) => t + p[k].amt, 0);
+        const last = r.amt - before;
+        if (last <= 0) {
+            r.noteError = `勾了 ${pers.join('、')} 共${pers.length}期，前${pers.length - 1}期明細合計 ${before.toLocaleString()} 已超過入帳 ${r.amt.toLocaleString()}，請少勾幾期`;
+            r.note = `${memoTxt}${dupTxt}，可能是付別期`;
+            continue;
+        }
+        r.status = 'OK';
+        r.paidChoice = 'pick';
+        r.fee = 0;
+        r.noteShares = [...pers.slice(0, -1).map((k) => p[k].amt), last];
+        r.alloc = [[code, pers]];
+        r.who = fmtAlloc(r.alloc);
+        r.custNames = [cust[code].name];
+        const fillTxt = '回填 ' + (pers.length > 1 ? pers.map((k, i) => `${k} ${r.noteShares![i].toLocaleString()}`).join('、') : pers[0]);
+        r.note = `${memoTxt}${fillTxt}；原本對到的 ${dupTxt}`;
+        pers.forEach((k) => used.add(code + '|' + k));
     }
     for (const r of results) {
         if (r.status !== '金額不符') continue;
@@ -1182,6 +1317,8 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
     const fills = new Map<string, Array<{ r: ReconcileEntry; share: number; multi: boolean }>>();
     for (const r of results) {
         if (!(r.status === 'OK' || r.status === '需確認') || !r.alloc.length || !r.alloc[0][1].length) continue;
+        // 已收過、還沒確認要回填哪期：不疊加，只在該期備註提醒（見下方）
+        if (r.paidDup && !r.paidChoice) continue;
         r.alloc.forEach(([code, run], ai) => run.forEach((per, i) => {
             let share = cust[code].p[per].amt;
             if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= r.fee;
@@ -1244,6 +1381,18 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         ec.style = {...ec.style, fill: fill(COLORS.金額不符), alignment: {...ec.alignment, shrinkToFit: false}};
         const mc = memoCell(ws, info);
         if (mc) writeMemo(mc, lst.map((r) => ({text: `${md(r.date)}收${r.amt.toLocaleString()}，金額對不上`, red: true})));
+    }
+
+    // 已收過、還沒確認：在已收過那期的備註欄寫紅字提醒
+    for (const r of results) {
+        if (!r.paidDup || r.paidChoice) continue;
+        for (const d of r.paidDup) {
+            const info = cust[d.code].p[d.per];
+            const wb = wbOf(d.per);
+            const ws = wb && sheetByName(wb, info.sheet);
+            const mc = ws && memoCell(ws, info);
+            if (mc) writeMemo(mc, [{text: `${md(r.date)}收${r.amt.toLocaleString()}，${d.per}已收過，待確認`, red: true}]);
+        }
     }
 
     // 結果工作表
