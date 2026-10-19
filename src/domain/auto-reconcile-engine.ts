@@ -141,6 +141,25 @@ export interface ReconcileEntry extends BankEntry {
     allocShares?: number[][];
     /** 使用者手動選各店期別確認的。 */
     manualMulti?: boolean;
+    /** 引擎自動寫進回填期別備註欄的字（例：含補上期少付64）。 */
+    autoMemo?: string[];
+}
+
+/** 一期少付（實收 < 明細）：要帶到下一期提醒補收。 */
+export interface Shortfall {
+    code: string;
+    /** 少付的期別。 */
+    per: string;
+    /** 實際差額（明細金額 − 實收金額）。 */
+    short: number;
+    /** 下一期（X上→X下；X下→X+1上）；不論明細有沒有。 */
+    nextPer: string;
+    /** 下一期是否在本次上傳的明細。 */
+    nextInStmt: boolean;
+    /** 使用者備註裡寫的金額（只當參考）；與實際差額不同時才有。 */
+    memoNum?: number;
+    /** 造成這筆少付的入帳（idx）。 */
+    idxs: number[];
 }
 
 /** 手動選多店期別時，一家店與它可選的未收期別。 */
@@ -189,6 +208,8 @@ export interface AutoReconcileResult {
     PERIODS: string[];
     skipped: number;
     names: string[];
+    /** 少付／要補：寫回明細時在下一期備註欄寫紅字提醒。 */
+    shortfalls: Shortfall[];
 }
 
 // ---------- 小工具
@@ -511,6 +532,83 @@ export interface ReconcileInput {
 const add = (o: Record<string, Set<string>>, k: string, v: string) => {
     (o[k] = o[k] || new Set()).add(v);
 };
+
+/** 回填到某期的一筆入帳：share＝這筆填進該期的金額；fee＝扣在這期的手續費（已含在 share 內）。 */
+interface FillItem {
+    r: ReconcileEntry;
+    share: number;
+    multi: boolean;
+    fee: number;
+}
+
+/** 各期（客戶代號|期別）會被回填的入帳與金額（寫回 Excel 與算少付共用）。 */
+function collectFills(results: ReadonlyArray<ReconcileEntry>, cust: Record<string, StmtCustomer>): Map<string, FillItem[]> {
+    const fills = new Map<string, FillItem[]>();
+    for (const r of results) {
+        if (!(r.status === 'OK' || r.status === '需確認') || !r.alloc.length || !r.alloc[0][1].length) continue;
+        // 已收過、還沒確認要回填哪期：不疊加，只在該期備註提醒
+        if (r.paidDup && !r.paidChoice) continue;
+        r.alloc.forEach(([code, run], ai) => run.forEach((per, i) => {
+            let share = cust[code].p[per].amt;
+            const lastOfLast = i === run.length - 1 && ai === r.alloc.length - 1;
+            if (r.fee && lastOfLast) share -= r.fee;
+            if (r.alloc.length === 1 && run.length === 1) share = r.amt;
+            if (r.noteShares) share = r.noteShares[i];
+            if (r.allocShares) share = r.allocShares[ai][i];
+            const k = code + '|' + per;
+            if (!fills.has(k)) fills.set(k, []);
+            fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1, fee: lastOfLast ? r.fee : 0});
+        }));
+    }
+    return fills;
+}
+
+/** 下一期：X上→X下；X下→X+1上（12 月下接 1 月上）。 */
+export const nextPeriod = (per: string): string => {
+    const m = parseInt(per, 10);
+    return per.endsWith('上') ? `${m}下` : `${m % 12 + 1}上`;
+};
+
+/** 使用者原因備註寫了少付／要補的字樣。 */
+const SHORT_WORDS = /少付|少給|少匯|要補|補\s*\d+\s*元?|下次補|下期補|下個月補/;
+
+/** 備註裡寫的金額（少付／補 後面的數字，或「N元」）。 */
+const memoAmount = (note: string): number | undefined => {
+    const m = /(?:少付|少給|少匯|要補|補)\s*(\d+)|(\d+)\s*元/.exec(note);
+    const n = m ? parseInt(m[1] ?? m[2], 10) : NaN;
+    return Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * 算少付：每期回填後「實收 < 明細」且差額 > 手續費 15，或使用者備註有少付／要補字樣（差額 > 0）。
+ * 以實際差額為準；備註只寫手續費（差額在 30 內）不算。這次入帳都已補足的期別不算（已補收）。
+ */
+function calcShortfalls(results: ReadonlyArray<ReconcileEntry>, cust: Record<string, StmtCustomer>): Shortfall[] {
+    const out: Shortfall[] = [];
+    for (const [k, lst] of collectFills(results, cust)) {
+        if (lst.some((x) => x.r.status !== 'OK')) continue;
+        const cut = k.lastIndexOf('|');
+        const code = k.slice(0, cut);
+        const per = k.slice(cut + 1);
+        const p = cust[code].p[per];
+        const actual = (p.paid ?? 0) + lst.reduce((t, x) => t + x.share, 0);
+        const fee = lst.reduce((t, x) => t + x.fee, 0);
+        const diff = p.amt - actual - fee;
+        if (diff <= 0) continue;
+        const notes = lst.map((x) => x.r.userNote).filter((x): x is string => !!x);
+        const word = notes.some((n) => SHORT_WORDS.test(n));
+        const feeOnly = !word && notes.some((n) => n.includes('手續費')) && diff <= FEE * 2;
+        if (feeOnly || !(diff > FEE || word)) continue;
+        const ref = notes.map(memoAmount).find((n): n is number => n !== undefined);
+        const next = nextPeriod(per);
+        out.push({
+            code, per, short: diff, nextPer: next, nextInStmt: !!cust[code].p[next],
+            ...(word && ref !== undefined && ref !== diff ? {memoNum: ref} : {}),
+            idxs: lst.map((x) => x.r.idx),
+        });
+    }
+    return out;
+}
 
 export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const {bank, acct, bankInfos} = input;
@@ -1107,7 +1205,72 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             : `回填 ${pers[0]}`;
         r.note = `備註：${memo}；${fillTxt}；${r.note}`;
     }
-    return {results, cust, PERIODS, skipped, names: names.sort()};
+
+    // ---------- 少付／要補：自動帶到下一期
+    // 1) 這次入帳剛好等於「下一期明細＋少付金額」的，算已對上並回填（上期補足差額、下期照明細）
+    const sf0 = calcShortfalls(results, cust);
+    /** 少付已被這次入帳補上的原入帳 idx：回填後實收＝明細，不再提醒。 */
+    const toppedUp = new Map<number, string>();
+    const tk = new Set(results.flatMap((r) => (r.status === 'OK' || r.status === '需確認')
+        ? r.alloc.flatMap(([cd, run]) => run.map((per) => cd + '|' + per)) : []));
+    for (const sf of sf0) {
+        const nc = cust[sf.code].p[sf.nextPer];
+        if (!nc || nc.paid || tk.has(sf.code + '|' + sf.nextPer)) continue;
+        for (const r of results) {
+            if (r.special || r.cash || r.status === 'OK' || r.status === '不在明細' || sf.idxs.includes(r.idx)) continue;
+            if (r.alloc.some(([, run]) => run.length)) continue;
+            const codes = r.alloc.length ? r.alloc.map(([c]) => c) : r.cand;
+            if (!codes.includes(sf.code) || !avail(sf.nextPer, r.date)) continue;
+            const fee = [0, FEE].find((f) => r.amt === nc.amt + sf.short - f);
+            if (fee === undefined) continue;
+            r.alloc = [[sf.code, [sf.per, sf.nextPer]]];
+            r.fee = fee;
+            r.status = 'OK';
+            r.noteShares = [sf.short, nc.amt - fee];
+            r.autoMemo = [`含補上期少付${sf.short}`];
+            r.note = [fee ? `扣手續費${fee}` : '', `含補上期少付${sf.short.toLocaleString()}（${sf.per} 補 ${sf.short.toLocaleString()}、${sf.nextPer} 照明細）`].filter(Boolean).join('；');
+            r.who = fmtAlloc(r.alloc);
+            r.custNames = [cust[sf.code].name];
+            delete r.periodOptions;
+            delete r.notePeriods;
+            delete r.noteError;
+            tk.add(sf.code + '|' + sf.per);
+            tk.add(sf.code + '|' + sf.nextPer);
+            sf.idxs.forEach((i) => toppedUp.set(i, `${sf.per}少付 ${sf.short.toLocaleString()}，已由 ${md(r.date)} 入帳補上`));
+            break;
+        }
+    }
+    // 2) 重算（補足的不再提醒），在對應入帳列寫說明
+    const shortfalls = calcShortfalls(results, cust);
+    const byIdx = new Map(results.map((r) => [r.idx, r]));
+    const addNote = (r: ReconcileEntry, txt: string): void => {
+        r.note = r.note ? `${r.note}；${txt}` : txt;
+    };
+    for (const sf of shortfalls) {
+        const n = sf.short.toLocaleString();
+        const memoTxt = sf.memoNum !== undefined ? `（備註寫 ${sf.memoNum.toLocaleString()}，以實際差額為準）` : '';
+        for (const i of sf.idxs) {
+            const r = byIdx.get(i);
+            if (!r) continue;
+            addNote(r, sf.nextInStmt
+                ? `${sf.per}少付 ${n}${memoTxt}，已在 ${sf.nextPer} 備註寫紅字提醒`
+                : `${sf.per}少付 ${n}${memoTxt}；下一期 ${sf.nextPer} 不在本次明細，請記得補收 ${n}`);
+        }
+        // 下一期這位客戶這次也有入帳：提醒這期應收＝明細＋少付
+        for (const r of results) {
+            if (r.special || r.cash || sf.idxs.includes(r.idx) || r.autoMemo) continue;
+            const hit = r.alloc.some(([c, run]) => c === sf.code && (run.includes(sf.nextPer) || (!run.length && r.status === '金額不符')));
+            if (hit) addNote(r, `上期少付 ${n}，這期應收＝明細＋${n}`);
+        }
+    }
+    // 備註寫了要補、但實收＝明細（算不出少付）：提醒沒帶到下一期
+    const flagged = new Set(shortfalls.flatMap((x) => x.idxs));
+    for (const r of results) {
+        if (toppedUp.has(r.idx)) addNote(r, toppedUp.get(r.idx)!);
+        if (r.status !== 'OK' || !r.userNote || !SHORT_WORDS.test(r.userNote) || flagged.has(r.idx) || toppedUp.has(r.idx)) continue;
+        addNote(r, '備註寫了要補，但實收金額不少於明細，未帶到下一期');
+    }
+    return {results, cust, PERIODS, skipped, names: names.sort(), shortfalls};
 }
 
 /** 依相似度列出最接近的客戶名稱（「改成」找不到完全一致的名字時給使用者挑）。 */
@@ -1412,22 +1575,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         return inserted.get(ws) || !s(cellVal(c)) ? c : undefined;
     };
 
-    const fills = new Map<string, Array<{ r: ReconcileEntry; share: number; multi: boolean }>>();
-    for (const r of results) {
-        if (!(r.status === 'OK' || r.status === '需確認') || !r.alloc.length || !r.alloc[0][1].length) continue;
-        // 已收過、還沒確認要回填哪期：不疊加，只在該期備註提醒（見下方）
-        if (r.paidDup && !r.paidChoice) continue;
-        r.alloc.forEach(([code, run], ai) => run.forEach((per, i) => {
-            let share = cust[code].p[per].amt;
-            if (r.fee && i === run.length - 1 && ai === r.alloc.length - 1) share -= r.fee;
-            if (r.alloc.length === 1 && run.length === 1) share = r.amt;
-            if (r.noteShares) share = r.noteShares[i];
-            if (r.allocShares) share = r.allocShares[ai][i];
-            const k = code + '|' + per;
-            if (!fills.has(k)) fills.set(k, []);
-            fills.get(k)!.push({r, share, multi: run.length > 1 || r.alloc.length > 1});
-        }));
-    }
+    const fills = collectFills(results, cust);
     for (const [k, lst0] of fills) {
         const cut = k.lastIndexOf('|');
         const code = k.slice(0, cut);
@@ -1457,6 +1605,9 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
             ...(n > 1 ? [{text: `${n}筆`}] : []),
             ...(ok ? [] : [{text: '待確認'}]),
             ...[...new Set(lst0.map((x) => x.r.userNote).filter((x): x is string => !!x))].map((text) => ({text, red: true})),
+            // 含補上期少付：寫在補收那筆入帳的最後一期（下期）
+            ...lst0.filter((x) => x.r.autoMemo && x.r.alloc[x.r.alloc.length - 1][1].slice(-1)[0] === per)
+                .flatMap((x) => x.r.autoMemo!).map((text) => ({text})),
         ];
         ec.value = md(lst0[lst0.length - 1].r.date);
         const color = ok ? COLORS.OK : COLORS.需確認;
@@ -1464,6 +1615,16 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         ec.style = {...ec.style, ...big(ec), fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, ...align, shrinkToFit: false}};
         const mc = memoCell(ws, info);
         if (mc && parts.length) writeMemo(mc, parts);
+    }
+
+    // 少付／要補：下一期在明細裡，就在它的備註欄寫紅字提醒（不在明細的只寫在網頁與結果表）
+    for (const sf of rec.shortfalls) {
+        if (!sf.nextInStmt) continue;
+        const info = cust[sf.code].p[sf.nextPer];
+        const wb = wbOf(sf.nextPer);
+        const ws = wb && sheetByName(wb, info.sheet);
+        const mc = ws && memoCell(ws, info);
+        if (mc) writeMemo(mc, [{text: `${sf.per}少付${sf.short}，這期要補`, red: true}]);
     }
 
     // 金額不符：收款日標黃底，備註欄寫紅字提醒
