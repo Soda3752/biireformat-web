@@ -36,6 +36,7 @@ import {
     DEPOSIT_FLAG,
     isChequeKind,
     isLowerUnsettled,
+    missedLines,
     MULTI_SEP,
     NEW_CUSTOMER_FLAG,
     ONE_OFF_FLAG,
@@ -59,14 +60,15 @@ const MEMORY_KEY = 'bii.reconcileV2.memory';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 const CHEQUE_TAB = '支票';
-type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB;
+const MISSED_TAB = '漏付';
+type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB | typeof MISSED_TAB;
 
 /** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
 const isCheque = isChequeKind;
 
 const STATUS_ORDER: ReadonlyArray<AutoReconcileStatus> = ['需確認', '金額不符', '找不到', '不在明細', 'OK'];
 /** 狀態分頁：「已對上」後面另列單次付款、現金存款（這些列仍算在已對上與全部裡） */
-const FILTER_ORDER: ReadonlyArray<FilterKey> = ['all', ...STATUS_ORDER, ONE_OFF_FLAG, DEPOSIT_FLAG, CHEQUE_TAB];
+const FILTER_ORDER: ReadonlyArray<FilterKey> = ['all', ...STATUS_ORDER, ONE_OFF_FLAG, DEPOSIT_FLAG, CHEQUE_TAB, MISSED_TAB];
 const STATUS_LABEL: Record<FilterKey, string> = {
     all: '全部',
     OK: '已對上',
@@ -77,6 +79,7 @@ const STATUS_LABEL: Record<FilterKey, string> = {
     單次付款: '單次付款',
     現金存款: '現金存款',
     支票: '支票',
+    漏付: '漏付',
 };
 /** 沿用 reconcile-status-pill 的配色 */
 const STATUS_PILL: Record<AutoReconcileStatus, string> = {
@@ -586,6 +589,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             cnt[x.status] = (cnt[x.status] ?? 0) + 1;
             if (x.special && x.special !== CHEQUE_FLAG) cnt[x.special] = (cnt[x.special] ?? 0) + 1;
             if (isCheque(x.kind)) cnt[CHEQUE_TAB] = (cnt[CHEQUE_TAB] ?? 0) + 1;
+            if (x.missed?.length) cnt[MISSED_TAB] = (cnt[MISSED_TAB] ?? 0) + 1;
         }
         const ok = cnt.OK ?? 0;
         const pending = r.results.length - ok;
@@ -594,7 +598,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
         tabsEl.innerHTML = FILTER_ORDER.map((k) => {
             const n = cnt[k] ?? 0;
-            const tone = k === '找不到' ? 'is-danger' : (k === '需確認' || k === '金額不符') ? 'is-warn' : '';
+            const tone = k === '找不到' || k === MISSED_TAB ? 'is-danger' : (k === '需確認' || k === '金額不符') ? 'is-warn' : '';
             return `<button type="button" class="reconcile-tab ${filter === k ? 'is-active' : ''}" role="tab"
                       aria-selected="${filter === k}" data-k="${k}">
                       <span class="reconcile-tab-label">${STATUS_LABEL[k]}</span>
@@ -612,7 +616,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const q = query.trim();
         const shown = r.results
             .filter((x) => (filter === 'all' || x.status === filter || x.special === filter
-                || (filter === CHEQUE_TAB && isCheque(x.kind)))
+                || (filter === CHEQUE_TAB && isCheque(x.kind)) || (filter === MISSED_TAB && !!x.missed?.length))
                 && (!q || [x.key, x.who, x.amt, x.note, x.date, x.kind, x.bank].join(' ').includes(q)))
             .sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.idx - b.idx);
         searchClear.hidden = query === '';
@@ -690,13 +694,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const note = x.userNote
                 ? `<div class="auto-recon-user-note">備註：${escapeHtml(x.userNote)}</div>${escapeHtml(x.note.replace(`備註：${x.userNote}；`, ''))}`
                 : escapeHtml(x.note);
+            const missedNote = missedLines(x, r.cust).map((m) => `<div class="auto-recon-missed">⚠ ${escapeHtml(m)}</div>`).join('');
             return `<tr>
               <td class="auto-recon-date">${escapeHtml(x.date.slice(5))}</td>
               <td class="col-money">${x.amt.toLocaleString()}</td>
               <td class="auto-recon-key">${escapeHtml(x.key) || '—'}<div class="auto-recon-sub">${escapeHtml(x.kind)} ${escapeHtml(x.bank)}</div></td>
               <td>${escapeHtml(x.who) || '<span class="auto-recon-sub">—</span>'}</td>
               <td><span class="reconcile-status-pill ${STATUS_PILL[x.status]}">${STATUS_LABEL[x.status]}</span></td>
-              <td class="auto-recon-note">${note}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
+              <td class="auto-recon-note">${note}${missedNote}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
               <td><div class="auto-recon-act">
                 ${x.confirmed ? `<span class="reconcile-status-pill is-matched">${x.special ?? (x.cash === 'ok' || x.cash === 'warn' ? '現付' : '✓ 已確認')}</span>
                   <button type="button" class="btn btn-secondary btn-xs" data-unconfirm="${x.idx}"

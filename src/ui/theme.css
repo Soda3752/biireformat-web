@@ -5663,6 +5663,11 @@ td.cell-price-down {
     font-weight: 600;
 }
 
+.auto-recon-missed {
+    color: var(--color-danger);
+    font-weight: 600;
+}
+
 .auto-recon-pick-row > td {
     background: var(--color-surface-muted, rgba(255, 242, 204, 0.35));
 }

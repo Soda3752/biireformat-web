@@ -156,6 +156,17 @@ export interface ReconcileEntry extends BankEntry {
      * feeHere＝手續費算在這一筆（整組只算一次，落在最後一期有填到的那筆）。
      */
     sumGroup?: { feeHere: boolean };
+    /** 這筆入帳回填到某期後，發現同客戶更早的期別沒付（漏付提醒）。 */
+    missed?: Missed[];
+}
+
+/** 漏付：客戶 code 的 per 期（明細 amt）沒有實收，卻已付了比它晚的 paidPer 期。 */
+export interface Missed {
+    code: string;
+    per: string;
+    amt: number;
+    /** 比漏付期晚、本次已付的期別（取最早那一期）。 */
+    paidPer: string;
 }
 
 /** 一期少付（實收 < 明細）：要帶到下一期提醒補收。 */
@@ -223,6 +234,8 @@ export interface AutoReconcileResult {
     names: string[];
     /** 少付／要補：寫回明細時在下一期備註欄寫紅字提醒。 */
     shortfalls: Shortfall[];
+    /** 漏付的期別（每個客戶期別一筆）；觸發的入帳另放在各列的 missed。 */
+    missed: Missed[];
 }
 
 // ---------- 小工具
@@ -637,6 +650,57 @@ function calcShortfalls(results: ReadonlyArray<ReconcileEntry>, cust: Record<str
         });
     }
     return out;
+}
+
+/**
+ * 算漏付：本次確認（OK）的入帳回填到期別 P 後，同客戶比 P 早、明細 > 0、沒有實收
+ * （明細原本沒有、本次也沒被任何入帳填到）的期別就是漏付。
+ * 排除：現付、單次付款、現金存款、支票未指定店家（不回填期別）；被略過的下期（不在 cust）；
+ * 已知少付帶到的下一期（另有紅字提醒）；還在等使用者處理的金額不符預設回填期別。
+ */
+function calcMissed(
+    results: ReadonlyArray<ReconcileEntry>, cust: Record<string, StmtCustomer>,
+    periods: ReadonlyArray<string>, shortfalls: ReadonlyArray<Shortfall>,
+): Missed[] {
+    const fills = collectFills(results, cust);
+    const order = (per: string): number => periods.indexOf(per);
+    /** 客戶 → 本次確認回填到的期別與入帳。 */
+    const paidBy = new Map<string, Map<string, ReconcileEntry[]>>();
+    for (const [k, lst] of fills) {
+        const cut = k.lastIndexOf('|');
+        const code = k.slice(0, cut);
+        const per = k.slice(cut + 1);
+        const rs = lst.map((x) => x.r).filter((r) => r.status === 'OK' && !r.special && r.cash !== 'ok');
+        if (!rs.length || order(per) < 0) continue;
+        if (!paidBy.has(code)) paidBy.set(code, new Map());
+        paidBy.get(code)!.set(per, rs);
+    }
+    const out: Missed[] = [];
+    for (const [code, byPer] of paidBy) {
+        const pending = results.filter((r) => r.status === '金額不符' && r.alloc[0]?.[0] === code);
+        for (const q of periods) {
+            const info = cust[code].p[q];
+            if (!info || info.amt <= 0 || info.paid || fills.has(code + '|' + q)) continue;
+            if (shortfalls.some((sf) => sf.code === code && sf.nextPer === q)) continue;
+            if (pending.some((r) => r.notePeriods?.includes(q))) continue;
+            const later = [...byPer.keys()].filter((per) => order(per) > order(q)).sort((a, b) => order(a) - order(b));
+            if (!later.length) continue;
+            const m: Missed = {code, per: q, amt: info.amt, paidPer: later[0]};
+            out.push(m);
+            for (const per of later) for (const r of byPer.get(per)!) {
+                r.missed = r.missed ?? [];
+                if (!r.missed.some((x) => x.code === code && x.per === q)) r.missed.push(m);
+            }
+        }
+    }
+    return out;
+}
+
+/** 入帳列要顯示的漏付說明（紅字用；同一筆跨多家店才加店名）。 */
+export function missedLines(r: Pick<ReconcileEntry, 'missed'>, cust: Record<string, StmtCustomer>): string[] {
+    const ms = r.missed ?? [];
+    const multi = new Set(ms.map((m) => m.code)).size > 1;
+    return ms.map((m) => `${multi ? cust[m.code].name + ' ' : ''}${m.per} 還沒付（明細 ${m.amt.toLocaleString()}）`);
 }
 
 export function reconcile(input: ReconcileInput): AutoReconcileResult {
@@ -1329,7 +1393,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         if (r.status !== 'OK' || !r.userNote || !SHORT_WORDS.test(r.userNote) || flagged.has(r.idx) || toppedUp.has(r.idx)) continue;
         addNote(r, '備註寫了要補，但實收金額不少於明細，未帶到下一期');
     }
-    return {results, cust, PERIODS, skipped, names: names.sort(), shortfalls};
+    const missed = calcMissed(results, cust, PERIODS, shortfalls);
+    return {results, cust, PERIODS, skipped, names: names.sort(), shortfalls, missed};
 }
 
 /** 依相似度列出最接近的客戶名稱（「改成」找不到完全一致的名字時給使用者挑）。 */
@@ -1520,6 +1585,38 @@ function writeMemo(c: ExcelJS.Cell, parts: ReadonlyArray<MemoPart>, front = fals
     c.alignment = {...c.alignment, horizontal: 'left', vertical: 'middle', shrinkToFit: false};
 }
 
+/** 備註欄裡舊的漏付紅字（「漏付，10上已付」）。 */
+const MISSED_RE = /漏付，[^；]*已付/;
+
+/** 這期補付了：把備註裡「漏付，X已付」那段紅字改成一般黑字「已補付 M/D」，其他內容不動（文字可能是 richText）。 */
+function markMadeUp(c: ExcelJS.Cell, date: string): void {
+    const prev = s(cellVal(c));
+    const m = MISSED_RE.exec(prev);
+    if (!m) return;
+    const font = c.font ?? {};
+    const {color: _red, ...black} = font;
+    const v = c.value as {richText?: ExcelJS.RichText[]} | null;
+    const runs: ExcelJS.RichText[] = v && typeof v === 'object' && v.richText ? v.richText : [{text: prev, font}];
+    const start = m.index;
+    const end = start + m[0].length;
+    const out: ExcelJS.RichText[] = [];
+    let pos = 0;
+    let put = false;
+    for (const run of runs) {
+        const a = pos;
+        pos += run.text.length;
+        const left = run.text.slice(0, Math.max(0, start - a));
+        const right = run.text.slice(Math.max(0, end - a));
+        if (left) out.push({...run, text: left});
+        if (!put && a <= start && start < pos) {
+            out.push({text: `已補付 ${date}`, font: black});
+            put = true;
+        }
+        if (right) out.push({...run, text: right});
+    }
+    c.value = {richText: out};
+}
+
 /** 舊版回填的收款日文字：日期後接 (-15)/(月)/(2筆) 與結尾 ?，例如「10/12(-15)(月)」「10/5(2筆)?」。 */
 const OLD_DATE_TAGS = /^(\d{1,2}\/\d{1,2})((?:\((?:-\d+|月|\d+筆)\))*)(\?)?$/;
 
@@ -1673,7 +1770,17 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         dc.style = {...dc.style, ...big(dc), fill: fill(color), alignment: {...dc.alignment, ...align}};
         ec.style = {...ec.style, ...big(ec), fill: fill(multi ? MULTI_DATE_FILL : color), alignment: {...ec.alignment, ...align, shrinkToFit: false}};
         const mc = memoCell(ws, info);
+        if (mc) markMadeUp(mc, md(lst0[lst0.length - 1].r.date));
         if (mc && parts.length) writeMemo(mc, parts);
+    }
+
+    // 漏付：客戶沒付的那一期，備註欄寫紅字（已有漏付字樣不重複寫）
+    for (const m of rec.missed) {
+        const info = cust[m.code].p[m.per];
+        const wb = wbOf(m.per);
+        const ws = wb && sheetByName(wb, info.sheet);
+        const mc = ws && memoCell(ws, info);
+        if (mc && !s(cellVal(mc)).includes('漏付，')) writeMemo(mc, [{text: `漏付，${m.paidPer}已付`, red: true}]);
     }
 
     // 少付／要補：下一期在明細裡，就在它的備註欄寫紅字提醒（不在明細的只寫在網頁與結果表）
@@ -1736,7 +1843,7 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
     const order: Record<AutoReconcileStatus, number> = {找不到: 0, 需確認: 1, 金額不符: 2, 不在明細: 3, OK: 4};
     const sorted = [...results].sort((a, b) => (order[a.status] - order[b.status]) || cmpDate(a.date, b.date));
     for (const r of sorted) {
-        const row = ws.addRow([r.date, r.kind, r.amt, r.bank, r.key, r.who, r.special ?? r.status, r.src, r.note, r.confirmed ? '✓' : '']);
+        const row = ws.addRow([r.date, r.kind, r.amt, r.bank, r.key, r.who, r.special ?? r.status, r.src, [r.note, ...missedLines(r, cust).map((x) => `漏付：${x}`)].filter(Boolean).join('；'), r.confirmed ? '✓' : '']);
         row.eachCell({includeEmpty: true}, (c) => {
             c.fill = fill(COLORS[r.status]);
         });
