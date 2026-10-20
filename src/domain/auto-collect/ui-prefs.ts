@@ -41,3 +41,10 @@ export function normalizeUiPrefs(raw: unknown): UiPrefs {
     const r = raw as Record<string, unknown>;
     return {version: 1, table: normalizeSide(r.table), messages: normalizeSide(r.messages)};
 }
+
+/** 全部展開的暫時版本（點「需確認」篩選時用），不改原物件。 */
+export const expandAll = (p: UiPrefs): UiPrefs => ({
+    ...p,
+    table: Object.fromEntries(SECTION_KEYS.map((k) => [k, false])) as Collapsed,
+    messages: Object.fromEntries(SECTION_KEYS.map((k) => [k, false])) as Collapsed,
+});

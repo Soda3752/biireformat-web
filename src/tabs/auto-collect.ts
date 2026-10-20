@@ -46,7 +46,7 @@ import {
     updateManualDebt,
     validateManualDebt,
 } from '@/domain/auto-collect/ledger';
-import {type SectionKey, type Side, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
+import {expandAll, type SectionKey, type Side, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
 import {defaultTemplates, DEFAULT_TEMPLATES, type MessageTemplates, type TemplateKey} from '@/domain/auto-collect/templates';
 import {clearHistory, clearMarks, loadHistory, loadMarks, loadTemplates, loadUiPrefs, resetTemplates, saveHistory, saveMarks, saveTemplates, saveUiPrefs} from '@/infra/auto-collect-store';
 import {buildMessagesText, buildSummaryXlsx} from '@/writers/auto-collect-writer';
@@ -153,6 +153,19 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
     const editing = new Map<string, string>(); // 正在編輯訊息的客人 → 文字框目前內容（重畫清單時保留）
     let ui: UiPrefs = loadUiPrefs(); // 各組收合狀態（獨立的畫面偏好）
     let onlyNotes = false; // 點「需要先確認」格子 → 只顯示有注意事項的客人
+    let uiBeforeFilter: UiPrefs | null = null; // 篩選期間暫時全展開，取消時還原成這份（不寫進偏好）
+
+    const setOnlyNotes = (on: boolean) => {
+        if (on === onlyNotes) return;
+        onlyNotes = on;
+        if (on) {
+            uiBeforeFilter = ui;
+            ui = expandAll(ui);
+        } else if (uiBeforeFilter) {
+            ui = uiBeforeFilter;
+            uiBeforeFilter = null;
+        }
+    };
 
     const persist = (h: History): boolean => {
         try {
@@ -463,7 +476,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
     $('stats').addEventListener('click', (e) => {
         const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-role="only-notes"]');
         if (!btn || btn.disabled) return;
-        onlyNotes = !onlyNotes;
+        setOnlyNotes(!onlyNotes);
         render();
     });
 
@@ -500,7 +513,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
 
     const setFolded = (side: Side, key: SectionKey, folded: boolean) => {
         ui = {...ui, [side]: {...ui[side], [key]: folded}};
-        saveUiPrefs(ui);
+        if (!onlyNotes) saveUiPrefs(ui); // 篩選中的開合只是暫時的
         if (key === 'settled') renderSettled();
         else renderList();
     };
@@ -541,7 +554,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             : '<div class="ac-empty">還沒有資料。請把對帳 2.0 的「X月_已自動對帳.xlsx」放到上面。</div>';
 
         const warn = result.chase.filter((c) => c.notes.length).length;
-        if (!warn) onlyNotes = false;
+        if (!warn) setOnlyNotes(false);
         const metric = (label: string, value: string) =>
             `<div class="metric-label">${label}</div><div class="metric-value">${value}</div>`;
         $('stats').innerHTML = [

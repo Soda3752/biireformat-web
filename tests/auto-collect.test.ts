@@ -7,7 +7,7 @@ import {existsSync, readFileSync} from 'node:fs';
 
 import ExcelJS from 'exceljs';
 
-import {normalizeUiPrefs} from '../src/domain/auto-collect/ui-prefs';
+import {expandAll, normalizeUiPrefs} from '../src/domain/auto-collect/ui-prefs';
 import {closingFor, DEFAULT_TEMPLATES, defaultTemplates, normalizeTemplates} from '../src/domain/auto-collect/templates';
 
 import {
@@ -1163,5 +1163,15 @@ describe('催款語氣與訊息範本', () => {
         await wb.xlsx.load(await (await buildSummaryXlsx(res)).arrayBuffer());
         expect(JSON.stringify(wb.getWorksheet('催款訊息')!.getSheetValues())).toContain('再麻煩儘速匯款');
         expect(String(wb.getWorksheet('催款總表')!.getRow(2).getCell(3).value)).toContain('4 期以上');
+    });
+});
+
+describe('篩選時全展開', () => {
+    test('expandAll 全部展開且不改原偏好', () => {
+        const p = normalizeUiPrefs({table: {two: true}});
+        const e = expandAll(p);
+        expect(Object.values(e.table).every((v) => v === false)).toBe(true);
+        expect(Object.values(e.messages).every((v) => v === false)).toBe(true);
+        expect(p.table.two).toBe(true);
     });
 });
