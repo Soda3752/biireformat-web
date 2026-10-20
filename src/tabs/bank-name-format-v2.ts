@@ -56,11 +56,15 @@ import type {TabDefinition} from '@/ui/tabs';
 const MEMORY_KEY = 'bii.reconcileV2.memory';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-type FilterKey = 'all' | AutoReconcileStatus | SpecialKind;
+const CHEQUE_TAB = '支票';
+type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB;
+
+/** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
+const isCheque = (kind: string): boolean => /票據|支票/.test(kind.normalize('NFKC').replace(/\s+/g, ''));
 
 const STATUS_ORDER: ReadonlyArray<AutoReconcileStatus> = ['需確認', '金額不符', '找不到', '不在明細', 'OK'];
 /** 狀態分頁：「已對上」後面另列單次付款、現金存款（這些列仍算在已對上與全部裡） */
-const FILTER_ORDER: ReadonlyArray<FilterKey> = ['all', ...STATUS_ORDER, ONE_OFF_FLAG, DEPOSIT_FLAG];
+const FILTER_ORDER: ReadonlyArray<FilterKey> = ['all', ...STATUS_ORDER, ONE_OFF_FLAG, DEPOSIT_FLAG, CHEQUE_TAB];
 const STATUS_LABEL: Record<FilterKey, string> = {
     all: '全部',
     OK: '已對上',
@@ -70,6 +74,7 @@ const STATUS_LABEL: Record<FilterKey, string> = {
     不在明細: '不在明細',
     單次付款: '單次付款',
     現金存款: '現金存款',
+    支票: '支票',
 };
 /** 沿用 reconcile-status-pill 的配色 */
 const STATUS_PILL: Record<AutoReconcileStatus, string> = {
@@ -577,6 +582,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         for (const x of r.results) {
             cnt[x.status] = (cnt[x.status] ?? 0) + 1;
             if (x.special) cnt[x.special] = (cnt[x.special] ?? 0) + 1;
+            if (isCheque(x.kind)) cnt[CHEQUE_TAB] = (cnt[CHEQUE_TAB] ?? 0) + 1;
         }
         const ok = cnt.OK ?? 0;
         const pending = r.results.length - ok;
@@ -602,7 +608,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         if (!r) return;
         const q = query.trim();
         const shown = r.results
-            .filter((x) => (filter === 'all' || x.status === filter || x.special === filter)
+            .filter((x) => (filter === 'all' || x.status === filter || x.special === filter
+                || (filter === CHEQUE_TAB && isCheque(x.kind)))
                 && (!q || [x.key, x.who, x.amt, x.note, x.date, x.kind, x.bank].join(' ').includes(q)))
             .sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.idx - b.idx);
         searchClear.hidden = query === '';
