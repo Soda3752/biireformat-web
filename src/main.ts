@@ -20,6 +20,7 @@ import {renderBillOverviewPanel} from '@/tabs/bill-overview';
 import {renderDeliveryFeePanel} from '@/tabs/delivery-fee';
 import {renderBankNameFormatPanel} from '@/tabs/bank-name-format';
 import {renderBankNameFormatV2Panel} from '@/tabs/bank-name-format-v2';
+import {renderAutoCollectPanel} from '@/tabs/auto-collect';
 import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderHandfillPanel} from '@/tabs/handfill';
 import {renderHandfillTransferPanel} from '@/tabs/handfill-transfer';
@@ -80,6 +81,8 @@ async function bootstrap(): Promise<void> {
       mainHost.appendChild(renderBankNameFormatPanel(tab));
     } else if (tab.id === 'bank-v2') {
         mainHost.appendChild(renderBankNameFormatV2Panel(tab));
+    } else if (tab.id === 'auto-collect') {
+        mainHost.appendChild(renderAutoCollectPanel(tab));
     } else if (tab.id === 'daily') {
       mainHost.appendChild(renderDailyCountPanel(tab));
     } else if (tab.id === 'handfill') {
