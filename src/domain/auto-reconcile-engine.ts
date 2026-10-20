@@ -851,8 +851,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         return exact ? [exact] : toCodes(n);
     };
 
-    function candidates(key: string, idx: number, post = false): { c: string[]; missing: string[]; src: string } {
-        const ov = rowMemory[idx] || override[key];
+    function candidates(key: string, idx: number, post = false, ignoreOv = false): { c: string[]; missing: string[]; src: string } {
+        const ov = ignoreOv ? undefined : rowMemory[idx] || override[key];
         if (ov) {
             // 現付帳號走到這裡表示使用者選了這筆照月結回填，照客戶名稱找期別
             // 多店帳號：名稱以 MULTI_SEP 串起（店名本身含此字的照整個名稱找）
@@ -978,10 +978,10 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const COMBO_CAP = 20;
     type ComboHit = { alloc: Array<[string, string[]]>; fee: number; k: number[] };
     /**
-     * 2~3 家店的期別組合湊入帳金額；回傳依偏好（店數少、期別舊、手續費少）排序的所有解。
+     * 2~3 家店的期別組合湊入帳金額；回傳依偏好（沒被本次其他入帳對到、店數少、期別舊、手續費少）排序的所有解。
      * 最後一家用「金額 → 期別」索引直接查，3 家 × 每家數十種連續段也只要幾千次運算。
      */
-    function combo(amt: number, codes: ReadonlyArray<string>, date: string, comboFees: ReadonlyArray<number> = COMBO_FEES): ComboHit[] {
+    function combo(amt: number, codes: ReadonlyArray<string>, date: string, comboFees: ReadonlyArray<number> = COMBO_FEES, busy?: ReadonlySet<string>): ComboHit[] {
         const open = new Map(codes.map((c) => [c, new Set(openPers(c, date))]));
         const opts = new Map(codes.map((c) => [c, COMBO_RUNS
             .filter((r) => r.every((x) => open.get(c)!.has(x)))
@@ -999,7 +999,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                             for (const run of bySum.get(amt + fee - tot) ?? []) {
                                 const alloc: Array<[string, string[]]> = cs.map((c, j) => [c, j < n - 1 ? pick[j] : run]);
                                 const old = alloc.reduce((t, [, r]) => t + PERIODS.indexOf(r[r.length - 1]), 0);
-                                out.push({alloc, fee, k: [n, old, fee]});
+                                // 本次前面的入帳已對到的期別排在後面
+                                const taken = alloc.some(([c, r]) => r.some((x) => busy?.has(c + '|' + x))) ? 1 : 0;
+                                out.push({alloc, fee, k: [taken, n, old, fee]});
                             }
                         }
                         return;
@@ -1009,7 +1011,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 rec(0, [], 0);
             }
         }
-        return out.sort((a, b) => cmpArr(a.k, b.k));
+        out.sort((a, b) => cmpArr(a.k, b.k));
+        // 有沒被本次其他入帳對到的組合，就不再列已被對走的期別
+        return out[0]?.k[0] === 0 ? out.filter((x) => x.k[0] === 0) : out;
     }
     /** 手動選期別的候選：每家店與它的未收期別。 */
     const multiOptionsOf = (codes: ReadonlyArray<string>, date: string): MultiOption[] => codes.map((code) => ({
@@ -1141,7 +1145,15 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             ? r.alloc.flatMap(([cd, run]) => run.map((per) => cd + '|' + per)) : []));
         const hits = c.map((x) => ({x, r: classify(b.amt, x, b.date, busy, fees)}))
             .filter((h): h is { x: string; r: ClassHit } => h.r !== null);
-        if (hits.length) {
+        // 多家店合併匯款的候選店：記憶只記了其中一家時，也把末五碼設定裡同帳號的其他店算進來（記憶的那家要在設定裡）
+        let mc = c;
+        if (c.length === 1 && src === '已確認') {
+            const set = candidates(b.key, idx, b.bank === POST_OFFICE_MARK, true).c;
+            if (set.length > 1 && set.includes(c[0])) mc = set;
+        }
+        // 單店只對得上「已收過」的期別時，先看看多家店合併有沒有乾淨（都還沒收）的組合，有就採用
+        const early = mc.length > 1 && hits.every((h) => h.r.stale.length) ? combo(b.amt, mc, b.date, chq ? [0] : COMBO_FEES, busy) : [];
+        if (hits.length && !early.length) {
             const hk = (h: { r: ClassHit }): number[] => [h.r.stale.length ? 1 : 0, pref(h.r.run), h.r.fee];
             hits.sort((a, b2) => cmpArr(hk(a), hk(b2)));
             const h = hits[0];
@@ -1160,9 +1172,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 res.status = '需確認';
             }
         } else {
-            const cms = c.length > 1 ? combo(b.amt, c, b.date, chq ? [0] : COMBO_FEES) : [];
+            const cms = early.length ? early : mc.length > 1 ? combo(b.amt, mc, b.date, chq ? [0] : COMBO_FEES, busy) : [];
             if (cms.length) {
-                Object.assign(res, {alloc: cms[0].alloc, fee: cms[0].fee, status: 'OK', note: '多家店合併匯款'});
+                Object.assign(res, {alloc: cms[0].alloc, fee: cms[0].fee, status: 'OK', note: '多家店合併匯款', cand: mc});
                 if (cms.length > 1) {
                     // 不同期別組合都對得上：列為需確認，讓使用者挑
                     const lab = (h: ComboHit): string => fmtAlloc(h.alloc) + (h.fee ? `（扣手續費${h.fee}）` : '');
@@ -1189,7 +1201,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             }
         }
         if (src === '已確認' && res.status === '需確認' && res.alloc.length && !res.paidDup && !res.multiAlts) res.status = 'OK';
-        if (c.length > 1 && !(cashOv && isCashFlag(cashOv.flag))) res.multiOptions = multiOptionsOf(c, b.date);
+        if (mc.length > 1 && !(cashOv && isCashFlag(cashOv.flag))) res.multiOptions = multiOptionsOf(mc, b.date);
         res.confirmed = src === '已確認';
         if (cashOv && isCashFlag(cashOv.flag)) {
             res.cash = 'period';
