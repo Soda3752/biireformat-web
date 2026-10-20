@@ -18,7 +18,9 @@
 import type ExcelJS from 'exceljs';
 
 import type {BankInfo} from '@/domain/models/bank-info';
+import {toHalfWidth} from '@/domain/models/bank-info';
 import {findMatchesFromCandidates} from '@/domain/bank-match-service';
+import {POST_OFFICE_MARK} from '@/readers/trans-record-reader';
 
 export const FEE = 15;
 export const RESULT_SHEET = '銀行對帳結果';
@@ -265,6 +267,21 @@ const acct4 = (k: string): string | null => {
     const m = /\*\*(\d{4})\*/.exec(k);
     return m ? m[1] : null;
 };
+/**
+ * 郵局帳號（「0081*****33318」「00810720168334」）取末五碼；銀行隱碼格式或名稱回 null。
+ * 設定頁末五碼填 5 碼或 4 碼都要對得到，所以比對時另用 tail5 / tail4。
+ */
+const postTail5 = (k: string): string | null => {
+    const h = toHalfWidth(k).replace(/\s/g, '');
+    const m = /^\d{4}\*+(\d{5})$/.exec(h) ?? /^\d{10,}$/.exec(h)?.[0].match(/(\d{5})$/);
+    return m ? m[1] : null;
+};
+const toFullWidthDigits = (k: string): string => k.replace(/\d/g, (d) => '０１２３４５６７８９'[Number(d)]);
+/** 郵局備註的全形／半形數字、前後空白寫法不一（「百吉園５」「7031早鳥」），兩種寫法都拿去比對設定頁末五碼。 */
+const postKeyForms = (k: string): string[] => {
+    const t = k.trim();
+    return [...new Set([t, toHalfWidth(t), toFullWidthDigits(toHalfWidth(t))])];
+};
 const CN = '零一二三四五六七八九十';
 
 function mforms(m0: number): string[] {
@@ -337,7 +354,7 @@ export function readBankRows(rows: ReadonlyArray<ReadonlyArray<string>>): BankEn
     return rows.slice(headerIdx + 1).map((r) => ({
         date: normalizeDate(s(r[ix('日期')])),
         kind: s(r[ix('摘要')]),
-        bank: s(r[ix('備註')]),
+        bank: s(r[ix('轉出入帳號')]) === POST_OFFICE_MARK ? POST_OFFICE_MARK : s(r[ix('備註')]),
         key: s(r[ix('註記')]),
         amt: parseInt(s(r[ix('存入金額')]).replace(/,/g, '') || '0', 10) || 0,
     })).filter((r) => r.amt > 0 && /^\d{4}\/\d{1,2}\/\d{1,2}$/.test(r.date));
@@ -687,6 +704,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const hist: Record<string, Set<string>> = {};
     const hist2: Record<string, Set<string>> = {};
     const tail: Record<string, Set<string>> = {};
+    const tail4: Record<string, Set<string>> = {};
+    const tail5: Record<string, Set<string>> = {};
     const namekey: Record<string, Set<string>> = {};
     const override: Record<string, MemoryEntry> = {};
     for (const r of acct) {
@@ -699,8 +718,13 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         if (v.includes('**')) v = v.split('**')[1];
         const d = v.replace(/\D/g, '');
         if (d && d.length === v.length) {
-            if (d.length === 4) add(tail, d, JSON.stringify([r.name, r.reg]));
-            else if (d.length === 5) add(tail, d.slice(0, 4), JSON.stringify([r.name, r.reg]));
+            if (d.length === 4) {
+                add(tail, d, JSON.stringify([r.name, r.reg]));
+                add(tail4, d, JSON.stringify([r.name, r.reg]));
+            } else if (d.length === 5) {
+                add(tail, d.slice(0, 4), JSON.stringify([r.name, r.reg]));
+                add(tail5, d, JSON.stringify([r.name, r.reg]));
+            }
         } else if (!d) add(namekey, v, r.name);
     }
     for (const [k, v] of Object.entries(hist)) {
@@ -726,7 +750,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         return exact ? [exact] : toCodes(n);
     };
 
-    function candidates(key: string, idx: number): { c: string[]; missing: string[]; src: string } {
+    function candidates(key: string, idx: number, post = false): { c: string[]; missing: string[]; src: string } {
         const ov = rowMemory[idx] || override[key];
         if (ov) {
             // 現付帳號走到這裡表示使用者選了這筆照月結回填，照客戶名稱找期別
@@ -748,15 +772,17 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         if (c.length || missing.length) src = '歷史紀錄';
         if (!c.length && !missing.length) {
             const a = acct4(key);
-            const infos = key ? findMatchesFromCandidates([key], bankInfos) : [];
+            const p5 = post ? postTail5(key) : null;
+            const infos = key ? findMatchesFromCandidates(post ? postKeyForms(key) : [key], bankInfos) : [];
             for (const info of infos) {
                 const t = codesFromInfo(info);
                 c.push(...t);
                 if (!t.length) missing.push(info.customerName);
-                src = a ? '末五碼' : '末五碼(戶名)';
+                src = a || p5 ? '末五碼' : '末五碼(戶名)';
             }
-            if (a && tail[a]) {
-                for (const j of tail[a]) {
+            const tailHits = a ? tail[a] : p5 ? new Set([...(tail5[p5] || []), ...(tail4[p5.slice(1)] || [])]) : undefined;
+            if (tailHits?.size) {
+                for (const j of tailHits) {
                     const [nm, reg] = JSON.parse(j) as [string, number | null];
                     let t = toCodes(nm);
                     if (reg) {
@@ -768,14 +794,14 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 }
                 src = '末五碼';
             }
-            for (const nm of (namekey[key] || [])) {
+            for (const nm of (post ? postKeyForms(key).flatMap((f) => [...(namekey[f] || [])]) : [...(namekey[key] || [])])) {
                 c.push(...toCodes(nm));
                 src = '末五碼(戶名)';
             }
             // 有命中代號的就不再列「不在明細」的同名資料
             if (c.length) missing.length = 0;
         }
-        if (!c.length && !missing.length && !acct4(key)) {
+        if (!c.length && !missing.length && !acct4(key) && !(post && postTail5(key))) {
             const k2 = stripMemo(key);
             if (k2) {
                 c = toCodes(k2);
@@ -991,7 +1017,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             const lastShares = shares[shares.length - 1];
             lastShares[lastShares.length - 1] += diff;
             if ((fee || !diff || memo) && lastShares[lastShares.length - 1] > 0) {
-                const codes = [...new Set([...candidates(b.key, idx).c, ...mp.map(([cd]) => cd)])];
+                const codes = [...new Set([...candidates(b.key, idx, b.bank === POST_OFFICE_MARK).c, ...mp.map(([cd]) => cd)])];
                 results.push({
                     ...b, idx, alloc: mp, fee, status: 'OK', cand: codes, src: '已確認', confirmed: true, who: '', custNames: [],
                     allocShares: shares, manualMulti: true, multiOptions: multiOptionsOf(codes, b.date),
@@ -1001,7 +1027,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 return;
             }
         }
-        const {c, missing, src} = candidates(b.key, idx);
+        const {c, missing, src} = candidates(b.key, idx, b.bank === POST_OFFICE_MARK);
         const res: ReconcileEntry = {
             ...b, idx, alloc: [], fee: 0, status: '找不到', note: '', cand: c, src,
             confirmed: false, who: '', custNames: [],

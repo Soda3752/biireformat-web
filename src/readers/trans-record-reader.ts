@@ -13,9 +13,11 @@ import Papa from 'papaparse';
  */
 export const parseTransRecord = async (file: File): Promise<string[][]> => {
   const lower = file.name.toLowerCase();
-    const rows = (lower.endsWith('.xlsx') || lower.endsWith('.xls'))
-        ? await parseTransRecordXlsx(file)
-        : await parseTransRecordCsv(file);
+    const rows = lower.endsWith('.xls')
+        ? await parseTransRecordXls(file)
+        : lower.endsWith('.xlsx')
+            ? await parseTransRecordXlsx(file)
+            : await parseTransRecordCsv(file);
 
     if (isPostOfficeFormat(rows)) {
         return normalizePostOffice(rows);
@@ -43,21 +45,22 @@ export const parseTransRecord = async (file: File): Promise<string[][]> => {
  * 「續上一筆」列保留為獨立列，因為它常含帳號末五碼或對方銀行名，可命中配對。
  */
 
+/** 郵局入帳列的「轉出入帳號」欄標記，readBankRows 據此把 bank 欄填成郵局。 */
+export const POST_OFFICE_MARK = '郵局';
 const POST_OFFICE_TITLE = '6個月內交易明細';
-const POST_OFFICE_HEADER = ['交易日期', '沖銷記號', '摘要', '提款金額', '存款金額', '備註'];
+const POST_OFFICE_HEADER = ['交易日期', '摘要', '提款金額', '存款金額', '備註'];
 const STANDARD_HEADER = ['日期', '摘要', '幣別', '支出金額', '存入金額', '餘額', '備註', '轉出入帳號', '註記'];
 
 const stripLeadingTab = (s: string): string => s.replace(/^\t+/, '');
 
 const cleanCell = (s: string | undefined): string => stripLeadingTab(s ?? '').trim();
 
+/** 標題列：含 交易日期 / 摘要 / 存款金額 / 備註（有無「結存金額」欄皆可，欄位依標題名稱定位）。 */
 const findPostOfficeHeaderIndex = (rows: ReadonlyArray<ReadonlyArray<string>>): number => {
     const scanLimit = Math.min(rows.length, 20);
     for (let i = 0; i < scanLimit; i++) {
-        const row = rows[i];
-        if (POST_OFFICE_HEADER.every((token, j) => cleanCell(row[j]) === token)) {
-            return i;
-        }
+        const cells = rows[i].map((c) => cleanCell(c));
+        if (POST_OFFICE_HEADER.every((token) => cells.includes(token))) return i;
     }
     return -1;
 };
@@ -107,6 +110,14 @@ const normalizePostOffice = (rows: ReadonlyArray<ReadonlyArray<string>>): string
     const headerIdx = findPostOfficeHeaderIndex(rows);
     if (headerIdx < 0) return rows.map((r) => [...r]);
 
+    const hdr = rows[headerIdx].map((c) => cleanCell(c));
+    const col = {
+        date: hdr.indexOf('交易日期'),
+        summary: hdr.indexOf('摘要'),
+        withdraw: hdr.indexOf('提款金額'),
+        deposit: hdr.indexOf('存款金額'),
+        note: hdr.indexOf('備註'),
+    };
     const out: string[][] = [STANDARD_HEADER.slice()];
     let current: string[] | null = null;
     let supplements: string[] = [];
@@ -127,26 +138,26 @@ const normalizePostOffice = (rows: ReadonlyArray<ReadonlyArray<string>>): string
         const cells = rows[i].map((c) => cleanCell(c));
         if (cells.every((c) => c === '')) continue;
 
-        const summary = cells[2] ?? '';
-        const note = cells[5] ?? '';
+        const summary = cells[col.summary] ?? '';
+        const note = cells[col.note] ?? '';
 
         if (SUPPLEMENT_SUMMARIES.has(summary)) {
             if (current !== null && note !== '') supplements.push(note);
             continue;
         }
 
-        const deposit = cleanAmount(cells[4] ?? '');
+        const deposit = cleanAmount((cells[col.deposit] ?? '').replace(/,/g, ''));
         if (!isMeaningfulDeposit(deposit)) {
             // 非入帳列（提款、手續費、存入為 0 但非補充行的雜列）：丟棄
             flush();
             continue;
         }
 
-        const date = convertRocDate(cells[0] ?? '');
-        const withdraw = cleanAmount(cells[3] ?? '');
+        const date = convertRocDate(cells[col.date] ?? '');
+        const withdraw = cleanAmount((cells[col.withdraw] ?? '').replace(/,/g, ''));
 
         flush();
-        current = [date, summary, 'TWD', withdraw, deposit, '', '', '-', note];
+        current = [date, summary, 'TWD', withdraw, deposit, '', '', POST_OFFICE_MARK, note];
     }
     flush();
     return out;
@@ -187,6 +198,18 @@ const parseTransRecordCsv = async (file: File): Promise<string[][]> => {
 const stripExcelTextWrap = (s: string): string => {
     if (s.length < 3 || !s.startsWith('="') || !s.endsWith('"')) return s;
     return s.slice(2, -1);
+};
+
+/** 舊版 BIFF .xls（郵局存摺明細）：ExcelJS 讀不了，改用 SheetJS（動態載入，不增加主 bundle）。 */
+const parseTransRecordXls = async (file: File): Promise<string[][]> => {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(await file.arrayBuffer(), {type: 'array'});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) throw new Error('xls 未含任何工作表');
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {header: 1, raw: false, defval: ''});
+  return rows
+    .map((r) => r.map((c) => String(c ?? '')))
+    .filter((r) => r.some((c) => c.trim() !== ''));
 };
 
 const parseTransRecordXlsx = async (file: File): Promise<string[][]> => {

@@ -285,8 +285,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     const bankZone = createDropZone({
         title: '銀行對帳單',
-        hint: '拖曳或點擊上傳（可多檔）.csv（Big5 / UTF-8）或 .xlsx',
-        accept: `.csv,text/csv,.xlsx,${XLSX_MIME}`,
+        hint: '拖曳或點擊上傳（可多檔）.csv（Big5 / UTF-8）、.xlsx 或郵局 .xls',
+        accept: `.csv,text/csv,.xlsx,.xls,${XLSX_MIME}`,
         multiple: true,
         onFile: async (file) => {
             if (bankFiles.some((f) => f.name === file.name)) {
