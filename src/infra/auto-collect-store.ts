@@ -3,6 +3,7 @@
  */
 
 import {defaultUiPrefs, normalizeUiPrefs, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
+import {defaultReasonChips, normalizeReasonChips} from '@/domain/auto-collect/reason-chips';
 import {defaultTemplates, type MessageTemplates, normalizeTemplates} from '@/domain/auto-collect/templates';
 import {emptyHistory, emptyMarks, extractLegacyRules, type History, type Marks, migrateLegacyRules, normalizeMarks} from '@/domain/auto-collect/ledger';
 
@@ -10,6 +11,7 @@ const KEY = 'bii.auto-collect.history';
 const MARKS_KEY = 'bii.auto-collect.marks';
 const UI_KEY = 'bii.auto-collect.ui';
 const TEMPLATES_KEY = 'bii.auto-collect.templates';
+const REASON_CHIPS_KEY = 'bii.auto-collect.reason-chips';
 
 export function loadHistory(): History {
     try {
@@ -104,4 +106,22 @@ export function saveTemplates(t: MessageTemplates): void {
 
 export function resetTemplates(): void {
     localStorage.removeItem(TEMPLATES_KEY);
+}
+
+/** 「已結清」快速原因按鈕（設定）：沒有、壞掉或存取被擋時回預設。清除全部記錄時不會動它。 */
+export function loadReasonChips(): string[] {
+    try {
+        const raw = localStorage.getItem(REASON_CHIPS_KEY);
+        return raw ? normalizeReasonChips(JSON.parse(raw)) : defaultReasonChips();
+    } catch {
+        return defaultReasonChips();
+    }
+}
+
+export function saveReasonChips(chips: string[]): void {
+    try {
+        localStorage.setItem(REASON_CHIPS_KEY, JSON.stringify(chips));
+    } catch (err) {
+        console.warn('[auto-collect-store] save reason chips failed', err);
+    }
 }

@@ -47,8 +47,9 @@ import {
     validateManualDebt,
 } from '@/domain/auto-collect/ledger';
 import {expandAll, type SectionKey, type Side, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
+import {addReasonChip, defaultReasonChips, removeReasonChip} from '@/domain/auto-collect/reason-chips';
 import {defaultTemplates, DEFAULT_TEMPLATES, type MessageTemplates, type TemplateKey} from '@/domain/auto-collect/templates';
-import {clearHistory, clearMarks, loadHistory, loadMarks, loadTemplates, loadUiPrefs, resetTemplates, saveHistory, saveMarks, saveTemplates, saveUiPrefs} from '@/infra/auto-collect-store';
+import {clearHistory, clearMarks, loadHistory, loadMarks, loadReasonChips, loadTemplates, loadUiPrefs, resetTemplates, saveHistory, saveMarks, saveReasonChips, saveTemplates, saveUiPrefs} from '@/infra/auto-collect-store';
 import {buildMessagesText, buildSummaryXlsx} from '@/writers/auto-collect-writer';
 
 const esc = (v: unknown): string =>
@@ -761,16 +762,80 @@ function settleDialog(c: Debtor): Promise<{reason: string} | null> {
       <div class="ac-settle-periods">${periods}</div>
       <label class="ac-field"><span>原因（選填）</span>
         <input class="app-form-input" type="text" data-role="reason" placeholder="例如：已補款、回饋金自扣" autocomplete="off"></label>
-      <div class="ac-chips"><button type="button" class="btn btn-secondary btn-xs" data-chip="已補款">已補款</button>
-        <button type="button" class="btn btn-secondary btn-xs" data-chip="回饋金自扣">回饋金自扣</button></div>
+      <div class="ac-chips" data-role="chips"></div>
       <div class="ac-settle-note">確定後，上面這 ${c.items.length} 筆不再算欠款。之後新的月份沒付仍會出現；按錯可以在畫面上方按「復原」。</div>`;
     const {dialog, close} = openModal('標記已結清', body,
         `<button type="button" class="btn btn-secondary" data-act="cancel">取消</button>
          <button type="button" class="btn btn-primary" data-act="ok">確定</button>`);
     const reason = dialog.querySelector<HTMLInputElement>('[data-role="reason"]')!;
+    const chipBox = dialog.querySelector<HTMLElement>('[data-role="chips"]')!;
+    let chips = loadReasonChips();
+    let adding = false;
+    const renderChips = (): void => {
+        chipBox.innerHTML = chips.map((t) => `<span class="ac-chip">
+            <button type="button" class="btn btn-secondary btn-xs ac-chip-main" data-chip="${esc(t)}">${esc(t)}</button><button type="button" class="ac-chip-x" data-chip-del="${esc(t)}" title="刪除這個按鈕" aria-label="刪除按鈕：${esc(t)}">×</button></span>`).join('')
+            + (adding
+                ? `<span class="ac-chip-add"><input class="app-form-input" type="text" data-role="chip-new" maxlength="20" placeholder="輸入新的原因" autocomplete="off">
+                    <button type="button" class="btn btn-primary btn-xs" data-chip-ok>加入</button>
+                    <button type="button" class="btn btn-secondary btn-xs" data-chip-cancel>取消</button></span>`
+                : `<button type="button" class="btn btn-secondary btn-xs" data-chip-new>＋ 新增</button>`)
+            + `<a href="#" class="ac-chip-reset" data-chip-reset>恢復預設</a>`;
+        if (adding) chipBox.querySelector<HTMLInputElement>('[data-role="chip-new"]')!.focus();
+    };
+    const updateChips = (next: string[]): void => {
+        chips = next;
+        saveReasonChips(chips);
+    };
+    const commitNew = (): void => {
+        const input = chipBox.querySelector<HTMLInputElement>('[data-role="chip-new"]');
+        if (input) updateChips(addReasonChip(chips, input.value));
+        adding = false;
+        renderChips();
+    };
+    chipBox.addEventListener('keydown', (e) => {
+        if (!(e.target as HTMLElement).matches('[data-role="chip-new"]')) return;
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            commitNew();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            adding = false;
+            renderChips();
+        }
+    });
+    renderChips();
     return new Promise((done) => {
         dialog.addEventListener('click', (e) => {
-            const chip = (e.target as HTMLElement).closest<HTMLElement>('[data-chip]');
+            const t = e.target as HTMLElement;
+            const del = t.closest<HTMLElement>('[data-chip-del]');
+            if (del) {
+                updateChips(removeReasonChip(chips, del.dataset.chipDel!));
+                renderChips();
+                return;
+            }
+            if (t.closest('[data-chip-new]')) {
+                adding = true;
+                renderChips();
+                return;
+            }
+            if (t.closest('[data-chip-ok]')) {
+                commitNew();
+                return;
+            }
+            if (t.closest('[data-chip-cancel]')) {
+                adding = false;
+                renderChips();
+                return;
+            }
+            if (t.closest('[data-chip-reset]')) {
+                e.preventDefault();
+                updateChips(defaultReasonChips());
+                renderChips();
+                return;
+            }
+            const chip = t.closest<HTMLElement>('[data-chip]');
             if (chip) {
                 reason.value = chip.dataset.chip!;
                 return;

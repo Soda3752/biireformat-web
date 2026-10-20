@@ -7,6 +7,7 @@ import {existsSync, readFileSync} from 'node:fs';
 
 import ExcelJS from 'exceljs';
 
+import {addReasonChip, defaultReasonChips, normalizeReasonChips, removeReasonChip} from '../src/domain/auto-collect/reason-chips';
 import {expandAll, normalizeUiPrefs} from '../src/domain/auto-collect/ui-prefs';
 import {closingFor, DEFAULT_TEMPLATES, defaultTemplates, normalizeTemplates} from '../src/domain/auto-collect/templates';
 
@@ -1173,5 +1174,24 @@ describe('篩選時全展開', () => {
         expect(Object.values(e.table).every((v) => v === false)).toBe(true);
         expect(Object.values(e.messages).every((v) => v === false)).toBe(true);
         expect(p.table.two).toBe(true);
+    });
+});
+
+describe('已結清快速原因按鈕清單', () => {
+    test('預設兩顆，壞資料回預設', () => {
+        expect(defaultReasonChips()).toEqual(['已補款', '回饋金自扣']);
+        expect(normalizeReasonChips(null)).toEqual(['已補款', '回饋金自扣']);
+        expect(normalizeReasonChips('abc')).toEqual(['已補款', '回饋金自扣']);
+    });
+    test('濾掉非字串、空白、重複；空陣列合法', () => {
+        expect(normalizeReasonChips([' 已補款 ', 3, '', '已補款', null, '現金'])).toEqual(['已補款', '現金']);
+        expect(normalizeReasonChips([])).toEqual([]);
+    });
+    test('新增：空白與重複不加；刪除預設也可以', () => {
+        const base = defaultReasonChips();
+        expect(addReasonChip(base, '  ')).toEqual(base);
+        expect(addReasonChip(base, '已補款')).toEqual(base);
+        expect(addReasonChip(base, ' 匯款 ')).toEqual(['已補款', '回饋金自扣', '匯款']);
+        expect(removeReasonChip(base, '已補款')).toEqual(['回饋金自扣']);
     });
 });

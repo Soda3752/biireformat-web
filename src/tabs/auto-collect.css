@@ -294,6 +294,8 @@
 
 .ac-chips {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-2);
     margin: var(--space-2) 0 var(--space-3);
 }
@@ -591,3 +593,45 @@
 }
 
 .auto-collect .ac-tpl-bar { margin-top: var(--space-3); }
+
+.ac-chip {
+    display: inline-flex;
+    align-items: center;
+}
+
+.ac-chip-main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.ac-chip-x {
+    align-self: stretch;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-border, #d0d5dd);
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+    background: transparent;
+    color: var(--color-text-muted, #667085);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.ac-chip-x:hover {
+    color: #c0392b;
+}
+
+.ac-chip-add {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1, 4px);
+}
+
+.ac-chip-add .app-form-input {
+    width: 9em;
+}
+
+.ac-chip-reset {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--color-text-muted, #667085);
+}
