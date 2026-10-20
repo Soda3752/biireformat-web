@@ -32,7 +32,9 @@ import {
     cellVal,
     isStatementWorkbook,
     CASH_FLAG,
+    CHEQUE_FLAG,
     DEPOSIT_FLAG,
+    isChequeKind,
     isLowerUnsettled,
     MULTI_SEP,
     NEW_CUSTOMER_FLAG,
@@ -60,7 +62,7 @@ const CHEQUE_TAB = '支票';
 type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB;
 
 /** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
-const isCheque = (kind: string): boolean => /票據|支票/.test(kind.normalize('NFKC').replace(/\s+/g, ''));
+const isCheque = isChequeKind;
 
 const STATUS_ORDER: ReadonlyArray<AutoReconcileStatus> = ['需確認', '金額不符', '找不到', '不在明細', 'OK'];
 /** 狀態分頁：「已對上」後面另列單次付款、現金存款（這些列仍算在已對上與全部裡） */
@@ -193,6 +195,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             金額只對得上明細「已收過款」的那期時，會列為「需確認」並寫出那期的實收金額與收款日：通常是付別期，勾要回填的期別後按「✓ 回填」（可填原因備註）；真的是補付同一期就按「✓ 正確（疊加）」。
             一個帳號對到多家店時，會試各店連續 1～4 期未收的期別合起來（可扣手續費 15/30）：只有一組對得上就自動對上；好幾組都對得上就從「是哪一組？」挑；都對不上（或想改）就按「手動選各店期別」，勾每家店付哪幾期，差額是 0、-15、-30 可直接確認，其他差額要填原因備註。確認後會記住這個帳號對應這幾家店。
             帳號/備註沒有紀錄的，會用金額在還沒收款的期別裡推測客戶（可扣手續費 15/30）：只推到一個就按「✓ 正確」；推到好幾個就從「是哪一個？」挑。
+            「支票」分頁（摘要含代收票據）的入帳，備註是支票號碼、不是店家：還不知道是誰就按「支票」（算已對上、不回填明細，只算這一筆，可填備註寫是誰的）；之後知道了，在「改成」填店家或從候選確認，就會照那家回填明細。備註的號碼是郵局代收流水號（同一天不同店家的支票會連號），不會拿來記憶或對應店家。支票只認金額完全相等，不扣手續費。
             「不在明細」「找不到」的入帳：自己存的現金按「現金存款」（只算這一筆）；不是月結客戶、單次付款的按「單次付款」（記住帳號，下次自動確認）；兩者都算已對上、不回填明細，可在框裡填備註。
             用帳號確認過的會記在這台電腦，下次自動對上；只寫「青坊」「麵包」這類共用備註的，只套用這一筆。
             明細表回填後：綠色是確定的、黃色是推測或金額不符；收款日只寫日期，淺藍底表示一次付多期或多店合併。收款日右邊會加一欄「備註」：寫「月」「扣手續費15」「2筆」「待確認」，你填的原因備註以紅字寫在同一格。
@@ -581,7 +584,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const cnt: Record<string, number> = {all: r.results.length};
         for (const x of r.results) {
             cnt[x.status] = (cnt[x.status] ?? 0) + 1;
-            if (x.special) cnt[x.special] = (cnt[x.special] ?? 0) + 1;
+            if (x.special && x.special !== CHEQUE_FLAG) cnt[x.special] = (cnt[x.special] ?? 0) + 1;
             if (isCheque(x.kind)) cnt[CHEQUE_TAB] = (cnt[CHEQUE_TAB] ?? 0) + 1;
         }
         const ok = cnt.OK ?? 0;
@@ -644,6 +647,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const canCash = (x.status === '金額不符' || x.status === '需確認') && x.custNames.length === 1 && !x.cash && !x.guesses;
             // 依金額推測的原本是「找不到」，推錯時一樣可以當現金存款 / 單次付款
             const canSpecial = (x.status === '不在明細' || x.status === '找不到' || !!x.guesses) && !x.special;
+            // 支票列：任何還沒對上的狀態都可按「支票」（不指定店家）
+            const canCheque = isCheque(x.kind) && x.status !== 'OK' && !x.special;
             const guessPicker = x.guesses && x.guesses.length > 1
                 ? `<div class="auto-recon-period" role="group" aria-label="從推測的客戶挑一個">
                     <span class="auto-recon-sub">是哪一個？</span>
@@ -652,7 +657,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                     ${x.guessMore ? `<span class="auto-recon-sub">還有 ${x.guessMore} 個沒列出，請用「改成」自己輸入</span>` : ''}
                    </div>`
                 : '';
-            const memoInput = (x.status === '金額不符' || x.cash === 'ok' || x.special || canSpecial || (paidOpen && x.alloc.length === 1)) && !x.userNote
+            const memoInput = (x.status === '金額不符' || x.cash === 'ok' || x.special || canSpecial || canCheque || (paidOpen && x.alloc.length === 1)) && !x.userNote
                 ? `<input class="reconcile-search-input auto-recon-fix auto-recon-memo"
                           placeholder="${x.status === '金額不符' ? '原因備註（例：扣30手續費）' : paidOpen ? '原因備註（選填，例：付成上期金額）' : '備註（選填）'}"
                           aria-label="金額不符原因備註" data-memo="${x.idx}" value="${escapeHtml(memoDrafts[x.idx] ?? '')}">`
@@ -708,6 +713,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                           title="自己存的現金：算已對上、不回填明細，只算這一筆">現金存款</button>
                   <button type="button" class="btn btn-secondary btn-xs" data-special="${ONE_OFF_FLAG}" data-special-idx="${x.idx}"
                           title="不是月結客戶的單次付款：算已對上、不回填明細，並記住這個帳號">單次付款</button>` : ''}
+                ${canCheque ? `<button type="button" class="btn btn-secondary btn-xs" data-special="${CHEQUE_FLAG}" data-special-idx="${x.idx}"
+                          title="這是支票、先不指定店家：算已對上、不回填明細，只算這一筆（知道是誰再用「改成」）">支票</button>` : ''}
                 ${x.cash === 'period' ? `<button type="button" class="btn btn-secondary btn-xs" data-cash-mode="" data-cash-idx="${x.idx}">改回現付</button>` : ''}
                 ${paidAct}${guessPicker}${altPicker}${multiToggle}${memoTag}${memoInput}${periodSelect}
                 <input class="reconcile-search-input auto-recon-fix" list="auto-recon-names" placeholder="改成…" data-fix="${x.idx}">
@@ -821,7 +828,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     };
 
     const saveConfirm = (entry: ReconcileEntry, m: MemoryEntry) => {
-        if (isGenericKey(entry.key)) {
+        if (isCheque(entry.kind) || isGenericKey(entry.key)) {
+            // 支票的備註是郵局代收流水號（每張不同），只記本次這一列，不寫記憶
             rowMemory[entry.idx] = m;
         } else {
             memory[entry.key] = {...m, at: new Date().toISOString().slice(0, 10)};
@@ -850,7 +858,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         delete rowPick[entry.idx];
         delete rowMulti[entry.idx];
         if (entry.special || entry.manualMulti) delete rowNotes[entry.idx];
-        if (entry.key in memory) {
+        if (!isCheque(entry.kind) && entry.key in memory) {
             delete memory[entry.key];
             saveMemory();
         }
@@ -944,10 +952,13 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const draft = memoDrafts[entry.idx]?.trim();
             if (draft) rowNotes[entry.idx] = draft;
             delete memoDrafts[entry.idx];
-            if (spBtn.dataset.special === DEPOSIT_FLAG) {
-                // 現金存款：只算這一筆，不記到這台電腦
+            if (spBtn.dataset.special === DEPOSIT_FLAG || spBtn.dataset.special === CHEQUE_FLAG) {
+                // 現金存款、支票：只算這一筆，不記到這台電腦
+                const kind = spBtn.dataset.special;
                 pending = null;
-                rowMemory[entry.idx] = {name: DEPOSIT_FLAG, flag: DEPOSIT_FLAG};
+                delete rowPick[entry.idx];
+                delete rowMulti[entry.idx];
+                rowMemory[entry.idx] = {name: kind, flag: kind};
                 rerun();
             } else {
                 // 單次付款：客戶名稱優先用對到的名稱，沒有就用帳號/備註文字
@@ -1060,7 +1071,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const i = Number(memoInput.dataset.memo);
             const entry = byIdx(memoInput.dataset.memo);
             // 不在明細 / 找不到：先留著，按「現金存款」「單次付款」時一併帶入
-            if (entry && (entry.status === '不在明細' || entry.status === '找不到' || entry.guesses) && !entry.special) return;
+            if (entry && (entry.status === '不在明細' || entry.status === '找不到' || entry.guesses
+                || (entry.status === '需確認' && isCheque(entry.kind))) && !entry.special) return;
             rowNotes[i] = v;
             delete memoDrafts[i];
             rerun();

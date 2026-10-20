@@ -32,9 +32,15 @@ export const isCashFlag = (flag: string): boolean => flag.includes('現付');
 /** 不在明細的入帳：單次付款（記住帳號）、現金存款（自己存的，只算這一筆）。 */
 export const ONE_OFF_FLAG = '單次付款';
 export const DEPOSIT_FLAG = '現金存款';
-export type SpecialKind = typeof ONE_OFF_FLAG | typeof DEPOSIT_FLAG;
+/** 支票（銀行摘要含代收票據）：使用者確認是支票、不指定店家，算已對上、不回填明細，只算這一筆。 */
+export const CHEQUE_FLAG = '支票';
+export type SpecialKind = typeof ONE_OFF_FLAG | typeof DEPOSIT_FLAG | typeof CHEQUE_FLAG;
 export const specialOf = (flag: string): SpecialKind | undefined =>
-    flag.includes(ONE_OFF_FLAG) ? ONE_OFF_FLAG : flag.includes(DEPOSIT_FLAG) ? DEPOSIT_FLAG : undefined;
+    flag === CHEQUE_FLAG ? CHEQUE_FLAG
+        : flag.includes(ONE_OFF_FLAG) ? ONE_OFF_FLAG : flag.includes(DEPOSIT_FLAG) ? DEPOSIT_FLAG : undefined;
+
+/** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票。 */
+export const isChequeKind = (kind: string): boolean => /票據|支票/.test(kind.normalize('NFKC').replace(/\s+/g, ''));
 
 export type AutoReconcileStatus = 'OK' | '需確認' | '金額不符' | '找不到' | '不在明細';
 
@@ -840,7 +846,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
      * 單一客戶依金額找期別：優先所有期別都還沒收款、也還沒被本次其他入帳對到的組合；
      * 只有含已收過期別的組合對得上時，stale 列出已收過的期別。shares＝有補付尾款時各期回填金額。
      */
-    function classify(amt: number, code: string, date: string, busy?: ReadonlySet<string>): ClassHit | null {
+    function classify(amt: number, code: string, date: string, busy?: ReadonlySet<string>, fees: ReadonlyArray<number> = [0, FEE]): ClassHit | null {
         const p = cust[code].p;
         let best: { k: number[]; hit: ClassHit } | null = null;
         for (const run of RUNS) {
@@ -854,7 +860,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 }
                 const tot = vals.reduce((t, v) => t + v, 0);
                 const tail = vals.some((v, j) => v !== p[run[j]].amt);
-                for (const fee of [0, FEE]) {
+                for (const fee of fees) {
                     if (tot - fee !== amt) continue;
                     const k = [stale.length ? 1 : 0, isBusy, pref(run), fee];
                     if (best && cmpArr(k, best.k) >= 0) continue;
@@ -880,7 +886,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
      * 2~3 家店的期別組合湊入帳金額；回傳依偏好（店數少、期別舊、手續費少）排序的所有解。
      * 最後一家用「金額 → 期別」索引直接查，3 家 × 每家數十種連續段也只要幾千次運算。
      */
-    function combo(amt: number, codes: ReadonlyArray<string>, date: string): ComboHit[] {
+    function combo(amt: number, codes: ReadonlyArray<string>, date: string, comboFees: ReadonlyArray<number> = COMBO_FEES): ComboHit[] {
         const open = new Map(codes.map((c) => [c, new Set(openPers(c, date))]));
         const opts = new Map(codes.map((c) => [c, COMBO_RUNS
             .filter((r) => r.every((x) => open.get(c)!.has(x)))
@@ -894,7 +900,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 const rec = (i: number, pick: string[][], tot: number): void => {
                     if (out.length >= COMBO_CAP) return;
                     if (i === n - 1) {
-                        for (const fee of COMBO_FEES) {
+                        for (const fee of comboFees) {
                             for (const run of bySum.get(amt + fee - tot) ?? []) {
                                 const alloc: Array<[string, string[]]> = cs.map((c, j) => [c, j < n - 1 ? pick[j] : run]);
                                 const old = alloc.reduce((t, [, r]) => t + PERIODS.indexOf(r[r.length - 1]), 0);
@@ -924,14 +930,14 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const GUESS_RUNS = RUNS.filter((r) => r.length <= 4 && contiguous(r));
     const GUESS_FEES = [0, FEE, FEE * 2];
     const GUESS_LIMIT = 8;
-    function guess(amt: number, date: string, used: ReadonlySet<string>): GuessPick[] {
+    function guess(amt: number, date: string, used: ReadonlySet<string>, fees: ReadonlyArray<number> = GUESS_FEES): GuessPick[] {
         const out: Array<GuessPick & { k: number[] }> = [];
         for (const [code, v] of Object.entries(cust)) {
             for (const run of GUESS_RUNS) {
                 if (!run.every((x) => v.p[x] && !v.p[x].paid && !used.has(code + '|' + x))) continue;
                 if (!avail(run[run.length - 1], date)) continue;
                 const tot = run.reduce((t, x) => t + v.p[x].amt, 0);
-                const fee = GUESS_FEES.find((f) => tot - f === amt);
+                const fee = fees.find((f) => tot - f === amt);
                 if (fee !== undefined) out.push({code, run, fee, k: [fee, run.length, pref(run)]});
             }
         }
@@ -958,6 +964,9 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             skipped++;
             return;
         }
+        // 支票：只認金額完全相等（不扣手續費）；備註的號碼是郵局代收流水號，不拿來對應店家
+        const chq = isChequeKind(b.kind);
+        const fees = chq ? [0] : [0, FEE];
         const spOv = rowMemory[idx] || override[b.key];
         const special = spOv && specialOf(spOv.flag);
         if (special) {
@@ -965,8 +974,8 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             results.push({
                 ...b, idx, alloc: [], fee: 0, status: 'OK', cand: [], src: `已確認（${special}）`,
                 confirmed: true, custNames: [], special,
-                who: special === ONE_OFF_FLAG ? `${spOv.name}（單次付款）` : DEPOSIT_FLAG,
-                note: (memo ? `備註：${memo}；` : '') + special,
+                who: special === ONE_OFF_FLAG ? `${spOv.name}（單次付款）` : special === CHEQUE_FLAG ? '支票（未指定店家）' : DEPOSIT_FLAG,
+                note: (memo ? `備註：${memo}；` : '') + (special === CHEQUE_FLAG ? '支票（未指定店家）' : special),
                 ...(memo ? {userNote: memo} : {}),
             });
             return;
@@ -1035,7 +1044,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         // 本次前面的入帳已對到的期別（比對時排在未被對到的期別後面）
         const busy = new Set(results.flatMap((r) => (r.status === 'OK' || r.status === '需確認')
             ? r.alloc.flatMap(([cd, run]) => run.map((per) => cd + '|' + per)) : []));
-        const hits = c.map((x) => ({x, r: classify(b.amt, x, b.date, busy)}))
+        const hits = c.map((x) => ({x, r: classify(b.amt, x, b.date, busy, fees)}))
             .filter((h): h is { x: string; r: ClassHit } => h.r !== null);
         if (hits.length) {
             const hk = (h: { r: ClassHit }): number[] => [h.r.stale.length ? 1 : 0, pref(h.r.run), h.r.fee];
@@ -1056,7 +1065,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
                 res.status = '需確認';
             }
         } else {
-            const cms = c.length > 1 ? combo(b.amt, c, b.date) : [];
+            const cms = c.length > 1 ? combo(b.amt, c, b.date, chq ? [0] : COMBO_FEES) : [];
             if (cms.length) {
                 Object.assign(res, {alloc: cms[0].alloc, fee: cms[0].fee, status: 'OK', note: '多家店合併匯款'});
                 if (cms.length > 1) {
@@ -1100,7 +1109,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     for (const [code, lst] of Object.entries(byC)) {
         if (lst.length < 2) continue;
         const tot = lst.reduce((t, r) => t + r.amt, 0);
-        const r = classify(tot, code, lst[lst.length - 1].date);
+        const r = classify(tot, code, lst[lst.length - 1].date, undefined, lst.every((x) => isChequeKind(x.kind)) ? [0] : [0, FEE]);
         if (r && !r.stale.length) {
             // 各期應收（有補付尾款的照 shares，手續費扣在最後一期）依序由各筆入帳接力填滿，每筆只填自己實際的金額
             const need = r.run.map((per, j) => (r.shares ? r.shares[j] : cust[code].p[per].amt - (j === r.run.length - 1 ? r.fee : 0)));
@@ -1133,7 +1142,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
         r.alloc.forEach(([c, run]) => run.forEach((per) => taken.add(c + '|' + per)));
     }
     for (const r of toGuess) {
-        const gs = guess(r.amt, r.date, taken);
+        const gs = guess(r.amt, r.date, taken, isChequeKind(r.kind) ? [0] : GUESS_FEES);
         if (!gs.length) continue;
         gs.forEach((g) => {
             g.label = fmtAlloc([[g.code, g.run]]) + (g.fee ? `（扣手續費${g.fee}）` : '');
@@ -1271,7 +1280,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             if (r.alloc.some(([, run]) => run.length)) continue;
             const codes = r.alloc.length ? r.alloc.map(([c]) => c) : r.cand;
             if (!codes.includes(sf.code) || !avail(sf.nextPer, r.date)) continue;
-            const fee = [0, FEE].find((f) => r.amt === nc.amt + sf.short - f);
+            const fee = (isChequeKind(r.kind) ? [0] : [0, FEE]).find((f) => r.amt === nc.amt + sf.short - f);
             if (fee === undefined) continue;
             r.alloc = [[sf.code, [sf.per, sf.nextPer]]];
             r.fee = fee;
