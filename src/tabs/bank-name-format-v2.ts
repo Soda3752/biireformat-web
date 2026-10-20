@@ -23,6 +23,7 @@ import type {
     AutoReconcileStatus,
     BankEntry,
     GuessPick,
+    Missed,
     MemoryEntry,
     MultiOption,
     ReconcileEntry,
@@ -61,6 +62,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 
 const CHEQUE_TAB = '支票';
 const MISSED_TAB = '漏付';
+const MISSED_IGNORED_KEY = 'bii.reconcileV2.missedIgnored';
 type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB | typeof MISSED_TAB;
 
 /** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
@@ -280,6 +282,26 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     } catch {
         memory = {};
     }
+    /** 使用者按「已處理」的客戶漏付（客戶代號|期別），下次不再列出也不寫進下載的明細。 */
+    let missedIgnored = new Set<string>();
+    try {
+        missedIgnored = new Set<string>(JSON.parse(localStorage.getItem(MISSED_IGNORED_KEY) || '[]'));
+    } catch {
+        missedIgnored = new Set();
+    }
+    const saveMissedIgnored = () => {
+        try {
+            localStorage.setItem(MISSED_IGNORED_KEY, JSON.stringify([...missedIgnored]));
+        } catch {
+            // 無法寫入時只在本次有效
+        }
+    };
+    const missedKey = (m: Missed): string => `${m.code}|${m.per}`;
+    /** 沒對應入帳的漏付（客戶列），依 已處理 分成要列出的與已略過的。 */
+    const orphanMissed = (r: AutoReconcileResult): {open: Missed[]; done: Missed[]} => {
+        const all = r.missed.filter((m) => m.orphan);
+        return {open: all.filter((m) => !missedIgnored.has(missedKey(m))), done: all.filter((m) => missedIgnored.has(missedKey(m)))};
+    };
     const saveMemory = () => {
         try {
             localStorage.setItem(MEMORY_KEY, JSON.stringify(memory));
@@ -591,6 +613,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             if (isCheque(x.kind)) cnt[CHEQUE_TAB] = (cnt[CHEQUE_TAB] ?? 0) + 1;
             if (x.missed?.length) cnt[MISSED_TAB] = (cnt[MISSED_TAB] ?? 0) + 1;
         }
+        cnt[MISSED_TAB] = (cnt[MISSED_TAB] ?? 0) + orphanMissed(r).open.length;
         const ok = cnt.OK ?? 0;
         const pending = r.results.length - ok;
         overallStatus.textContent = `入帳 ${r.results.length} 筆　已對上 ${ok}　待處理 ${pending}`
@@ -610,6 +633,30 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         renderRows();
     };
 
+    /** 「漏付」分頁的客戶列：沒有對應本次入帳、掃描全部客戶找出來的漏付；已處理的收在最後可取消。 */
+    const missedCustomerRows = (r: AutoReconcileResult, q: string): string => {
+        const {open, done} = orphanMissed(r);
+        const row = (m: Missed, handled: boolean): string => {
+            const name = r.cust[m.code].name;
+            if (q && ![m.code, name, m.per, m.amt].join(' ').includes(q)) return '';
+            return `<tr class="auto-recon-missed-row${handled ? ' is-handled' : ''}">
+              <td class="auto-recon-date">${escapeHtml(m.lastDate ?? '—')}</td>
+              <td class="col-money">${m.amt.toLocaleString()}</td>
+              <td class="auto-recon-key">${escapeHtml(m.code)}<div class="auto-recon-sub">客戶列（沒有對應本次入帳）</div></td>
+              <td>${escapeHtml(name)}</td>
+              <td><span class="reconcile-status-pill is-unpaid">漏付</span></td>
+              <td class="auto-recon-note"><div class="auto-recon-missed">⚠ ${escapeHtml(m.per)} 還沒付（明細 ${m.amt.toLocaleString()}）</div>
+                <div class="auto-recon-sub">最近一次已付：${escapeHtml(m.lastPer ?? m.paidPer)}${m.lastDate ? `，收款日 ${escapeHtml(m.lastDate)}` : ''}</div></td>
+              <td><div class="auto-recon-act">${handled
+                ? `<span class="reconcile-status-pill is-matched">已處理</span>
+                   <button type="button" class="btn btn-secondary btn-xs" data-missed-undo="${escapeHtml(missedKey(m))}">取消</button>`
+                : `<button type="button" class="btn btn-secondary btn-xs" data-missed-done="${escapeHtml(missedKey(m))}"
+                          title="我知道了／已處理：下次不再列出，下載的明細也不寫漏付紅字">我知道了／已處理</button>`}</div></td>
+            </tr>`;
+        };
+        return open.map((m) => row(m, false)).join('') + done.map((m) => row(m, true)).join('');
+    };
+
     const renderRows = () => {
         const r = lastResult;
         if (!r) return;
@@ -620,7 +667,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 && (!q || [x.key, x.who, x.amt, x.note, x.date, x.kind, x.bank].join(' ').includes(q)))
             .sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || a.idx - b.idx);
         searchClear.hidden = query === '';
-        if (shown.length === 0) {
+        const customerRows = filter === MISSED_TAB ? missedCustomerRows(r, q) : '';
+        if (shown.length === 0 && !customerRows) {
             tbody.innerHTML = `<tr><td colspan="7" class="reconcile-empty">${q ? '沒有符合搜尋的資料' : '沒有資料'}</td></tr>`;
             return;
         }
@@ -630,7 +678,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 : act.dataset.multiMemo !== undefined ? `[data-multi-memo="${act.dataset.multiMemo}"]` : null;
         const focusMemo = focusSel ? {sel: focusSel, pos: act!.selectionStart} : null;
         repainting = true;
-        tbody.innerHTML = shown.map((x) => {
+        tbody.innerHTML = customerRows + shown.map((x) => {
             // 已收過、還沒選怎麼處理：改用下面的「✓ 回填」「✓ 正確（疊加）」
             const paidOpen = !!x.paidDup && !x.paidChoice;
             const canOk = x.custNames.length === 1 && !x.confirmed && !paidOpen;
@@ -873,6 +921,14 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     tbody.addEventListener('click', (e) => {
         const el = e.target as HTMLElement;
+        const missedBtn = el.closest<HTMLButtonElement>('[data-missed-done],[data-missed-undo]');
+        if (missedBtn) {
+            if (missedBtn.dataset.missedDone) missedIgnored.add(missedBtn.dataset.missedDone);
+            else missedIgnored.delete(missedBtn.dataset.missedUndo!);
+            saveMissedIgnored();
+            render();
+            return;
+        }
         const okBtn = el.closest<HTMLButtonElement>('[data-ok]');
         if (okBtn) {
             const entry = byIdx(okBtn.dataset.ok);
@@ -1207,7 +1263,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         const wbs: Record<number, ExcelJS.Workbook> = {};
         for (const x of ss) wbs[x.month!] = await loadWorkbook(x.buf);
         const latestMonth = ss[ss.length - 1].month!;
-        writeBack(wbs, latestMonth, rec);
+        // 使用者按「已處理」的客戶漏付不寫進明細
+        writeBack(wbs, latestMonth, {...rec, missed: rec.missed.filter((m) => !(m.orphan && missedIgnored.has(missedKey(m))))});
         const out: {month: number; filename: string; data: ArrayBuffer}[] = [];
         for (const x of [...ss].reverse()) {
             // ExcelJS 會丟掉外部活頁簿連結，從原檔搬回去，否則 Excel 打不開

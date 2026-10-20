@@ -5745,3 +5745,7 @@ td.cell-price-down {
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
 }
+
+.auto-recon-missed-row.is-handled {
+    opacity: 0.55;
+}

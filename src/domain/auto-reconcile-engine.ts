@@ -75,6 +75,8 @@ export interface PeriodCell {
     paid?: number;
     /** 明細上原本已填的收款日（M/D）。 */
     paidDate?: string;
+    /** 明細上原本的備註欄文字（收款日右邊那格；漏付掃描用來略過已標「已補付」的期別）。 */
+    memo?: string;
 }
 
 export interface StmtCustomer {
@@ -167,6 +169,11 @@ export interface Missed {
     amt: number;
     /** 比漏付期晚、本次已付的期別（取最早那一期）。 */
     paidPer: string;
+    /** 沒有對應本次入帳（是掃描全部客戶找出來的）：漏付分頁列成客戶列。 */
+    orphan?: boolean;
+    /** 最近一次已付的期別與收款日（客戶列顯示用）。 */
+    lastPer?: string;
+    lastDate?: string;
 }
 
 /** 一期少付（實收 < 明細）：要帶到下一期提醒補收。 */
@@ -465,9 +472,12 @@ export function readStmt(wb: ExcelJS.Workbook, month: number): StmtData {
                 out[key] = out[key] || {name, p: {}};
                 const paid = cellVal(row.getCell(b.paid));
                 const paidDate = mdOf(cellVal(row.getCell(b.date)));
+                const memoV = cellVal(row.getCell(b.date + 1));
+                const memo = typeof memoV === 'string' ? memoV.trim() : '';
                 out[key].p[`${month}${half}`] = {
                     sheet: ws.name, row: r, col: b.name, amt: Math.round(amt), amtCol: b.amt, paidCol: b.paid, dateCol: b.date,
                     ...(typeof paid === 'number' && paid > 0 ? {paid: Math.round(paid), ...(paidDate ? {paidDate} : {})} : {}),
+                    ...(memo ? {memo} : {}),
                 };
             }
         }
@@ -652,11 +662,16 @@ function calcShortfalls(results: ReadonlyArray<ReconcileEntry>, cust: Record<str
     return out;
 }
 
+/** 備註已說明處理過（已補付／已處理）的期別，不算漏付。 */
+const HANDLED_MEMO = /已補付|已處理/;
+
 /**
- * 算漏付：本次確認（OK）的入帳回填到期別 P 後，同客戶比 P 早、明細 > 0、沒有實收
- * （明細原本沒有、本次也沒被任何入帳填到）的期別就是漏付。
+ * 算漏付：同客戶某期 P 有實收（明細原本有、或本次確認回填），比 P 早的某期明細 > 0、
+ * 沒有實收（明細原本沒有、本次也沒被任何入帳填到）就是漏付。
+ * 觸發 P 有本次入帳的，漏付掛在那些入帳列；只有明細原本就有實收的，標 orphan 列成客戶列。
  * 排除：現付、單次付款、現金存款、支票未指定店家（不回填期別）；被略過的下期（不在 cust）；
- * 已知少付帶到的下一期（另有紅字提醒）；還在等使用者處理的金額不符預設回填期別。
+ * 已知少付帶到的下一期（另有紅字提醒）；還在等使用者處理的金額不符預設回填期別；
+ * 備註已標已補付／使用者原因備註說明已處理的期別。
  */
 function calcMissed(
     results: ReadonlyArray<ReconcileEntry>, cust: Record<string, StmtCustomer>,
@@ -675,22 +690,38 @@ function calcMissed(
         if (!paidBy.has(code)) paidBy.set(code, new Map());
         paidBy.get(code)!.set(per, rs);
     }
+    const handledNote = new Set<string>();
+    for (const r of results) if (r.userNote && HANDLED_MEMO.test(r.userNote)) for (const [code, run] of r.alloc) for (const per of run) handledNote.add(code + '|' + per);
     const out: Missed[] = [];
-    for (const [code, byPer] of paidBy) {
+    for (const [code, c] of Object.entries(cust)) {
+        const byPer = paidBy.get(code) ?? new Map<string, ReconcileEntry[]>();
+        /** 有實收的期別（由舊到新）：本次回填的，加上明細原本就有的。 */
+        const paidPers = periods.filter((per) => byPer.has(per) || !!c.p[per]?.paid);
+        if (!paidPers.length) continue;
         const pending = results.filter((r) => r.status === '金額不符' && r.alloc[0]?.[0] === code);
         for (const q of periods) {
-            const info = cust[code].p[q];
+            const info = c.p[q];
             if (!info || info.amt <= 0 || info.paid || fills.has(code + '|' + q)) continue;
+            if (info.memo && HANDLED_MEMO.test(info.memo)) continue;
+            if (handledNote.has(code + '|' + q)) continue;
             if (shortfalls.some((sf) => sf.code === code && sf.nextPer === q)) continue;
             if (pending.some((r) => r.notePeriods?.includes(q))) continue;
-            const later = [...byPer.keys()].filter((per) => order(per) > order(q)).sort((a, b) => order(a) - order(b));
+            const later = paidPers.filter((per) => order(per) > order(q));
             if (!later.length) continue;
             const m: Missed = {code, per: q, amt: info.amt, paidPer: later[0]};
-            out.push(m);
-            for (const per of later) for (const r of byPer.get(per)!) {
-                r.missed = r.missed ?? [];
-                if (!r.missed.some((x) => x.code === code && x.per === q)) r.missed.push(m);
+            const viaEntries = later.filter((per) => byPer.has(per));
+            if (viaEntries.length) {
+                for (const per of viaEntries) for (const r of byPer.get(per)!) {
+                    r.missed = r.missed ?? [];
+                    if (!r.missed.some((x) => x.code === code && x.per === q)) r.missed.push(m);
+                }
+            } else {
+                const last = later[later.length - 1];
+                m.orphan = true;
+                m.lastPer = last;
+                if (c.p[last].paidDate) m.lastDate = c.p[last].paidDate;
             }
+            out.push(m);
         }
     }
     return out;
