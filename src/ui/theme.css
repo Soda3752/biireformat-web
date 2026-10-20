@@ -5732,3 +5732,11 @@ td.cell-price-down {
 .auto-recon-table .reconcile-status-pill {
     white-space: nowrap;
 }
+
+.auto-recon-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}

@@ -13,6 +13,9 @@
 
 import ExcelJS from 'exceljs';
 import {saveAs} from 'file-saver';
+import {
+    downloadSequentially, ensureWritable, isHandleGone, loadFolderHandle, pickFolder, saveFolderHandle, supportsFolderSave, writeFiles,
+} from '../infra/folder-save';
 
 import type {
     AcctRow,
@@ -1101,28 +1104,147 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     // ---------- 下載
 
+    const FOLDER_KEY = 'recon-v2-save-dir';
+    let saveDir: FileSystemDirectoryHandle | null = null;
+    void loadFolderHandle(FOLDER_KEY).then((h) => {
+        if (!h) return;
+        saveDir = h;
+        renderDownloads();
+    });
+
+    const stmtFilename = (month: number) => `${month}月_已自動對帳.xlsx`;
+
     const renderDownloads = () => {
         downloadsEl.innerHTML = '';
         if (!lastResult) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'btn btn-primary btn-lg';
-            btn.textContent = '下載對帳檔';
+            btn.textContent = '全部存檔';
             btn.disabled = true;
             downloadsEl.appendChild(btn);
             return;
         }
         const ss = lastStmts;
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.className = 'btn btn-primary btn-lg';
+        allBtn.dataset.role = 'save-all';
+        allBtn.textContent = `全部存檔（${ss.length} 份）`;
+        allBtn.addEventListener('click', () => void saveAllStmts(allBtn));
+        downloadsEl.appendChild(allBtn);
+
+        if (supportsFolderSave()) {
+            const folder = document.createElement('span');
+            folder.className = 'auto-recon-folder';
+            folder.dataset.role = 'save-folder';
+            folder.append(saveDir ? `存到「${saveDir.name}」` : '尚未選資料夾（按下後會請你選）');
+            if (saveDir) {
+                const change = document.createElement('a');
+                change.href = '#';
+                change.textContent = '換資料夾';
+                change.dataset.role = 'change-folder';
+                change.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    void changeSaveFolder();
+                });
+                folder.append(' ', change);
+            }
+            downloadsEl.appendChild(folder);
+        }
+
         [...ss].reverse().forEach((x) => {
-            const isLatest = x === ss[ss.length - 1];
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = isLatest ? 'btn btn-primary btn-lg' : 'btn btn-secondary';
-            btn.textContent = `下載 ${x.month}月${isLatest ? '對帳檔' : '補收款檔'}`;
+            btn.className = 'btn btn-secondary';
+            btn.textContent = `下載 ${x.month}月檔`;
             btn.addEventListener('click', () => void downloadStmt(x, btn));
             downloadsEl.appendChild(btn);
         });
     };
+
+    const changeSaveFolder = async () => {
+        try {
+            const h = await pickFolder();
+            if (!h) return;
+            saveDir = h;
+            await saveFolderHandle(FOLDER_KEY, h);
+            renderDownloads();
+        } catch (err) {
+            showToast({variant: 'error', title: '選資料夾失敗', message: err instanceof Error ? err.message : String(err)});
+        }
+    };
+
+    /** 產生每個月的檔（回填一次，各月共用同一批活頁簿） */
+    const buildStmtFiles = async (): Promise<{month: number; filename: string; data: ArrayBuffer}[]> => {
+        const rec = lastResult;
+        if (!rec) return [];
+        const ss = lastStmts;
+        const wbs: Record<number, ExcelJS.Workbook> = {};
+        for (const x of ss) wbs[x.month!] = await loadWorkbook(x.buf);
+        const latestMonth = ss[ss.length - 1].month!;
+        writeBack(wbs, latestMonth, rec);
+        const out: {month: number; filename: string; data: ArrayBuffer}[] = [];
+        for (const x of [...ss].reverse()) {
+            // ExcelJS 會丟掉外部活頁簿連結，從原檔搬回去，否則 Excel 打不開
+            const data = await restoreExternalLinks(await wbs[x.month!].xlsx.writeBuffer() as ArrayBuffer, x.buf);
+            out.push({month: x.month!, filename: stmtFilename(x.month!), data});
+        }
+        return out;
+    };
+
+    const saveAllStmts = (btn: HTMLButtonElement) => withBusy(btn, async () => {
+        const files = await buildStmtFiles();
+        if (!files.length) return;
+
+        if (!supportsFolderSave()) {
+            await downloadSequentially(files, XLSX_MIME, saveAs);
+            showToast({
+                variant: 'success',
+                title: `已觸發 ${files.length} 份下載`,
+                message: '瀏覽器可能會問是否允許下載多個檔案，請按允許；舊檔需自行刪除',
+            });
+            return;
+        }
+
+        // 權限仍在就直接寫；被拒絕或 handle 失效就重新選資料夾
+        let dir = saveDir;
+        if (dir && !(await ensureWritable(dir))) dir = null;
+        if (!dir) {
+            dir = await pickFolder();
+            if (!dir) return;
+            if (!(await ensureWritable(dir))) {
+                showToast({variant: 'error', title: '沒有寫入權限', message: '請在選資料夾時允許「編輯檔案」'});
+                return;
+            }
+            saveDir = dir;
+            await saveFolderHandle(FOLDER_KEY, dir);
+        }
+
+        let failed = await writeFiles(dir, files);
+        // 資料夾被搬走/刪除等 handle 失效：重選一次再寫
+        if (failed.length === files.length && failed.every((f) => isHandleGone(f.error))) {
+            const again = await pickFolder();
+            if (!again || !(await ensureWritable(again))) return;
+            dir = again;
+            saveDir = again;
+            await saveFolderHandle(FOLDER_KEY, again);
+            failed = await writeFiles(dir, files);
+        }
+        renderDownloads();
+
+        if (failed.length) {
+            const names = failed.map((f) => f.filename).join('、');
+            const months = failed.map((f) => `${f.filename.split('月')[0]}月`).join('、');
+            showToast({
+                variant: 'error',
+                title: `有 ${failed.length} 份沒存成功：${names}`,
+                message: `請先關閉 Excel 裡的 ${months} 檔再按一次`,
+            });
+            return;
+        }
+        showToast({variant: 'success', title: '全部存檔完成', message: `已存 ${files.length} 份到『${dir.name}』，覆蓋舊檔`});
+    });
 
     const saveWorkbook = async (wb: ExcelJS.Workbook, filename: string) => {
         const buf = await wb.xlsx.writeBuffer();
@@ -1146,19 +1268,10 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     };
 
     const downloadStmt = (target: StmtFileEntry, btn: HTMLButtonElement) => withBusy(btn, async () => {
-        const rec = lastResult;
-        if (!rec) return;
-        const ss = lastStmts;
-        const wbs: Record<number, ExcelJS.Workbook> = {};
-        for (const x of ss) wbs[x.month!] = await loadWorkbook(x.buf);
-        const latestMonth = ss[ss.length - 1].month!;
-        writeBack(wbs, latestMonth, rec);
-        const isLatest = target.month === latestMonth;
-        const filename = `${target.month}月_${isLatest ? '已自動對帳' : '補收款'}.xlsx`;
-        // ExcelJS 會丟掉外部活頁簿連結，從原檔搬回去，否則 Excel 打不開
-        const buf = await restoreExternalLinks(await wbs[target.month!].xlsx.writeBuffer() as ArrayBuffer, target.buf);
-        saveAs(new Blob([buf], {type: XLSX_MIME}), filename);
-        showToast({variant: 'success', title: '已輸出', message: filename});
+        const f = (await buildStmtFiles()).find((x) => x.month === target.month);
+        if (!f) return;
+        saveAs(new Blob([f.data], {type: XLSX_MIME}), f.filename);
+        showToast({variant: 'success', title: '已輸出', message: f.filename});
     });
 
     downloadAcctBtn.addEventListener('click', () => void withBusy(downloadAcctBtn, async () => {
