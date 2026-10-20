@@ -8,7 +8,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import ExcelJS from 'exceljs';
 
 import {addReasonChip, defaultReasonChips, normalizeReasonChips, removeReasonChip} from '../src/domain/auto-collect/reason-chips';
-import {expandAll, normalizeUiPrefs} from '../src/domain/auto-collect/ui-prefs';
+import {defaultUiPrefs, expandAll} from '../src/domain/auto-collect/ui-prefs';
 import {closingFor, DEFAULT_TEMPLATES, defaultTemplates, normalizeTemplates} from '../src/domain/auto-collect/templates';
 
 import {
@@ -1046,28 +1046,14 @@ describe.skipIf(![7, 8, 9, 10].every((m) => existsSync(DL(m))))('實際對帳檔
     });
 });
 
-describe('畫面偏好（各組收合）', () => {
-    test('沒有或壞掉的資料用預設：全部收起', () => {
-        for (const raw of [undefined, null, 'x', 5, [], {}]) {
-            const p = normalizeUiPrefs(raw);
-            expect(p.table).toEqual({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
-            expect(p.messages).toEqual(p.table);
-        }
-    });
-
-    test('只採用布林值，其他欄位退回預設；總表與訊息區各自獨立', () => {
-        const p = normalizeUiPrefs({table: {three: true, one: 'no', settled: false}, messages: {two: true}, extra: 1});
-        expect(p.table).toEqual({four: true, three: true, two: true, one_eom: true, one: true, settled: false});
-        expect(p.messages).toEqual({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
-        // 使用者自己展開過的（false）要記住
-        expect(normalizeUiPrefs({table: {two: false}}).table).toMatchObject({two: false, three: true});
-        // 新存過 four 就以它為準，不被舊的 three 蓋掉
-        expect(normalizeUiPrefs({table: {three: true, four: false}}).table).toMatchObject({three: true, four: false});
-    });
-
-    test('存進再讀回來一致', () => {
-        const p = normalizeUiPrefs({table: {three: true}, messages: {one: false}});
-        expect(normalizeUiPrefs(JSON.parse(JSON.stringify(p)))).toEqual(p);
+describe('畫面狀態（各組收合）', () => {
+    test('預設全部收起，總表與訊息區各自獨立、每次回傳新物件', () => {
+        const p = defaultUiPrefs();
+        expect(p.table).toEqual({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
+        expect(p.messages).toEqual(p.table);
+        expect(p.table).not.toBe(p.messages);
+        p.table.two = false;
+        expect(defaultUiPrefs().table.two).toBe(true);
     });
 });
 
@@ -1169,7 +1155,7 @@ describe('催款語氣與訊息範本', () => {
 
 describe('篩選時全展開', () => {
     test('expandAll 全部展開且不改原偏好', () => {
-        const p = normalizeUiPrefs({table: {two: true}});
+        const p = defaultUiPrefs();
         const e = expandAll(p);
         expect(Object.values(e.table).every((v) => v === false)).toBe(true);
         expect(Object.values(e.messages).every((v) => v === false)).toBe(true);

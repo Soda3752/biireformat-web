@@ -1,5 +1,6 @@
 /**
- * 自動催款分頁的畫面偏好（各組收合／展開），和欠款資料分開存。
+ * 自動催款分頁的畫面狀態（各組收合／展開）。只存在記憶體，不寫入 localStorage：
+ * 每次載入（含重新整理、重新匯入）一律全部收起。
  * 總表與訊息區的開合各自獨立；已結清只出現在總表那一側。
  */
 
@@ -16,31 +17,10 @@ export interface UiPrefs {
 
 export const SECTION_KEYS: readonly SectionKey[] = ['four', 'three', 'two', 'one_eom', 'one', 'settled'];
 
-/** 預設全部收起；使用者自己展開過的偏好存下後優先。 */
+/** 全部收起。 */
 export const defaultCollapsed = (): Collapsed => ({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
 
 export const defaultUiPrefs = (): UiPrefs => ({version: 1, table: defaultCollapsed(), messages: defaultCollapsed()});
-
-const normalizeSide = (raw: unknown): Collapsed => {
-    const out = defaultCollapsed();
-    if (raw && typeof raw === 'object') {
-        const r = raw as Record<string, unknown>;
-        for (const k of SECTION_KEYS) {
-            const v = r[k];
-            if (typeof v === 'boolean') out[k] = v;
-        }
-        // 舊的「3 期以上」偏好：新的「4 期以上」沿用它（新組沒存過時）
-        if (typeof r.four !== 'boolean' && typeof r.three === 'boolean') out.four = r.three;
-    }
-    return out;
-};
-
-/** 壞掉、缺欄位或型別不對的部分一律用預設。 */
-export function normalizeUiPrefs(raw: unknown): UiPrefs {
-    if (!raw || typeof raw !== 'object') return defaultUiPrefs();
-    const r = raw as Record<string, unknown>;
-    return {version: 1, table: normalizeSide(r.table), messages: normalizeSide(r.messages)};
-}
 
 /** 全部展開的暫時版本（點「需確認」篩選時用），不改原物件。 */
 export const expandAll = (p: UiPrefs): UiPrefs => ({

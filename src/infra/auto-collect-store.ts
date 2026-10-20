@@ -2,14 +2,12 @@
  * 「自動催款」記住的各月明細，存在這台電腦的瀏覽器 localStorage（每月一份）。
  */
 
-import {defaultUiPrefs, normalizeUiPrefs, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
 import {defaultReasonChips, normalizeReasonChips} from '@/domain/auto-collect/reason-chips';
 import {defaultTemplates, type MessageTemplates, normalizeTemplates} from '@/domain/auto-collect/templates';
 import {emptyHistory, emptyMarks, extractLegacyRules, type History, type Marks, migrateLegacyRules, normalizeMarks} from '@/domain/auto-collect/ledger';
 
 const KEY = 'bii.auto-collect.history';
 const MARKS_KEY = 'bii.auto-collect.marks';
-const UI_KEY = 'bii.auto-collect.ui';
 const TEMPLATES_KEY = 'bii.auto-collect.templates';
 const REASON_CHIPS_KEY = 'bii.auto-collect.reason-chips';
 
@@ -69,24 +67,6 @@ export function saveMarks(m: Marks): void {
 
 export function clearMarks(): void {
     localStorage.removeItem(MARKS_KEY);
-}
-
-/** 畫面偏好（各組收合）：沒有、壞掉或存取被擋時回預設，不會丟錯。 */
-export function loadUiPrefs(): UiPrefs {
-    try {
-        const raw = localStorage.getItem(UI_KEY);
-        return raw ? normalizeUiPrefs(JSON.parse(raw)) : defaultUiPrefs();
-    } catch {
-        return defaultUiPrefs();
-    }
-}
-
-export function saveUiPrefs(p: UiPrefs): void {
-    try {
-        localStorage.setItem(UI_KEY, JSON.stringify(p));
-    } catch (err) {
-        console.warn('[auto-collect-store] save ui prefs failed', err);
-    }
 }
 
 /** 訊息範本（設定，不是資料記錄）：沒有、壞掉或存取被擋時回預設。清除全部記錄時不會動它。 */

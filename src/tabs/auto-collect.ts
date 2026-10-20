@@ -46,10 +46,10 @@ import {
     updateManualDebt,
     validateManualDebt,
 } from '@/domain/auto-collect/ledger';
-import {expandAll, type SectionKey, type Side, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
+import {defaultUiPrefs, expandAll, type SectionKey, type Side, type UiPrefs} from '@/domain/auto-collect/ui-prefs';
 import {addReasonChip, defaultReasonChips, removeReasonChip} from '@/domain/auto-collect/reason-chips';
 import {defaultTemplates, DEFAULT_TEMPLATES, type MessageTemplates, type TemplateKey} from '@/domain/auto-collect/templates';
-import {clearHistory, clearMarks, loadHistory, loadMarks, loadReasonChips, loadTemplates, loadUiPrefs, resetTemplates, saveHistory, saveMarks, saveReasonChips, saveTemplates, saveUiPrefs} from '@/infra/auto-collect-store';
+import {clearHistory, clearMarks, loadHistory, loadMarks, loadReasonChips, loadTemplates, resetTemplates, saveHistory, saveMarks, saveReasonChips, saveTemplates} from '@/infra/auto-collect-store';
 import {buildMessagesText, buildSummaryXlsx} from '@/writers/auto-collect-writer';
 
 const esc = (v: unknown): string =>
@@ -152,9 +152,9 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
     let result: CollectResult = compute(history, marks, {}, new Date(), templates);
     const copied = new Set<string>();
     const editing = new Map<string, string>(); // 正在編輯訊息的客人 → 文字框目前內容（重畫清單時保留）
-    let ui: UiPrefs = loadUiPrefs(); // 各組收合狀態（獨立的畫面偏好）
+    let ui: UiPrefs = defaultUiPrefs(); // 各組收合狀態：只在記憶體，每次載入一律全部收起（不記住）
     let onlyNotes = false; // 點「需要先確認」格子 → 只顯示有注意事項的客人
-    let uiBeforeFilter: UiPrefs | null = null; // 篩選期間暫時全展開，取消時還原成這份（不寫進偏好）
+    let uiBeforeFilter: UiPrefs | null = null; // 篩選期間暫時全展開，取消時還原成這份
 
     const setOnlyNotes = (on: boolean) => {
         if (on === onlyNotes) return;
@@ -166,6 +166,12 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             ui = uiBeforeFilter;
             uiBeforeFilter = null;
         }
+    };
+
+    /** 重新匯入後重畫：開合回到全部收起（篩選中則取消篩選時才回到收起）。 */
+    const resetFolds = () => {
+        if (onlyNotes) uiBeforeFilter = defaultUiPrefs();
+        else ui = defaultUiPrefs();
     };
 
     const persist = (h: History): boolean => {
@@ -246,6 +252,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
                 }
                 if (res.history !== history && !persist(res.history)) return;
                 renderReport(res.report);
+                resetFolds();
                 render();
                 return;
             }
@@ -514,7 +521,6 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
 
     const setFolded = (side: Side, key: SectionKey, folded: boolean) => {
         ui = {...ui, [side]: {...ui[side], [key]: folded}};
-        if (!onlyNotes) saveUiPrefs(ui); // 篩選中的開合只是暫時的
         if (key === 'settled') renderSettled();
         else renderList();
     };
