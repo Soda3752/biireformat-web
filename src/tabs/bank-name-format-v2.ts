@@ -14,7 +14,7 @@
 import ExcelJS from 'exceljs';
 import {saveAs} from 'file-saver';
 import {
-    downloadSequentially, ensureWritable, isHandleGone, loadFolderHandle, pickFolder, saveFolderHandle, supportsFolderSave, writeFiles,
+    describeWriteError, downloadSequentially, ensureWritable, isHandleGone, loadFolderHandle, pickFolder, saveFolderHandle, supportsFolderSave, writeFiles,
 } from '../infra/folder-save';
 
 import type {
@@ -1383,10 +1383,11 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     };
 
     const saveAllStmts = (btn: HTMLButtonElement) => withBusy(btn, async () => {
-        const files = await buildStmtFiles();
-        if (!files.length) return;
+        if (!lastResult) return;
 
         if (!supportsFolderSave()) {
+            const files = await buildStmtFiles();
+            if (!files.length) return;
             await downloadSequentially(files, XLSX_MIME, saveAs);
             showToast({
                 variant: 'success',
@@ -1396,11 +1397,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             return;
         }
 
-        // 權限仍在就直接寫；被拒絕或 handle 失效就重新選資料夾
+        // 權限／選資料夾必須在產檔（耗時）之前、緊接使用者點擊時處理，否則 Chrome 的使用者手勢過期，
+        // 重開頁面後還原的 handle 會要不到權限，造成「第一次沒存、第二次才存」
         let dir = saveDir;
         if (dir && !(await ensureWritable(dir))) dir = null;
         if (!dir) {
-            dir = await pickFolder();
+            try {
+                dir = await pickFolder();
+            } catch (err) {
+                showToast({variant: 'error', title: '選資料夾失敗', message: describeWriteError(err)});
+                return;
+            }
             if (!dir) return;
             if (!(await ensureWritable(dir))) {
                 showToast({variant: 'error', title: '沒有寫入權限', message: '請在選資料夾時允許「編輯檔案」'});
@@ -1410,29 +1417,27 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             await saveFolderHandle(FOLDER_KEY, dir);
         }
 
-        let failed = await writeFiles(dir, files);
-        // 資料夾被搬走/刪除等 handle 失效：重選一次再寫
-        if (failed.length === files.length && failed.every((f) => isHandleGone(f.error))) {
-            const again = await pickFolder();
-            if (!again || !(await ensureWritable(again))) return;
-            dir = again;
-            saveDir = again;
-            await saveFolderHandle(FOLDER_KEY, again);
-            failed = await writeFiles(dir, files);
-        }
+        const files = await buildStmtFiles();
+        if (!files.length) return;
+
+        const failed = await writeFiles(dir, files);
         renderDownloads();
 
         if (failed.length) {
-            const names = failed.map((f) => f.filename).join('、');
-            const months = failed.map((f) => `${f.filename.split('月')[0]}月`).join('、');
+            const lines = failed.map((f) => `${f.filename.split('月')[0]}月檔：${describeWriteError(f.error)}`);
+            // 資料夾失效時，下次按會重新選（此時 saveDir 清掉，避免一直失敗）
+            if (failed.every((f) => isHandleGone(f.error) && (f.error as DOMException).name === 'NotFoundError')) {
+                saveDir = null;
+                renderDownloads();
+            }
             showToast({
                 variant: 'error',
-                title: `有 ${failed.length} 份沒存成功：${names}`,
-                message: `請先關閉 Excel 裡的 ${months} 檔再按一次`,
+                title: `有 ${failed.length} 份沒存成功（共 ${files.length} 份），尚未完成存檔`,
+                message: lines.join('；'),
             });
             return;
         }
-        showToast({variant: 'success', title: '全部存檔完成', message: `已存 ${files.length} 份到『${dir.name}』，覆蓋舊檔`});
+        showToast({variant: 'success', title: '全部存檔完成', message: `已存 ${files.length} 份到『${dir.name}』並確認檔案大小，覆蓋舊檔`});
     });
 
     const saveWorkbook = async (wb: ExcelJS.Workbook, filename: string) => {

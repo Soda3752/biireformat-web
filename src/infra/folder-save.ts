@@ -81,7 +81,7 @@ export const pickFolder = async (): Promise<FileSystemDirectoryHandle | null> =>
     }
 };
 
-/** 逐檔寫入（同名覆蓋）；回傳失敗清單，不因單檔失敗中斷其他檔 */
+/** 逐檔寫入（同名覆蓋）；close() 成功後再讀回大小比對，一致才算成功。回傳失敗清單，不因單檔失敗中斷其他檔 */
 export const writeFiles = async (
     dir: FileSystemDirectoryHandle,
     files: SaveFile[],
@@ -93,14 +93,31 @@ export const writeFiles = async (
             const w = await fh.createWritable();
             try {
                 await w.write(f.data);
-            } finally {
                 await w.close();
+            } catch (err) {
+                await w.abort().catch(() => undefined);
+                throw err;
+            }
+            const written = await fh.getFile();
+            if (written.size !== f.data.byteLength) {
+                throw new Error(`寫入後檔案大小不符（預期 ${f.data.byteLength}，實際 ${written.size}）`);
             }
         } catch (error) {
             failed.push({filename: f.filename, error});
         }
     }
     return failed;
+};
+
+/** 把寫入錯誤翻成白話原因 */
+export const describeWriteError = (err: unknown): string => {
+    const name = err instanceof DOMException ? err.name : '';
+    if (name === 'NoModificationAllowedError' || name === 'InvalidStateError' || name === 'NotReadableError') {
+        return '檔案可能被 Excel 開著，請關閉後再按';
+    }
+    if (name === 'NotAllowedError' || name === 'SecurityError') return '沒有寫入權限，請在 Chrome 上方允許後再按';
+    if (name === 'NotFoundError') return '找不到資料夾，可能被搬走或刪除';
+    return err instanceof Error ? err.message : String(err);
 };
 
 /** 依序觸發瀏覽器下載（不支援資料夾存檔時用），間隔避免被擋 */
