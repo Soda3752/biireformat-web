@@ -6,9 +6,9 @@
  * - 差額 ≤ 15 元視為銀行手續費，算付清。
  * - 多付的不拿去抵其他期，只在備註提醒。
  * - 同客人（依代號）跨好幾個月、好幾期的欠款加總；店名用最新月份的。
- * - 依欠幾期分組：3 期以上／2 期／1 期（月底前要催）／1 期（只顯示、不催、不算進總額）。月結客人同月上下期合算 1 期；手動加的欠款不算期數。
+ * - 依欠幾期分組：4 期以上／3 期／2 期／月結：本月該付／1 期（只顯示、不催、不算進總額）。月結客人同月上下期合算 1 期；手動加的欠款不算期數。
  * - 月結客人「這個月還沒結完」（該月下期被略過，或就是今天所在月份且下期尚未記住）的期別＝未到期：不算欠款、不算期數、不進訊息與下載檔，只在畫面標示。
- * - 設了「月底前要催」的月結客人，只要欠上個月（含）以前任何一期，即使只欠 1 期也列入要催的名單。
+ * - 月結客人只欠「上個月」（今天所在月份的前一個月）1 期、沒有更早的欠款＝「月結：本月該付」，列入要催的名單；欠更早的月份就照期數分組。
  * - 還沒結帳的期別（整期沒有人付款，或下期和上個月下期幾乎一樣＝複製來的佔位）略過，不算欠款。
  */
 
@@ -94,8 +94,6 @@ export interface Marks {
     manual_debts: ManualDebt[];
     /** 手動設定的月結：客人鍵 → true（設為月結）／false（取消月結，含取消自動認到的）；沒有的照自動判斷。 */
     monthly: Record<string, boolean>;
-    /** 「月底前要催」（只對月結客人有效）：客人鍵 → true；沒設就沒有該鍵。 */
-    month_end: Record<string, boolean>;
     /** 手動改過的催款訊息：客人鍵 → 她改的整段文字，加上儲存當時自動產生的版本（之後比對欠款是否變動）。 */
     edits: Record<string, MessageEdit>;
 }
@@ -122,14 +120,14 @@ export interface SettledGroup {
     marked_at: string;
 }
 
-/** 欠款期數分組：4 期以上／3 期／2 期／1 期月底前要催／1 期只顯示（含 0 期＝只有手動欠款）。 */
-export type DebtGroup = 'four' | 'three' | 'two' | 'one_eom' | 'one';
+/** 欠款期數分組：4 期以上／3 期／2 期／月結本月該付／1 期只顯示（含 0 期＝只有手動欠款）。 */
+export type DebtGroup = 'four' | 'three' | 'two' | 'monthly_due' | 'one';
 
 export const GROUPS: ReadonlyArray<{key: DebtGroup; label: string}> = [
     {key: 'four', label: '欠 4 期以上'},
     {key: 'three', label: '欠 3 期'},
     {key: 'two', label: '欠 2 期'},
-    {key: 'one_eom', label: '欠 1 期（月底前要催）'},
+    {key: 'monthly_due', label: '月結：本月該付'},
     {key: 'one', label: '欠 1 期（只顯示，不催款）'},
 ];
 
@@ -155,8 +153,6 @@ export interface Debtor {
     /** 月結客人還沒到期的期別（這個月還沒結完）：不算欠款、不算期數。 */
     pending: DebtItem[];
     pending_total: number;
-    /** 「月底前要催」是否生效（有設定且是月結客人）。 */
-    month_end: boolean;
 }
 
 /** 略過的期別：整期沒有人付款（no_payment），或下期和上個月下期幾乎一樣（same_as_prev，ref＝比對的月份鍵）。 */
@@ -183,7 +179,7 @@ export interface CollectResult {
     months: MonthInfo[];
     /** customers 的欠款合計（含欠 1 期的）。畫面與下載用的是下面的 chase_total。 */
     grand_total: number;
-    /** 要催款的客人（欠 2 期以上，或 1 期但月底前要催）與合計；其餘欠 1 期的在 light，只顯示、不算進總額。 */
+    /** 要催款的客人（欠 2 期以上，或月結本月該付）與合計；其餘欠 1 期的在 light，只顯示、不算進總額。 */
     chase: Debtor[];
     chase_total: number;
     light: Debtor[];
@@ -236,7 +232,7 @@ export type Choices = Record<string, number | typeof KEEP>;
 
 export const emptyHistory = (): History => ({version: 1, months: {}});
 
-export const emptyMarks = (): Marks => ({version: 1, settled: [], manual_debts: [], monthly: {}, month_end: {}, edits: {}});
+export const emptyMarks = (): Marks => ({version: 1, settled: [], manual_debts: [], monthly: {}, edits: {}});
 
 /** 讀進來的標記（可能是舊資料、缺欄位）整理成完整的 Marks；讀不懂的部分視為空。舊的 paid_if_received 不在這裡處理。 */
 export function normalizeMarks(raw: unknown): Marks {
@@ -262,16 +258,13 @@ export function normalizeMarks(raw: unknown): Marks {
     const monthly: Record<string, boolean> = {};
     const mraw = r.monthly && typeof r.monthly === 'object' && !Array.isArray(r.monthly) ? r.monthly as Record<string, unknown> : {};
     for (const [k, v] of Object.entries(mraw)) if (typeof v === 'boolean') monthly[k] = v;
-    const month_end: Record<string, boolean> = {};
-    const eraw = r.month_end && typeof r.month_end === 'object' && !Array.isArray(r.month_end) ? r.month_end as Record<string, unknown> : {};
-    for (const [k, v] of Object.entries(eraw)) if (v === true) month_end[k] = true;
     const edits: Record<string, MessageEdit> = {};
     const draw = r.edits && typeof r.edits === 'object' && !Array.isArray(r.edits) ? r.edits as Record<string, unknown> : {};
     for (const [k, v] of Object.entries(draw)) {
         const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
         if (typeof o.text === 'string' && o.text.trim()) edits[k] = {text: o.text, base: str(o.base), edited_at: str(o.edited_at)};
     }
-    return {version: 1, settled, manual_debts, monthly, month_end, edits};
+    return {version: 1, settled, manual_debts, monthly, edits};
 }
 
 /** 從讀進來的舊資料取出已拿掉的「有收到款就算付清」設定（沒有就回空）。 */
@@ -325,15 +318,6 @@ export function setMonthly(marks: Marks, c: Pick<Debtor, 'code' | 'name' | 'mont
     if (monthly === c.monthly_auto) delete next[key];
     else next[key] = monthly;
     return {...marks, monthly: next};
-}
-
-/** 設定「月底前要催」（只對月結客人有效；關掉就移除設定）。 */
-export function setMonthEnd(marks: Marks, c: Pick<Debtor, 'code' | 'name'>, on: boolean): Marks {
-    const next = {...(marks.month_end ?? {})};
-    const key = customerKey(c);
-    if (on) next[key] = true;
-    else delete next[key];
-    return {...marks, month_end: next};
 }
 
 const AMOUNT_RE = /(\d{1,3}(?:,\d{3})+|\d+)\s*元/;
@@ -646,9 +630,9 @@ export function unsettledPeriods(history: History): Map<string, SkippedPeriod> {
     return out;
 }
 
-const GROUP_RANK: Record<DebtGroup, number> = {four: 0, three: 1, two: 2, one_eom: 3, one: 4};
-const groupOf = (periods: number, monthEndDue: boolean): DebtGroup =>
-    (periods >= 4 ? 'four' : periods === 3 ? 'three' : periods === 2 ? 'two' : monthEndDue ? 'one_eom' : 'one');
+const GROUP_RANK: Record<DebtGroup, number> = {four: 0, three: 1, two: 2, monthly_due: 3, one: 4};
+const groupOf = (periods: number, monthlyDue: boolean): DebtGroup =>
+    (periods >= 4 ? 'four' : periods === 3 ? 'three' : periods === 2 ? 'two' : monthlyDue ? 'monthly_due' : 'one');
 
 /**
  * 「這個月還沒結完」的月份：下期被判定未結帳而略過；或就是今天所在的月份且下期尚未記住。
@@ -671,7 +655,8 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
     const keys = Object.keys(history.months).sort();
     const unsettledMap = unsettledPeriods(history);
     const unfinished = unfinishedMonths(history, unsettledMap, today);
-    const todayKey = monthKey(today.getFullYear(), today.getMonth() + 1);
+    // 上個月（1 月時是去年 12 月）：月結客人只欠這個月＝本月該付
+    const prevKey = today.getMonth() === 0 ? monthKey(today.getFullYear() - 1, 12) : monthKey(today.getFullYear(), today.getMonth());
     const multiYear = new Set([...keys, ...marks.manual_debts.map((d) => d.month_key)].map((k) => k.slice(0, 4))).size > 1;
     const halves = ['上', '下'] as const;
 
@@ -794,9 +779,8 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         const total = c.items.reduce((t, i) => t + i.owed, 0);
         // 期數：每個有欠款的期別 1 期，月結客人同月上下期合成 1 期；手動加的欠款不算
         const periods = new Set(c.items.filter((i) => !i.manual).map((i) => (monthly ? i.month_key : periodKey(i)))).size;
-        const month_end = monthly && !!marks.month_end?.[customerKey(c)];
-        const dueMonthEnd = month_end && c.items.some((i) => !i.manual && i.month_key < todayKey);
-        const d: Debtor = {...c, total, message: '', auto_message: '', edit: null, periods, group: groupOf(periods, dueMonthEnd), monthly, month_end,
+        const monthlyDue = monthly && periods === 1 && c.items.every((i) => i.month_key === prevKey);
+        const d: Debtor = {...c, total, message: '', auto_message: '', edit: null, periods, group: groupOf(periods, monthlyDue), monthly,
             pending, pending_total: pending.reduce((t, i) => t + i.owed, 0)};
         d.auto_message = buildMessage(d, templates);
         const edit = marks.edits?.[customerKey(c)];
@@ -864,14 +848,14 @@ export function filterCustomers(customers: Debtor[], keyword: string, onlyNotes 
 /** 訊息裡欠款明細的部分（到「合計」那行為止），不含結尾句。 */
 export const messageBody = (msg: string): string => /^[\s\S]*?\n合計：[^\n]*/.exec(msg)?.[0] ?? msg;
 
-export function buildMessage(c: Pick<Debtor, 'name' | 'items' | 'total' | 'periods'>, templates: MessageTemplates = DEFAULT_TEMPLATES): string {
+export function buildMessage(c: Pick<Debtor, 'name' | 'items' | 'total' | 'periods' | 'group'>, templates: MessageTemplates = DEFAULT_TEMPLATES): string {
     const lines = [`${c.name} 您好～`, '提醒您以下帳款尚未收到：'];
     for (const i of c.items) {
         let line = `・${i.period}${i.manual?.reason ? `（${i.manual.reason}）` : ''}：${money(i.owed)} 元`;
         if (i.partial) line += `（帳單 ${money(i.amt)} 元，已收 ${money(i.paid)} 元）`;
         lines.push(line);
     }
-    lines.push(`合計：${money(c.total)} 元`, '', closingFor(c.periods, templates));
+    lines.push(`合計：${money(c.total)} 元`, '', closingFor(c.periods, templates, c.group === 'monthly_due'));
     return lines.join('\n');
 }
 

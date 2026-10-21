@@ -33,7 +33,6 @@ import {
     normalizeMarks,
     removeManualDebt,
     setMessageEdit,
-    setMonthEnd,
     setMonthly,
     settleDebtor,
     unsettle,
@@ -92,7 +91,7 @@ describe('欠款計算', () => {
         );
         const {history, report} = await run([file('8月_已自動對帳.xlsx', 1, aug), file('9月_已自動對帳.xlsx', 2, sep)]);
         expect(report.map((r) => r.status)).toEqual(['used', 'used']);
-        const res = compute(history);
+        const res = compute(history, emptyMarks(), {}, new Date(2026, 10, 15));
         const by = Object.fromEntries(res.customers.map((c) => [c.code, c]));
         expect(Object.keys(by).sort()).toEqual(['1001', '1002']);
         const a = by['1001'];
@@ -184,7 +183,7 @@ describe('對帳 2.0 新格式（收款日右邊的備註欄）', () => {
         expect(parsed.periods.上['1002']).toMatchObject({amt: 2000, paid: null, date_text: '', memo: '9/30收2,065，金額對不上'});
         expect(parsed.periods.上['1003']).toMatchObject({paid: 1000, date_text: '9/5', memo: '月；2筆；待確認'});
         const {history} = await run([file('9月_已自動對帳.xlsx', 1, st)]);
-        const res = compute(history);
+        const res = compute(history, emptyMarks(), {}, new Date(2026, 10, 15));
         const by = Object.fromEntries(res.customers.map((c) => [c.code, c]));
         expect(Object.keys(by)).toEqual(['1002', '1003']);
         expect(by['1002'].notes).toEqual(['9月上期 有 1 筆入帳金額對不上、沒算進已收（9/30 2,065 元），催款前請先確認']);
@@ -219,7 +218,7 @@ describe('備註欄與實收欄文字列為需確認', () => {
         ];
         const st = await makeStmt(rows, [['1006', '己店', 100, null, null]], true);
         const {history} = await run([file('9月_已自動對帳.xlsx', 1, st)]);
-        const res = compute(history);
+        const res = compute(history, emptyMarks(), {}, new Date(2026, 10, 15));
         const by = Object.fromEntries(res.customers.map((c) => [c.code, c]));
         expect(by['1001']).toBeUndefined();
         expect(by['1002'].notes).toEqual([]);
@@ -649,7 +648,7 @@ describe('欠款期數分組', () => {
 
 describe('月結客人', () => {
     const base = (memo?: string) => hist({'2026-09': {上: [owe('1001', '甲', 100, memo)], 下: [owe('1001', '甲', 200)]}});
-    const one = (h: History, marks = emptyMarks()) => compute(h, marks).customers.find((c) => c.code === '1001')!;
+    const one = (h: History, marks = emptyMarks()) => compute(h, marks, {}, new Date(2026, 10, 15)).customers.find((c) => c.code === '1001')!;
 
     test('不是月結：9 上＋9 下算 2 期', () => {
         const c = one(base());
@@ -788,7 +787,7 @@ describe('還沒結帳的期別略過', () => {
     });
 });
 
-describe('月結客人未到期與月底前要催', () => {
+describe('月結客人未到期與月結本月該付', () => {
     const TODAY_OCT = new Date(2026, 9, 19);
     /** 不自帶付清客人的月份（要測下期整期沒人付款／下期尚未記住）。 */
     const bare = (months: Record<string, {上?: Spec[]; 下?: Spec[]}>): History => {
@@ -846,57 +845,85 @@ describe('月結客人未到期與月底前要催', () => {
         expect(compute(h, emptyMarks(), {}, TODAY_OCT).customers).toEqual([]);
     });
 
-    test('月底前要催：月結客人只欠上個月 1 期也列入要催（有訊息、算進總額與下載檔）', async () => {
-        const h = bare({
-            '2026-09': {上: [...paid3, owe('1001', '寶米', 8000, '月')], 下: [...paid3, ['1001', '寶米', 100, 100, '月']]},
-            '2026-10': {上: [...paid3, owe('1001', '寶米', 7000, '月')]},
-        });
-        const plain = compute(h, emptyMarks(), {}, TODAY_OCT);
-        expect(plain.customers.map((c) => [c.code, c.group])).toEqual([['1001', 'one']]);
-        expect(plain.chase_total).toBe(0);
+    const NEW_CLOSING = '您好～您的月結帳款已累積 1 個月未付，再麻煩儘速安排匯款，謝謝！';
+    // 月結 1001 只欠 9 月（上＋下合算 1 期），10 月上期未到期
+    const sepOnly = bare({
+        '2026-09': {上: [...paid3, owe('1001', '寶米', 8000, '月')], 下: [...paid3, owe('1001', '寶米', 700, '月')]},
+        '2026-10': {上: [...paid3, owe('1001', '寶米', 7000, '月')]},
+    });
 
-        const marks = setMonthEnd(emptyMarks(), {code: '1001', name: '寶米'}, true);
-        const res = compute(h, marks, {}, TODAY_OCT);
+    test('月結：本月該付——月結客人只欠上個月（上＋下合算 1 期）自動列入要催（有訊息、算進總額與下載檔）', async () => {
+        const res = compute(sepOnly, emptyMarks(), {}, TODAY_OCT);
         const c = res.customers[0];
-        expect([c.periods, c.group, c.month_end, c.total, c.pending_total]).toEqual([1, 'one_eom', true, 8000, 7000]);
+        expect([c.periods, c.group, c.total, c.pending_total]).toEqual([1, 'monthly_due', 8700, 7000]);
+        expect(c.items.map((i) => i.period)).toEqual(['9月上期', '9月下期']);
         expect(res.chase.map((x) => x.code)).toEqual(['1001']);
-        expect([res.chase_total, res.light.length]).toEqual([8000, 0]);
-        expect(c.message).toContain('8,000');
-        const txt = buildMessagesText(res, '2026-10-19 12:00');
-        expect(txt).toContain('欠 1 期（月底前要催）');
-        expect(txt).toContain('寶米');
+        expect([res.chase_total, res.light.length]).toEqual([8700, 0]);
+        expect(c.message).toBe(['寶米 您好～', '提醒您以下帳款尚未收到：', '・9月上期：8,000 元', '・9月下期：700 元', '合計：8,700 元', '', NEW_CLOSING].join('\n'));
+        const txt = buildMessagesText(res, '2026-10-21 12:00');
+        expect(txt).toContain('月結：本月該付（1 位）');
         expect(txt).not.toContain('7,000');
         const wb = new ExcelJS.Workbook();
         await wb.xlsx.load(await (await buildSummaryXlsx(res)).arrayBuffer());
-        expect(JSON.stringify(wb.getWorksheet('催款總表')!.getSheetValues())).toContain('月底前要催');
+        expect(JSON.stringify(wb.getWorksheet('催款總表')!.getSheetValues())).toContain('月結本月該付');
     });
 
-    test('月底前要催：分組排在欠 2 期之後、只顯示之前；欠 2 期以上照原本分組；一般客人或只欠本月不適用', () => {
+    test('月結：本月該付——分組排在欠 2 期之後、只顯示之前；非月結或只欠本月不適用', () => {
         const h = bare({
             '2026-08': {上: [...paid3, owe('1002', '兩期', 110, '月')]},
             '2026-09': {
-                上: [...paid3, owe('1001', '一期催', 20, '月'), owe('1002', '兩期', 30, '月'), owe('1003', '只顯示', 40, '月'), owe('1004', '一般', 50)],
-                下: [...paid3, ['1001', '一期催', 5, 5, '月']],
+                上: [...paid3, owe('1001', '本月該付', 20, '月'), owe('1002', '兩期', 30, '月'), owe('1004', '一般', 50)],
+                下: [...paid3, ['1001', '本月該付', 5, 5, '月']],
             },
         });
-        const marks = ['1001', '1002', '1004'].reduce((m, code) => setMonthEnd(m, {code, name: ''}, true), emptyMarks());
-        const res = compute(h, marks, {}, TODAY_OCT);
-        expect(res.customers.map((c) => [c.code, c.group])).toEqual([['1002', 'two'], ['1001', 'one_eom'], ['1003', 'one'], ['1004', 'one']]);
-        expect(res.customers.find((c) => c.code === '1004')!.month_end).toBe(false); // 非月結，設定不生效
+        const res = compute(h, emptyMarks(), {}, TODAY_OCT);
+        expect(res.customers.map((c) => [c.code, c.group])).toEqual([['1002', 'two'], ['1001', 'monthly_due'], ['1004', 'one']]);
         expect(res.chase.map((c) => c.code)).toEqual(['1002', '1001']);
-        expect(res.light.map((c) => c.code)).toEqual(['1003', '1004']);
+        expect(res.light.map((c) => c.code)).toEqual(['1004']);
         // 只欠本月（上個月沒欠）→ 未到期，不列入
         const h2 = bare({'2026-10': {上: [...paid3, owe('1001', '寶米', 300, '月')]}});
-        expect(compute(h2, marks, {}, TODAY_OCT).chase).toEqual([]);
+        expect(compute(h2, emptyMarks(), {}, TODAY_OCT).chase).toEqual([]);
+        // 手動設為月結一樣適用；取消月結則不
+        const manual = bare({'2026-09': {上: [...paid3, owe('3001', '手動月結', 400)], 下: paid3}});
+        expect(compute(manual, emptyMarks(), {}, TODAY_OCT).customers[0].group).toBe('one');
+        const on = setMonthly(emptyMarks(), {code: '3001', name: '手動月結', monthly_auto: false}, true);
+        expect(compute(manual, on, {}, TODAY_OCT).customers[0].group).toBe('monthly_due');
     });
 
-    test('月底前要催設定：可關閉、存回來一樣、舊資料沒有欄位視為空', () => {
-        const on = setMonthEnd(emptyMarks(), {code: '1001', name: '寶米'}, true);
-        expect(on.month_end).toEqual({'1001': true});
-        expect(normalizeMarks(JSON.parse(JSON.stringify(on)))).toEqual(on);
-        expect(setMonthEnd(on, {code: '1001', name: '寶米'}, false).month_end).toEqual({});
-        expect(normalizeMarks({version: 1, settled: [], manual_debts: [], monthly: {}}).month_end).toEqual({});
-        expect(normalizeMarks({month_end: {a: true, b: false, c: 'x'}}).month_end).toEqual({a: true});
+    test('月結：本月該付——還有更早的欠款就改走期數分組；跨年（1 月看去年 12 月）', () => {
+        const h = bare({
+            '2026-08': {上: [...paid3, owe('1001', '寶米', 100, '月')]},
+            '2026-09': {上: [...paid3, owe('1001', '寶米', 200, '月')]},
+        });
+        const c = find(h, '1001');
+        expect([c.periods, c.group]).toEqual([2, 'two']);
+        expect(c.message.endsWith('帳款已逾期，再麻煩儘早安排匯款，若已經匯款請忽略此訊息，謝謝！')).toBe(true);
+        // 只欠更早的月份（8 月），沒欠上個月 → 不是本月該付
+        const old = bare({'2026-08': {上: [...paid3, owe('1001', '寶米', 100, '月')]}, '2026-09': {上: paid3, 下: paid3}});
+        expect(find(old, '1001').group).toBe('one');
+        // 1 月：上個月是去年 12 月
+        const jan = bare({'2025-12': {上: [...paid3, owe('1001', '寶米', 100, '月')], 下: paid3}});
+        expect(find(jan, '1001', emptyMarks(), new Date(2026, 0, 12)).group).toBe('monthly_due');
+        // 手動加的更早欠款也算更早的欠款
+        const withManual = addManualDebt(emptyMarks(), find(sepOnly, '1001'), {month_key: '2026-07', half: '上', amount: 50, reason: '少付'}, TODAY_OCT);
+        expect(find(sepOnly, '1001', withManual).group).toBe('one');
+    });
+
+    test('舊的 month_end 設定讀到時忽略、不報錯，存回去就不帶了', async () => {
+        const old = {version: 1, settled: [], manual_debts: [], monthly: {'1001': true}, month_end: {'1001': true, x: 'bad'}};
+        const m = normalizeMarks(old);
+        expect(m.monthly).toEqual({'1001': true});
+        expect('month_end' in m).toBe(false);
+        expect(find(sepOnly, '1001', normalizeMarks(old)).group).toBe('monthly_due');
+        const mem = new Map<string, string>([['bii.auto-collect.marks', JSON.stringify(old)]]);
+        (globalThis as unknown as {localStorage: Storage}).localStorage = {
+            getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v),
+            removeItem: (k: string) => void mem.delete(k), clear: () => mem.clear(), key: () => null, length: 0,
+        } as Storage;
+        const store = await import('../src/infra/auto-collect-store');
+        expect(store.loadMarks(store.loadHistory()).monthly).toEqual({'1001': true});
+        store.saveMarks(store.loadMarks(store.loadHistory()));
+        expect(mem.get('bii.auto-collect.marks')).not.toContain('month_end');
     });
 
     test('存在 localStorage；清除全部記錄（只清月份）時設定保留', async () => {
@@ -906,14 +933,14 @@ describe('月結客人未到期與月底前要催', () => {
             removeItem: (k: string) => void mem.delete(k), clear: () => mem.clear(), key: () => null, length: 0,
         } as Storage;
         const store = await import('../src/infra/auto-collect-store');
-        const on = setMonthEnd(emptyMarks(), {code: '1001', name: '寶米'}, true);
+        const on = setMonthly(emptyMarks(), {code: '1001', name: '寶米', monthly_auto: false}, true);
         store.saveHistory(oct);
         store.saveMarks(on);
         store.clearHistory(); // 清除全部記錄預設只清月份
         expect(store.loadHistory().months).toEqual({});
-        expect(store.loadMarks(store.loadHistory()).month_end).toEqual({'1001': true});
+        expect(store.loadMarks(store.loadHistory()).monthly).toEqual({'1001': true});
         store.clearMarks(); // 勾選「同時清除標記」才清
-        expect(store.loadMarks(store.loadHistory()).month_end).toEqual({});
+        expect(store.loadMarks(store.loadHistory()).monthly).toEqual({});
     });
 });
 
@@ -1044,7 +1071,7 @@ describe.skipIf(![7, 8, 9, 10].every((m) => existsSync(DL(m))))('實際對帳檔
         const sum = (list: typeof res.chase) => list.reduce((t, c) => t + c.total, 0);
         expect(res.chase_total).toBe(sum(res.chase));
         expect(res.customers.length).toBe(res.chase.length + res.light.length);
-        expect(res.chase.every((c) => c.periods >= 2)).toBe(true);
+        expect(res.chase.every((c) => c.periods >= 2 || c.group === 'monthly_due')).toBe(true);
         expect(res.light.every((c) => c.periods <= 1)).toBe(true);
     });
 });
@@ -1052,7 +1079,7 @@ describe.skipIf(![7, 8, 9, 10].every((m) => existsSync(DL(m))))('實際對帳檔
 describe('畫面狀態（各組收合）', () => {
     test('預設全部收起，總表與訊息區各自獨立、每次回傳新物件', () => {
         const p = defaultUiPrefs();
-        expect(p.table).toEqual({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
+        expect(p.table).toEqual({four: true, three: true, two: true, monthly_due: true, one: true, settled: true});
         expect(p.messages).toEqual(p.table);
         expect(p.table).not.toBe(p.messages);
         p.table.two = false;
@@ -1084,7 +1111,6 @@ describe('催款語氣與訊息範本', () => {
         const two = '帳款已逾期，再麻煩儘早安排匯款，若已經匯款請忽略此訊息，謝謝！';
         expect(get('1003').message.split('\n').pop()).toBe(two);
         expect(get('1002').message.split('\n').pop()).toBe(two);
-        expect(get('1001').message.split('\n').pop()).toBe('麻煩您方便時匯款，若已經匯款請忽略此訊息，謝謝！');
         expect(get('1004').message).toBe([
             '丁 您好～', '提醒您以下帳款尚未收到：', '・6月上期：100 元', '・7月上期：110 元', '・8月上期：120 元', '・9月上期：130 元',
             '合計：460 元', '', '目前已累積 4 期帳款未付，再麻煩儘速匯款，謝謝配合'].join('\n'));
@@ -1109,7 +1135,7 @@ describe('催款語氣與訊息範本', () => {
         } as Storage;
         const store = await import('../src/infra/auto-collect-store');
         expect(store.loadTemplates()).toEqual(defaultTemplates());
-        const mine = {...defaultTemplates(), one: '請儘快', four_plus: '已 {期數} 期'};
+        const mine = {...defaultTemplates(), monthly_due: '請儘快', four_plus: '已 {期數} 期'};
         store.saveTemplates(mine);
         expect(store.loadTemplates()).toEqual(mine);
         store.clearHistory();
@@ -1119,7 +1145,33 @@ describe('催款語氣與訊息範本', () => {
         expect(store.loadTemplates()).toEqual(defaultTemplates());
         mem.set('bii.auto-collect.templates', '{壞掉');
         expect(store.loadTemplates()).toEqual(defaultTemplates());
-        expect(normalizeTemplates({one: '  ', two_three: 5, four_plus: ' 好 '})).toEqual({...defaultTemplates(), four_plus: '好'});
+        expect(normalizeTemplates({monthly_due: '  ', two_three: 5, four_plus: ' 好 '})).toEqual({...defaultTemplates(), four_plus: '好'});
+    });
+
+    test('範本新欄位：預設句、{期數} 帶月數；舊 one 欄位移轉（舊預設換新預設、她改過的保留）', () => {
+        expect(DEFAULT_TEMPLATES.monthly_due).toBe('您好～您的月結帳款已累積 {期數} 個月未付，再麻煩儘速安排匯款，謝謝！');
+        expect(closingFor(1, DEFAULT_TEMPLATES, true)).toBe('您好～您的月結帳款已累積 1 個月未付，再麻煩儘速安排匯款，謝謝！');
+        const oldDefault = '麻煩您方便時匯款，若已經匯款請忽略此訊息，謝謝！';
+        expect(normalizeTemplates({version: 1, four_plus: 'a', two_three: 'b', one: oldDefault})).toEqual({...defaultTemplates(), four_plus: 'a', two_three: 'b'});
+        expect(normalizeTemplates({one: '  請儘快匯款  '}).monthly_due).toBe('請儘快匯款');
+        // 新欄位優先於舊欄位
+        expect(normalizeTemplates({one: '舊', monthly_due: '新'}).monthly_due).toBe('新');
+        expect('one' in normalizeTemplates({one: '舊'})).toBe(false);
+    });
+
+    test('範本恢復預設涵蓋新欄位', async () => {
+        const mem = new Map<string, string>();
+        (globalThis as unknown as {localStorage: Storage}).localStorage = {
+            getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v),
+            removeItem: (k: string) => void mem.delete(k), clear: () => mem.clear(), key: () => null, length: 0,
+        } as Storage;
+        const store = await import('../src/infra/auto-collect-store');
+        store.saveTemplates({...defaultTemplates(), monthly_due: '改過的 {期數}'});
+        expect(store.loadTemplates().monthly_due).toBe('改過的 {期數}');
+        store.resetTemplates();
+        expect(store.loadTemplates().monthly_due).toBe(DEFAULT_TEMPLATES.monthly_due);
+        const t = {...defaultTemplates(), monthly_due: '月結 {期數} 個月！'};
+        expect(get('1006', t, emptyMarks(), hist({'2026-09': {上: [owe('1006', '己', 80, '月')]}})).message.endsWith('月結 1 個月！')).toBe(true);
     });
 
     test('改範本：自動訊息即時變；手動編輯過的維持她的版本，也不出現「欠款已變動」', () => {

@@ -4,7 +4,7 @@
  * 總表與訊息區的開合各自獨立；已結清只出現在總表那一側。
  */
 
-export type SectionKey = 'four' | 'three' | 'two' | 'one_eom' | 'one' | 'settled';
+export type SectionKey = 'four' | 'three' | 'two' | 'monthly_due' | 'one' | 'settled';
 export type Side = 'table' | 'messages';
 
 /** true = 收起 */
@@ -15,10 +15,10 @@ export interface UiPrefs {
     messages: Collapsed;
 }
 
-export const SECTION_KEYS: readonly SectionKey[] = ['four', 'three', 'two', 'one_eom', 'one', 'settled'];
+export const SECTION_KEYS: readonly SectionKey[] = ['four', 'three', 'two', 'monthly_due', 'one', 'settled'];
 
 /** 全部收起。 */
-export const defaultCollapsed = (): Collapsed => ({four: true, three: true, two: true, one_eom: true, one: true, settled: true});
+export const defaultCollapsed = (): Collapsed => ({four: true, three: true, two: true, monthly_due: true, one: true, settled: true});
 
 export const defaultUiPrefs = (): UiPrefs => ({version: 1, table: defaultCollapsed(), messages: defaultCollapsed()});
 

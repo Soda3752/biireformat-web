@@ -446,18 +446,6 @@
     font-weight: var(--font-weight-semibold);
 }
 
-.auto-collect .ac-tag-eom {
-    display: inline-block;
-    margin-left: var(--space-2);
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-full);
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    vertical-align: middle;
-}
-
 .auto-collect .ac-pending {
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);

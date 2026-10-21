@@ -37,11 +37,11 @@ function addStyledRow(ws: ExcelJS.Worksheet, values: unknown[], moneyCols: numbe
     return row;
 }
 
-const groupText = (c: Debtor): string => `${c.group === 'four' ? '4 期以上' : c.group === 'three' ? '3 期' : c.group === 'two' ? '2 期' : '1 期（月底前要催）'}（${c.periods} 期${c.monthly ? '，月結' : ''}）`;
+const groupText = (c: Debtor): string => `${c.group === 'four' ? '4 期以上' : c.group === 'three' ? '3 期' : c.group === 'two' ? '2 期' : '月結本月該付'}（${c.periods} 期${c.monthly ? '，月結' : ''}）`;
 
 export async function buildSummaryXlsx(result: CollectResult): Promise<Blob> {
     const wb = new ExcelJS.Workbook();
-    // 只含要催款的（欠 2 期以上，或月底前要催）；只顯示不催的與未到期的只在畫面上顯示，不進檔案
+    // 只含要催款的（欠 2 期以上，或月結本月該付）；只顯示不催的與未到期的只在畫面上顯示，不進檔案
     const customers = result.chase;
 
     let ws = addSheet(wb, '催款總表', ['代號', '客人', '欠幾期', '欠哪幾期', '各期欠款', '合計', '備註'], [8, 18, 14, 30, 44, 12, 60]);

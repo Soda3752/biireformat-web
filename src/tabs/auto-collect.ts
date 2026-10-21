@@ -40,7 +40,6 @@ import {
     removeManualDebt,
     removeMonth,
     setMessageEdit,
-    setMonthEnd,
     setMonthly,
     settleDebtor,
     unsettle,
@@ -127,7 +126,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         <p class="card-subtitle">小技巧：句子裡寫 <b>{期數}</b>（連大括號一起打），傳出去時會自動換成這位客人欠的期數，例如「目前已累積 <b>4</b> 期帳款未付」。三句都可以用。</p>
         <label class="ac-tpl-field"><span>欠 4 期以上</span><textarea class="app-form-input" rows="2" data-tpl="four_plus"></textarea></label>
         <label class="ac-tpl-field"><span>欠 2～3 期</span><textarea class="app-form-input" rows="2" data-tpl="two_three"></textarea></label>
-        <label class="ac-tpl-field"><span>欠 1 期（月底前要催）</span><textarea class="app-form-input" rows="2" data-tpl="one"></textarea></label>
+        <label class="ac-tpl-field"><span>月結：本月該付</span><textarea class="app-form-input" rows="2" data-tpl="monthly_due"></textarea></label>
         <div class="ac-tpl-bar"><button type="button" class="btn btn-secondary btn-sm" data-role="tpl-reset">恢復預設</button></div>
       </details>
     </div>
@@ -135,7 +134,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
     <div class="card">
       <header class="card-header">
         <h2 class="card-title">每位客人的催款訊息</h2>
-        <p class="card-subtitle">欠 2 期以上、或設了「月底前要催」的月結客人才有訊息（其餘欠 1 期的只在上面總表顯示、不催）。按「複製」後到 LINE 貼上。複製過的會變灰（重新整理頁面就會清掉標記）。有<span class="ac-warn-tag">注意</span>的請先確認再傳。</p>
+        <p class="card-subtitle">欠 2 期以上、或月結客人「本月該付」上個月帳款的才有訊息（其餘欠 1 期的只在上面總表顯示、不催）。按「複製」後到 LINE 貼上。複製過的會變灰（重新整理頁面就會清掉標記）。有<span class="ac-warn-tag">注意</span>的請先確認再傳。</p>
       </header>
       <div class="ac-messages" data-role="messages"></div>
     </div>
@@ -304,7 +303,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
 
     $('clear-all').addEventListener('click', async () => {
         const hasMarks = marks.settled.length > 0 || marks.manual_debts.length > 0 || Object.keys(marks.monthly).length > 0
-            || Object.keys(marks.month_end).length > 0 || Object.keys(marks.edits).length > 0;
+            || Object.keys(marks.edits).length > 0;
         const ans = await clearDialog(hasMarks);
         if (!ans) return;
         clearHistory();
@@ -317,7 +316,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         editing.clear();
         setReport('');
         render();
-        showToast({variant: 'success', message: hasMarks && !ans.clearMarks ? '已清除全部月份記錄（已結清標記、手動加的欠款、月結與月底前要催設定、手動修改過的訊息保留）' : '已清除全部記錄'});
+        showToast({variant: 'success', message: hasMarks && !ans.clearMarks ? '已清除全部月份記錄（已結清標記、手動加的欠款、月結設定、手動修改過的訊息保留）' : '已清除全部記錄'});
     });
 
     // ---------- 下載
@@ -375,15 +374,6 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             if (c && persistMarks(setMonthly(marks, c, !c.monthly))) {
                 render();
                 showToast({variant: 'success', message: c.monthly ? `已取消 ${c.name} 的月結` : `已將 ${c.name} 設為月結（同月上下期算 1 期）`, duration: 2500});
-            }
-            return;
-        }
-        const eomBtn = t.closest<HTMLButtonElement>('[data-eom]');
-        if (eomBtn) {
-            const c = result.customers.find((x) => custId(x) === eomBtn.dataset.eom);
-            if (c && persistMarks(setMonthEnd(marks, c, !c.month_end))) {
-                render();
-                showToast({variant: 'success', message: c.month_end ? `已取消 ${c.name} 的「月底前要催」` : `已將 ${c.name} 設為「月底前要催」（欠上個月以前任何一期就會列入催款）`, duration: 2500});
             }
             return;
         }
@@ -566,7 +556,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         const metric = (label: string, value: string) =>
             `<div class="metric-label">${label}</div><div class="metric-value">${value}</div>`;
         $('stats').innerHTML = [
-            `<div class="metric">${metric('位客人要催款（欠 2 期以上＋月底前要催）', `${result.chase.length}`)}</div>`,
+            `<div class="metric">${metric('位客人要催款（欠 2 期以上＋月結本月該付）', `${result.chase.length}`)}</div>`,
             `<div class="metric">${metric('欠款合計', `${money(result.chase_total)} 元`)}</div>`,
             `<button type="button" class="metric ac-metric-toggle${onlyNotes ? ' is-on' : ''}" data-role="only-notes"
                aria-pressed="${onlyNotes}" ${warn ? `title="${onlyNotes ? '再點一次顯示全部' : '點一下只顯示這幾位'}"` : 'disabled'}>
@@ -617,8 +607,6 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
 
     const monthlyTag = (c: Debtor): string => (c.monthly
         ? `<span class="ac-tag-monthly" title="${c.monthly_auto ? '備註有「月」，自動認成月結' : '手動設為月結'}；同月上下期算 1 期">月結</span>` : '');
-    const eomTag = (c: Debtor): string => (c.month_end
-        ? '<span class="ac-tag-eom" title="月結客人，欠上個月以前任何一期就列入催款">月底前要催</span>' : '');
     const pendingInfo = (c: Debtor): string => {
         const nowY = new Date().getFullYear();
         const byMonth = new Map<string, number>();
@@ -631,9 +619,6 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
     const periodsInfo = (c: Debtor): string => `<div class="ac-periods-count">${c.periods ? `欠 ${c.periods} 期` : '只有手動欠款'}</div>`;
     const monthlyBtn = (c: Debtor): string =>
         `<button type="button" class="btn btn-secondary btn-xs" data-monthly="${esc(custId(c))}">${c.monthly ? '取消月結' : '設為月結'}</button>`;
-
-    const eomBtn = (c: Debtor): string => (c.monthly
-        ? `<button type="button" class="btn btn-secondary btn-xs" data-eom="${esc(custId(c))}">${c.month_end ? '取消月底前要催' : '月底前要催'}</button>` : '');
 
     /** 分組標題列：整條可點來收合／展開，收起時仍看得到人數與金額。 */
     const groupHead = (side: Side, key: DebtGroup, list: Debtor[]): string => {
@@ -673,13 +658,13 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             ? `<b>${esc(c.name)}</b>`
             : `<button type="button" class="ac-name-link" data-jump="${esc(custId(c))}" title="跳到下面這位的催款訊息"><b>${esc(c.name)}</b></button>`);
         const row = (c: Debtor): string => `<tr data-row="${esc(custId(c))}" class="${copied.has(custId(c)) ? 'is-done' : ''}">
-                <td>${esc(c.code)}</td><td>${nameCell(c)}${monthlyTag(c)}${eomTag(c)}${periodsInfo(c)}</td>
+                <td>${esc(c.code)}</td><td>${nameCell(c)}${monthlyTag(c)}${periodsInfo(c)}</td>
                 <td class="ac-periods">${c.items.map((i) => itemHtml(c, i)).join('<br>')}${pendingInfo(c)}</td>
                 <td class="ac-num"><b>${money(c.total)}</b></td>
                 <td>${c.notes.map((n) => `<div class="ac-note">${esc(n)}</div>`).join('')}</td>
                 <td class="ac-btns">${c.group !== 'one' ? `<button type="button" class="btn btn-secondary btn-xs" data-copy="${esc(custId(c))}">複製訊息</button>` : ''}
                   <button type="button" class="btn btn-secondary btn-xs" data-adddebt="${esc(custId(c))}">加一筆欠款</button>
-                  ${monthlyBtn(c)}${eomBtn(c)}
+                  ${monthlyBtn(c)}
                   <button type="button" class="btn btn-secondary btn-xs" data-settle="${esc(custId(c))}">已結清</button></td></tr>`;
         const rows = GROUPS.flatMap((g) => {
             const part = byGroup(g.key);
@@ -697,9 +682,9 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             const head = `<div class="ac-msg-group">${groupHead('messages', g.key, part)}</div>`;
             if (ui.messages[g.key]) return [head];
             return [head, ...part.map((c) => `<div class="ac-msg ${copied.has(custId(c)) ? 'is-done' : ''}" data-card="${esc(custId(c))}">
-            <div class="ac-msg-head"><b>${esc(c.code)} ${esc(c.name)}${monthlyTag(c)}${eomTag(c)}${c.notes.length ? '<span class="ac-warn-tag">注意</span>' : ''}</b>
+            <div class="ac-msg-head"><b>${esc(c.code)} ${esc(c.name)}${monthlyTag(c)}${c.notes.length ? '<span class="ac-warn-tag">注意</span>' : ''}</b>
               <span class="ac-btns"><button type="button" class="btn btn-secondary btn-xs" data-adddebt="${esc(custId(c))}">加一筆欠款</button>
-              ${monthlyBtn(c)}${eomBtn(c)}
+              ${monthlyBtn(c)}
               <button type="button" class="btn btn-secondary btn-xs" data-settle="${esc(custId(c))}">已結清</button>
               <button type="button" class="btn btn-secondary btn-xs" data-back="${esc(custId(c))}" title="回到上面總表這位的那一列">↑ 回到總表</button>
               <button type="button" class="btn btn-primary btn-xs" data-copy="${esc(custId(c))}">複製</button></span></div>
