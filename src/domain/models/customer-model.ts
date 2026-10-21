@@ -13,6 +13,7 @@ const PARAM_SETTING = '傳真電話';
 const PARAM_UNIFORM = '統一編號';
 const PARAM_PHONE = '電話號碼';
 const PARAM_CONTACT = '聯絡人員';
+const PARAM_ADDRESS = '客戶地址';
 
 export class CustomerModel {
   readonly name: string;
@@ -30,7 +31,7 @@ export class CustomerModel {
 
   /** 統一編號（輸入檔「統一編號」欄後方的值；無則空字串） */
   uniformNumber = '';
-  /** 公司抬頭（輸入檔「聯絡人員」欄後方的值；無則空字串） */
+  /** 公司抬頭（優先取輸入檔「客戶地址」欄後方的值，空則退回「聯絡人員」；皆無則空字串） */
   companyTitle = '';
 
   constructor(name: string, code: string) {
@@ -77,10 +78,16 @@ export class CustomerModel {
     this.isNeedTex = configInfo.includes('稅');
     this.isCashUser = configInfo.includes('現');
 
-    // 公司抬頭：客戶地址列「聯絡人員」欄後方的值；為空時後方直接接「傳真電話」標籤。
-    const contactIdx = rowData.indexOf(PARAM_CONTACT);
-    const title = contactIdx >= 0 ? rowData[contactIdx + 1] ?? '' : '';
-    this.companyTitle = title === PARAM_SETTING ? '' : title;
+    // 公司抬頭：優先取「客戶地址」欄後方的值（聯絡人員欄太短會截字，完整抬頭填在地址欄）；
+    // 地址為空時 reader 略過空格，後方直接接「聯絡人員」標籤，視為空，改用「聯絡人員」的值。
+    // 聯絡人員為空時後方直接接「傳真電話」標籤。
+    const valueAfter = (label: string, nextLabel: string): string => {
+      const i = rowData.indexOf(label);
+      const v = i >= 0 ? rowData[i + 1] ?? '' : '';
+      return v === nextLabel ? '' : v;
+    };
+    const address = valueAfter(PARAM_ADDRESS, PARAM_CONTACT);
+    this.companyTitle = address || valueAfter(PARAM_CONTACT, PARAM_SETTING);
   }
 
   getTotalPrice(): number {

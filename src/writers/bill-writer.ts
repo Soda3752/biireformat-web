@@ -155,7 +155,8 @@ function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: numb
         if (targetSize !== null) {
             ws.getRow(r).eachCell({ includeEmpty: true }, (cell) => {
                 if (cell.master !== cell) return; // 跳過合併附屬格
-                if (cell.font?.size) fontTargets.push({ cell, font: cell.font, size: targetSize });
+                // 取較小者：抬頭/統編已依合併格寬度縮小，壓縮版型不可再放大回去
+                if (cell.font?.size) fontTargets.push({ cell, font: cell.font, size: Math.min(targetSize, cell.font.size) });
             });
         }
     }

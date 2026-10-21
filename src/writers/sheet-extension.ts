@@ -280,6 +280,10 @@ export function createCustInfo(
   }
 }
 
+/** Excel 欄寬 1 字元 ≈ 5.25pt（7px）；抬頭字級下限 */
+const COL_CHAR_PT = 5.25;
+const MIN_EXTRA_FONT_PT = 8;
+
 /** 在客戶資訊列的中間空白區寫一段置中合併文字（抬頭 / 統編）。 */
 function writeCustInfoExtra(
   sheet: ExcelJS.Worksheet,
@@ -291,7 +295,14 @@ function writeCustInfoExtra(
 ): void {
   const cell = row.getCell(startCol);
   cell.value = text;
-  cell.style = style;
+  // 不用 shrinkToFit（部分檢視器遇長文字會直接不顯示）：依合併格寬度算出能放下的字級。
+  let availPt = 0;
+  for (let c = startCol; c <= endCol; c++) availPt += (sheet.getColumn(c).width ?? 8.43) * COL_CHAR_PT;
+  let em = 0;
+  for (const ch of text) em += /[\u2e80-\u9fff\uff00-\uffef]/.test(ch) ? 1 : 0.55;
+  const baseSize = style.font?.size ?? 18;
+  const size = Math.max(MIN_EXTRA_FONT_PT, Math.min(baseSize, Math.floor((availPt * 0.94) / em)));
+  cell.style = { ...style, font: { ...style.font, size } };
   if (endCol > startCol) {
     mergeRange(sheet, row.number, startCol, row.number, endCol);
   }
