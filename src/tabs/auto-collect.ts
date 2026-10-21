@@ -35,6 +35,7 @@ import {
     type ManualDebtInput,
     type MonthConflict,
     money,
+    sumMessageLines,
     monthLabel,
     removeManualDebt,
     removeMonth,
@@ -648,14 +649,17 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         const who = esc(custId(c));
         if (editing.has(custId(c))) {
             return `<textarea class="app-form-input ac-msg-edit" rows="${Math.min(16, c.message.split('\n').length + 2)}" data-msg-input="${who}">${esc(editing.get(custId(c)))}</textarea>
-              <div class="ac-msg-edit-bar"><span class="muted">只改訊息文字，不影響上面的金額與合計。</span>
+              <div class="ac-msg-edit-bar"><span class="muted">只改訊息文字，不影響上面的金額與合計；儲存時會自動重算訊息裡的「合計」。</span>
                 <span class="ac-btns"><button type="button" class="btn btn-secondary btn-xs" data-msg="cancel" data-cust="${who}">取消</button>
                 <button type="button" class="btn btn-primary btn-xs" data-msg="save" data-cust="${who}">儲存</button></span></div>`;
         }
         const stale = c.edit?.stale
             ? `<div class="ac-stale">⚠ 欠款已變動，請檢查
                 <details><summary>看目前自動產生的版本</summary><pre class="ac-msg-text ac-msg-auto">${esc(c.auto_message)}</pre></details></div>` : '';
-        return `${stale}<pre class="ac-msg-text">${esc(c.message)}</pre>`;
+        const sum = c.edit ? sumMessageLines(c.message) : null;
+        const mismatch = sum !== null && sum !== c.total
+            ? `<div class="ac-stale">⚠ 訊息合計 ${money(sum)} 元 與總表 ${money(c.total)} 元 不同，請檢查</div>` : '';
+        return `${stale}${mismatch}<pre class="ac-msg-text">${esc(c.message)}</pre>`;
     };
     const msgTools = (c: Debtor): string => `<div class="ac-msg-tools">${c.edit
         ? `<span class="ac-tag-edited">已手動修改</span>

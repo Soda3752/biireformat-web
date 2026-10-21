@@ -336,9 +336,48 @@ export function setMonthEnd(marks: Marks, c: Pick<Debtor, 'code' | 'name'>, on: 
     return {...marks, month_end: next};
 }
 
+const AMOUNT_RE = /(\d{1,3}(?:,\d{3})+|\d+)\s*元/;
+const TOTAL_LINE_RE = /^(\s*合計\s*[：:]\s*)(\d[\d,]*)(\s*元.*)$/;
+
+/** 一行「・…」的欠款金額：先拿掉括號內容（如「（帳單 7,871 元，已收 7,811 元）」），再取冒號後第一個「N 元」；沒冒號就取最後一個。 */
+export function lineAmount(line: string): number | null {
+    if (!/^\s*・/.test(line)) return null;
+    const bare = line.replace(/（[^）]*）|\([^)]*\)/g, '');
+    const colon = bare.search(/[：:]/);
+    let m: RegExpMatchArray | null;
+    if (colon >= 0) m = AMOUNT_RE.exec(bare.slice(colon + 1));
+    else m = [...bare.matchAll(new RegExp(AMOUNT_RE.source, 'g'))].pop() ?? null;
+    return m ? Number(m[1].replace(/,/g, '')) : null;
+}
+
+/** 訊息裡每一行金額的加總（只算最後一個「合計」行之前的行）；沒有任何金額行回傳 null。 */
+export function sumMessageLines(text: string): number | null {
+    const lines = text.split('\n');
+    const totalAt = lines.map((l) => TOTAL_LINE_RE.test(l)).lastIndexOf(true);
+    let sum: number | null = null;
+    for (const l of totalAt >= 0 ? lines.slice(0, totalAt) : lines) {
+        const a = lineAmount(l);
+        if (a !== null) sum = (sum ?? 0) + a;
+    }
+    return sum;
+}
+
+/** 手動改過訊息後重算「合計：N 元」那行；沒有合計行不新增、沒有金額行不動。千分位沿用原本的寫法。 */
+export function recalcMessageTotal(text: string): string {
+    const sum = sumMessageLines(text);
+    if (sum === null) return text;
+    const lines = text.split('\n');
+    const at = lines.map((l) => TOTAL_LINE_RE.test(l)).lastIndexOf(true);
+    if (at < 0) return text;
+    const m = TOTAL_LINE_RE.exec(lines[at])!;
+    const plain = m[2].length > 3 && !m[2].includes(',');
+    lines[at] = `${m[1]}${plain ? String(sum) : money(sum)}${m[3]}`;
+    return lines.join('\n');
+}
+
 /** 儲存手動修改的訊息；空白或和自動產生的一樣就等於沒改（清掉修改紀錄）。只動訊息文字，不影響金額與分組。 */
 export function setMessageEdit(marks: Marks, c: Pick<Debtor, 'code' | 'name' | 'auto_message'>, text: string, now: Date = new Date()): Marks {
-    const clean = text.replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+    const clean = recalcMessageTotal(text.replace(/\r\n?/g, '\n').replace(/\s+$/, ''));
     if (!clean.trim() || clean === c.auto_message) return clearMessageEdit(marks, c);
     return {...marks, edits: {...marks.edits, [customerKey(c)]: {text: clean, base: c.auto_message, edited_at: localIso(now)}}};
 }

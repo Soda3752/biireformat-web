@@ -20,6 +20,9 @@ import {
     emptyMarks,
     filterCustomers,
     messageBody,
+    lineAmount,
+    recalcMessageTotal,
+    sumMessageLines,
     guessYear,
     type History,
     type ImportFile,
@@ -1120,7 +1123,7 @@ describe('催款語氣與訊息範本', () => {
     });
 
     test('改範本：自動訊息即時變；手動編輯過的維持她的版本，也不出現「欠款已變動」', () => {
-        const EDIT = '丁 您好～\n・9月上期：130 元\n合計：460 元\n\n拜託了';
+        const EDIT = '丁 您好～\n・9月上期：130 元\n合計：130 元\n\n拜託了';
         const c0 = get('1004');
         const marks = setMessageEdit(emptyMarks(), c0, EDIT, TODAY2);
         const t = {...defaultTemplates(), four_plus: '新語氣 {期數}'};
@@ -1179,5 +1182,54 @@ describe('已結清快速原因按鈕清單', () => {
         expect(addReasonChip(base, '已補款')).toEqual(base);
         expect(addReasonChip(base, ' 匯款 ')).toEqual(['已補款', '回饋金自扣', '匯款']);
         expect(removeReasonChip(base, '已補款')).toEqual(['回饋金自扣']);
+    });
+});
+
+describe('編輯訊息儲存時重算合計', () => {
+    const NOW = new Date(2026, 9, 19, 10, 0, 0);
+    const MSG = (total: string) => `早安好呷 您好～\n提醒您以下帳款尚未收到：\n・8月下期（尚少）：64 元\n・9月上期：2,324 元\n・9月下期：2,096 元\n・10月上期：2,566 元\n合計：${total} 元\n\n麻煩您，謝謝！`;
+
+    test('四行加總取代舊合計，千分位一致，結尾句不動', () => {
+        expect(recalcMessageTotal(MSG('7,114'))).toBe(MSG('7,050'));
+        expect(sumMessageLines(MSG('7,114'))).toBe(7050);
+    });
+
+    test('括號裡的帳單／已收金額不取，只取冒號後的欠款', () => {
+        expect(lineAmount('・8月下期：60 元（帳單 7,871 元，已收 7,811 元）')).toBe(60);
+        expect(lineAmount('・8月下期（少付 500 元）：1,200 元')).toBe(1200);
+        expect(lineAmount('・8月下期：60 元(帳單 7,871 元，已收 7,811 元)')).toBe(60);
+        expect(lineAmount('・9月上期 2,324 元')).toBe(2324);
+        expect(lineAmount('9月上期：2,324 元')).toBeNull();
+        expect(lineAmount('・沒有金額的行')).toBeNull();
+        const m = '甲 您好～\n・8月下期：60 元（帳單 7,871 元，已收 7,811 元）\n・9月上期：500 元\n合計：9,999 元';
+        expect(recalcMessageTotal(m)).toBe(m.replace('9,999', '560'));
+    });
+
+    test('合計行寫法：不帶逗號者沿用；小於千可正常；沒有合計行不新增；沒有金額行不動', () => {
+        expect(recalcMessageTotal(MSG('7114'))).toBe(MSG('7050').replace('7,050', '7050'));
+        expect(recalcMessageTotal('甲\n・A：100 元\n合計：999 元')).toBe('甲\n・A：100 元\n合計：100 元');
+        const noTotal = '甲\n・A：100 元\n・B：200 元';
+        expect(recalcMessageTotal(noTotal)).toBe(noTotal);
+        const noLines = '甲 您好～\n合計：999 元\n謝謝';
+        expect(recalcMessageTotal(noLines)).toBe(noLines);
+    });
+
+    test('結尾句裡的「・…元」不會被算進去', () => {
+        const m = '甲\n・A：100 元\n合計：100 元\n・備註：50 元';
+        expect(sumMessageLines(m)).toBe(100);
+    });
+
+    test('setMessageEdit 儲存時自動重算；重算後與自動版相同則視為沒改', () => {
+        const auto = '甲\n・A：100 元\n・B：200 元\n合計：300 元';
+        const c0 = {code: '1', name: '甲', auto_message: auto};
+        const m = setMessageEdit(emptyMarks(), c0, '甲\n・A：100 元\n・B：250 元\n合計：300 元', NOW);
+        expect(m.edits['1|甲']?.text ?? Object.values(m.edits)[0].text).toBe('甲\n・A：100 元\n・B：250 元\n合計：350 元');
+        expect(setMessageEdit(emptyMarks(), c0, '甲\n・A：100 元\n・B：200 元\n合計：999 元', NOW).edits).toEqual({});
+    });
+
+    test('與總表不同：訊息加總 ≠ Debtor.total 才需要提醒', () => {
+        const total = 7114;
+        expect(sumMessageLines(MSG('7,050'))).not.toBe(total);
+        expect(sumMessageLines(MSG('7,114').replace('64 元', '128 元'))).toBe(7114);
     });
 });
