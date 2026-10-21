@@ -313,6 +313,58 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
     };
     const missedKey = (m: Missed): string => `${m.code}|${m.per}`;
+    /** 該客戶所有漏付期別（由舊到新）合成一則催款訊息；沒有漏付回傳空字串。 */
+    const missedMessage = (code: string): string => {
+        const r = lastResult;
+        if (!r) return '';
+        const ms = r.missed.filter((m) => m.code === code)
+            .sort((x, y) => r.PERIODS.indexOf(x.per) - r.PERIODS.indexOf(y.per));
+        if (!ms.length) return '';
+        const items = ms.map((m) => `${m.per}貨款：${m.amt.toLocaleString('en-US')}`).join('、');
+        return `您好～${items}\n${ms.length > 1 ? '這幾筆' : '這筆'}未入帳唷 再麻煩您確認一下 謝謝`;
+    };
+    /** 複製「複製訊息」按鈕：先用剪貼簿 API，失敗改 execCommand，再不行跳出可選取的文字框。 */
+    const copyText = async (text: string): Promise<boolean> => {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            /* 非 https 等情況改用後備 */
+        }
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try {
+            ok = document.execCommand('copy');
+        } catch {
+            ok = false;
+        }
+        ta.remove();
+        return ok;
+    };
+    const showCopyFallback = (text: string) => {
+        const box = document.createElement('div');
+        box.className = 'auto-recon-copy-fallback';
+        box.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;';
+        box.innerHTML = `<div style="background:#fff;padding:16px;border-radius:8px;width:min(420px,90vw);">
+          <div style="margin-bottom:8px;">無法自動複製，請手動選取下面文字複製：</div>
+          <textarea readonly rows="4" style="width:100%;box-sizing:border-box;"></textarea>
+          <div style="text-align:right;margin-top:8px;"><button type="button" class="btn btn-secondary btn-xs">關閉</button></div></div>`;
+        const ta = box.querySelector('textarea')!;
+        ta.value = text;
+        box.querySelector('button')!.addEventListener('click', () => box.remove());
+        box.addEventListener('click', (ev) => { if (ev.target === box) box.remove(); });
+        document.body.appendChild(box);
+        ta.focus();
+        ta.select();
+    };
+    const copyBtnHtml = (code: string, label = '複製訊息'): string =>
+        `<button type="button" class="btn btn-secondary btn-xs" data-copy-missed="${escapeHtml(code)}"
+                 title="複製這位客戶所有漏付期別的催款訊息">${escapeHtml(label)}</button>`;
     /** 沒對應入帳的漏付（客戶列），依 已處理 分成要列出的與已略過的。 */
     const orphanMissed = (r: AutoReconcileResult): {open: Missed[]; done: Missed[]} => {
         const all = r.missed.filter((m) => m.orphan);
@@ -672,10 +724,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 ? `<span class="reconcile-status-pill is-matched">已處理</span>
                    <button type="button" class="btn btn-secondary btn-xs" data-missed-undo="${escapeHtml(missedKey(m))}">取消</button>`
                 : `<button type="button" class="btn btn-secondary btn-xs" data-missed-done="${escapeHtml(missedKey(m))}"
-                          title="我知道了／已處理：下次不再列出，下載的明細也不寫漏付紅字">我知道了／已處理</button>`}</div></td>
+                          title="我知道了／已處理：下次不再列出，下載的明細也不寫漏付紅字">我知道了／已處理</button>`}
+                ${copyBtnHtml(m.code)}</div></td>
             </tr>`;
         };
         return open.map((m) => row(m, false)).join('') + done.map((m) => row(m, true)).join('');
+    };
+
+    /** 入帳列的複製訊息按鈕：每位有漏付的客戶一顆（同一筆跨多家店才標店名）。 */
+    const missedCopyBtns = (x: ReconcileEntry, r: AutoReconcileResult): string => {
+        const codes = [...new Set((x.missed ?? []).map((m) => m.code))];
+        return codes.map((c) => copyBtnHtml(c, codes.length > 1 ? `複製訊息（${r.cust[c].name}）` : '複製訊息')).join('');
     };
 
     const renderRows = () => {
@@ -772,6 +831,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
               <td><span class="reconcile-status-pill ${STATUS_PILL[x.status]}">${STATUS_LABEL[x.status]}</span></td>
               <td class="auto-recon-note">${note}${missedNote}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
               <td><div class="auto-recon-act">
+                ${missedCopyBtns(x, r)}
                 ${x.confirmed ? `<span class="reconcile-status-pill is-matched">${x.special ?? (x.cash === 'ok' || x.cash === 'warn' ? '現付' : '✓ 已確認')}</span>
                   <button type="button" class="btn btn-secondary btn-xs" data-unconfirm="${x.idx}"
                           title="${x.cash ? '忘掉這個帳號的現付紀錄，恢復照期別比對'
@@ -954,6 +1014,21 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     tbody.addEventListener('click', (e) => {
         const el = e.target as HTMLElement;
+        const copyBtn = el.closest<HTMLButtonElement>('[data-copy-missed]');
+        if (copyBtn) {
+            const text = missedMessage(copyBtn.dataset.copyMissed!);
+            if (!text) return;
+            void copyText(text).then((ok) => {
+                if (!ok) {
+                    showCopyFallback(text);
+                    return;
+                }
+                const old = copyBtn.textContent;
+                copyBtn.textContent = '已複製';
+                setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = old; }, 1500);
+            });
+            return;
+        }
         const missedBtn = el.closest<HTMLButtonElement>('[data-missed-done],[data-missed-undo]');
         if (missedBtn) {
             if (missedBtn.dataset.missedDone) missedIgnored.add(missedBtn.dataset.missedDone);
