@@ -63,6 +63,7 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const CHEQUE_TAB = '支票';
 const MISSED_TAB = '漏付';
 const MISSED_IGNORED_KEY = 'bii.reconcileV2.missedIgnored';
+const MULTI_PICK_KEY = 'bii.reconcileV2.multiPick';
 type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB | typeof MISSED_TAB;
 
 /** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
@@ -289,6 +290,21 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     } catch {
         missedIgnored = new Set();
     }
+    /** 使用者挑過的多店期別組合（日期|金額|帳號 → 各店期別），重新載入同一批入帳時直接套用。 */
+    let multiPicks: Record<string, Array<[string, string[]]>> = {};
+    try {
+        multiPicks = JSON.parse(localStorage.getItem(MULTI_PICK_KEY) || '{}') || {};
+    } catch {
+        multiPicks = {};
+    }
+    const saveMultiPicks = () => {
+        try {
+            localStorage.setItem(MULTI_PICK_KEY, JSON.stringify(multiPicks));
+        } catch {
+            // 無法寫入時只在本次有效
+        }
+    };
+    const pickKeyOf = (b: Pick<BankEntry, 'date' | 'amt' | 'key'>): string => `${b.date}|${b.amt}|${b.key}`;
     const saveMissedIgnored = () => {
         try {
             localStorage.setItem(MISSED_IGNORED_KEY, JSON.stringify([...missedIgnored]));
@@ -508,6 +524,11 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         });
         renderStmtList();
         const bank = mergeBankFiles(bankFiles);
+        // 重新載入後，之前挑過的多店期別組合直接套回去
+        bank.forEach((b, i) => {
+            const kept = multiPicks[pickKeyOf(b)];
+            if (kept && !(i in rowMulti)) rowMulti[i] = kept;
+        });
         if (bank.length === 0 || ss.length === 0) {
             lastResult = null;
             render();
@@ -872,10 +893,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
     const byIdx = (i: string | undefined): ReconcileEntry | undefined =>
         lastResult?.results.find((x) => x.idx === Number(i));
 
+    /** 這一列不再用挑過的多店期別（本次與記下來的都清掉） */
+    const dropMulti = (idx: number) => {
+        delete rowMulti[idx];
+        const r = lastResult?.results.find((x) => x.idx === idx);
+        if (r && pickKeyOf(r) in multiPicks) {
+            delete multiPicks[pickKeyOf(r)];
+            saveMultiPicks();
+        }
+    };
+
     const remember = (entry: ReconcileEntry, name: string, flag: string, pick?: GuessPick) => {
         pending = null;
         delete rowPick[entry.idx];
-        delete rowMulti[entry.idx];
+        dropMulti(entry.idx);
         if (pick) rowPick[entry.idx] = pick;
         saveConfirm(entry, {name, flag});
     };
@@ -901,6 +932,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         delete multiMemo[entry.idx];
         multiOpen.delete(entry.idx);
         rowMulti[entry.idx] = alloc;
+        multiPicks[pickKeyOf(entry)] = alloc;
+        saveMultiPicks();
         saveConfirm(entry, {name: names.join(MULTI_SEP), flag: '已確認', ...(names.length > 1 ? {names} : {})});
     };
 
@@ -909,7 +942,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         delete rowMemory[entry.idx];
         delete rowCashMode[entry.idx];
         delete rowPick[entry.idx];
-        delete rowMulti[entry.idx];
+        dropMulti(entry.idx);
         if (entry.special || entry.manualMulti) delete rowNotes[entry.idx];
         if (!isCheque(entry.kind) && entry.key in memory) {
             delete memory[entry.key];
@@ -1018,7 +1051,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 const kind = spBtn.dataset.special;
                 pending = null;
                 delete rowPick[entry.idx];
-                delete rowMulti[entry.idx];
+                dropMulti(entry.idx);
                 rowMemory[entry.idx] = {name: kind, flag: kind};
                 rerun();
             } else {
@@ -1066,7 +1099,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             if (cleared?.manualMulti) {
                 multiDraft[cleared.idx] = Object.fromEntries(cleared.alloc);
                 multiOpen.add(cleared.idx);
-                delete rowMulti[cleared.idx];
+                dropMulti(cleared.idx);
             }
             delete rowNotes[Number(clearBtn.dataset.memoClear)];
             delete rowNotePeriods[Number(clearBtn.dataset.memoClear)];
