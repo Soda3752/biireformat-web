@@ -1075,6 +1075,9 @@ describe.skipIf(![7, 8, 9, 10].every((m) => existsSync(DL(m))))('實際對帳檔
         expect(res.customers.length).toBe(res.chase.length + res.light.length);
         expect(res.chase.every((c) => c.periods >= 2 || c.group === 'monthly_due')).toBe(true);
         expect(res.light.every((c) => c.periods <= 1)).toBe(true);
+        // 熱河雪球咖啡只有 8、9 月下期帳單 → 自動視為月結，期別只寫月份
+        const c = res.customers.find((x) => x.code === '4073')!;
+        expect([c.monthly, c.monthly_auto_reason, c.lines.map((i) => [i.period, i.owed])]).toEqual([true, 'lower_only', [['8月', 7195], ['9月', 6290]]]);
     });
 });
 
@@ -1365,5 +1368,65 @@ describe('月結客人期別寫月份', () => {
         const more = hist({...hh.months as never, '2026-10': {上: [owe('5001', '咖啡', 50, '月')], 下: [owe('5001', '咖啡', 60, '月')]}} as never);
         expect(compute(more, old, {}, TODAY_NOV).customers.find((x) => x.code === '5001')!.edit?.stale).toBe(true);
         expect(c.edit).toBeNull();
+    });
+});
+
+describe('只有下期帳單的客人自動視為月結', () => {
+    const TODAY_NOV = new Date(2026, 10, 15);
+    const find = (hh: History, code: string, marks = emptyMarks()) => compute(hh, marks, {}, TODAY_NOV).customers.find((c) => c.code === code)!;
+    // 熱河雪球咖啡：8 月、9 月只有下期帳單、備註沒有「月」
+    const lowerOnly = () => hist({
+        '2026-08': {下: [owe('4073', '熱河雪球咖啡', 7195)]},
+        '2026-09': {上: [owe('1001', '甲', 100)], 下: [owe('4073', '熱河雪球咖啡', 6290)]},
+    });
+
+    test('至少 2 個月有下期、上期從沒出現 → 月結，月結規則全套用', () => {
+        const c = find(lowerOnly(), '4073');
+        expect([c.monthly, c.monthly_auto, c.monthly_auto_reason, c.periods, c.group]).toEqual([true, true, 'lower_only', 2, 'two']);
+        expect(c.message).toBe(['熱河雪球咖啡 您好～', '提醒您以下帳款尚未收到：', '・8月：7,195 元', '・9月：6,290 元', '合計：13,485 元', '',
+            closingFor(2, DEFAULT_TEMPLATES)].join('\n'));
+        // 一般客人不受影響
+        expect(find(lowerOnly(), '1001').monthly_auto_reason).toBeNull();
+        // 備註有「月」優先記成 memo
+        const memo = hist({'2026-08': {下: [owe('4073', '咖啡', 50, '月')]}, '2026-09': {下: [owe('4073', '咖啡', 60)]}});
+        expect(find(memo, '4073').monthly_auto_reason).toBe('memo');
+    });
+
+    test('只欠上個月下期 → 月結：本月該付', () => {
+        const hh = hist({'2026-09': {下: [['4073', '熱河雪球咖啡', 7195, 7195]]}, '2026-10': {下: [owe('4073', '熱河雪球咖啡', 6290)]}});
+        const c = find(hh, '4073');
+        expect([c.monthly, c.periods, c.group]).toEqual([true, 1, 'monthly_due']);
+    });
+
+    test('上期出現過（任一月份、付清也算）→ 不是月結', () => {
+        const hh = hist({
+            '2026-07': {上: [['4073', '咖啡', 30, 30]]},
+            '2026-08': {下: [owe('4073', '咖啡', 7195)]},
+            '2026-09': {下: [owe('4073', '咖啡', 6290)]},
+        });
+        const c = find(hh, '4073');
+        expect([c.monthly, c.monthly_auto, c.monthly_auto_reason, c.periods]).toEqual([false, false, null, 2]);
+    });
+
+    test('資料不足：只有 1 個月有下期（只記住一個月、或新客只出現在最近一個月）→ 不認', () => {
+        expect(find(hist({'2026-10': {下: [owe('4073', '新客', 500)]}}), '4073').monthly).toBe(false);
+        const newcomer = hist({'2026-09': {上: [owe('1001', '甲', 100)]}, '2026-10': {上: [owe('1001', '甲', 90)], 下: [owe('4073', '新客', 500)]}});
+        expect(find(newcomer, '4073').monthly).toBe(false);
+    });
+
+    test('略過的下期（複製上個月的佔位）不算月數', () => {
+        // 10 月下期整期和 9 月下期一樣 → 略過；新客只有 9 月下期是真的
+        const h9 = hist({'2026-09': {下: [owe('4073', '新客', 500)]}});
+        const h = {version: 1 as const, months: {...h9.months, '2026-10': {...h9.months['2026-09'], source: '2026-10.xlsx'}}};
+        expect(compute(h, emptyMarks(), {}, TODAY_NOV).months.find((m) => m.key === '2026-10')!.skipped.length).toBe(1);
+        expect(find(h, '4073').monthly).toBe(false);
+    });
+
+    test('手動取消月結蓋過自動規則；再設回來不留手動設定', () => {
+        const off = setMonthly(emptyMarks(), find(lowerOnly(), '4073'), false);
+        expect(off.monthly).toEqual({'4073': false});
+        const c = find(lowerOnly(), '4073', off);
+        expect([c.monthly, c.monthly_auto, c.lines.map((i) => i.period)]).toEqual([false, true, ['8月下期', '9月下期']]);
+        expect(setMonthly(off, c, true).monthly).toEqual({});
     });
 });

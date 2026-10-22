@@ -605,8 +605,9 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             : `${esc(i.period)} ${money(i.owed)}`;
     };
 
+    const MONTHLY_WHY = {memo: '備註有「月」，自動認成月結', lower_only: '只有下期帳單，自動視為月結'} as const;
     const monthlyTag = (c: Debtor): string => (c.monthly
-        ? `<span class="ac-tag-monthly" title="${c.monthly_auto ? '備註有「月」，自動認成月結' : '手動設為月結'}；同月上下期算 1 期">月結</span>` : '');
+        ? `<span class="ac-tag-monthly" title="${c.monthly_auto_reason ? MONTHLY_WHY[c.monthly_auto_reason] : '手動設為月結'}；同月上下期算 1 期">月結</span>` : '');
     const pendingInfo = (c: Debtor): string => {
         const nowY = new Date().getFullYear();
         const byMonth = new Map<string, number>();

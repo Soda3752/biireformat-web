@@ -9,6 +9,7 @@
  * - 依欠幾期分組：4 期以上／3 期／2 期／月結：本月該付／1 期（只顯示、不催、不算進總額）。月結客人同月上下期合算 1 期；手動加的欠款不算期數。
  * - 月結客人「這個月還沒結完」（該月下期被略過，或就是今天所在月份且下期尚未記住）的期別＝未到期：不算欠款、不算期數、不進訊息與下載檔，只在畫面標示。
  * - 月結客人的訊息、總表與下載檔期別只寫月份（「8月」），同月上下期合成一行、金額相加；手動加的欠款各自一行。
+ * - 自動認月結：備註有「月」，或在已記住的月份裡從沒出現在上期、且至少 2 個月（不含略過的期別）有下期帳單；手動設為／取消月結優先。
  * - 月結客人只欠「上個月」（今天所在月份的前一個月）1 期、沒有更早的欠款＝「月結：本月該付」，列入要催的名單；欠更早的月份就照期數分組。
  * - 還沒結帳的期別（整期沒有人付款，或下期和上個月下期幾乎一樣＝複製來的佔位）略過，不算欠款。
  */
@@ -153,12 +154,19 @@ export interface Debtor {
     group: DebtGroup;
     /** 目前是否當月結客人（手動設定優先，否則看自動判斷）。 */
     monthly: boolean;
-    /** 備註裡有例行標記「月」，自動認成月結。 */
+    /** 自動認成月結（見 monthly_auto_reason）。 */
     monthly_auto: boolean;
+    /** 自動認月結的原因：memo＝備註有例行標記「月」；lower_only＝只有下期帳單；null＝沒自動認。 */
+    monthly_auto_reason: MonthlyAutoReason | null;
     /** 月結客人還沒到期的期別（這個月還沒結完）：不算欠款、不算期數。 */
     pending: DebtItem[];
     pending_total: number;
 }
+
+export type MonthlyAutoReason = 'memo' | 'lower_only';
+
+/** 只有下期帳單的客人至少要幾個月有下期才自動認成月結（避免只叫過一次貨的新客被誤認）。 */
+export const LOWER_ONLY_MIN_MONTHS = 2;
 
 /** 略過的期別：整期沒有人付款（no_payment），或下期和上個月下期幾乎一樣（same_as_prev，ref＝比對的月份鍵）。 */
 export interface SkippedPeriod {
@@ -719,7 +727,8 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         }
     }
 
-    type Cust = Pick<Debtor, 'code' | 'name' | 'items' | 'notes' | 'monthly_auto'> & {noteMonths: string[]};
+    type Cust = Pick<Debtor, 'code' | 'name' | 'items' | 'notes' | 'monthly_auto' | 'monthly_auto_reason'>
+        & {noteMonths: string[]; upper: boolean; lowerMonths: Set<string>};
     const custs = new Map<string, Cust>();
     // 被排除的欠款：客人鍵 → {手動：標記 id → 期別；自動：期別}
     const settledBy = new Map<string, {manual: Map<string, DebtItem[]>; auto: DebtItem[]}>();
@@ -732,7 +741,8 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
                     ckey = hit.size === 1 ? [...hit][0] : rkey;
                 }
                 if (!custs.has(ckey)) {
-                    custs.set(ckey, {code: rec.code || (/^\d+$/.test(ckey) ? ckey : ''), name: rec.name, items: [], notes: [], noteMonths: [], monthly_auto: false});
+                    custs.set(ckey, {code: rec.code || (/^\d+$/.test(ckey) ? ckey : ''), name: rec.name, items: [], notes: [], noteMonths: [], monthly_auto: false,
+                        monthly_auto_reason: null, upper: false, lowerMonths: new Set()});
                 }
                 const c = custs.get(ckey)!;
                 const note = (text: string): void => {
@@ -740,8 +750,10 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
                     c.noteMonths.push(k);
                 };
                 c.name = rec.name; // 以最新月份的店名為準
-                if (isMonthlyMemo(rec.memo)) c.monthly_auto = true; // 任一已記住月份有「月」就算（包含略過的期別）
+                if (isMonthlyMemo(rec.memo)) c.monthly_auto_reason = 'memo'; // 任一已記住月份有「月」就算（包含略過的期別）
+                if (half === '上') c.upper = true; // 上期出現過（包含略過的期別）就不是只有下期
                 if (unsettledMap.has(`${k}|${half}`)) continue; // 還沒結帳的期別不算欠款
+                if (half === '下') c.lowerMonths.add(k); // 略過的下期（複製來的佔位）不算月數
                 const {amt, paid} = rec;
                 if (amt <= 0) continue;
                 const label = periodLabel(k, half, multiYear);
@@ -806,9 +818,15 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         }
     }
 
+    // 自動認月結：備註有「月」優先，其次是從沒出現在上期、且至少 LOWER_ONLY_MIN_MONTHS 個月有下期帳單
+    for (const c of custs.values()) {
+        if (!c.monthly_auto_reason && !c.upper && c.lowerMonths.size >= LOWER_ONLY_MIN_MONTHS) c.monthly_auto_reason = 'lower_only';
+        c.monthly_auto = !!c.monthly_auto_reason;
+    }
+
     const customers: Debtor[] = [];
     for (const c0 of custs.values()) {
-        const {noteMonths, ...c} = c0;
+        const {noteMonths, upper: _u, lowerMonths: _l, ...c} = c0;
         if (!c.items.length) continue;
         const monthly = marks.monthly?.[customerKey(c)] ?? c.monthly_auto;
         // 月結客人還沒結完的月份：期別算未到期（不算欠款、不算期數、不進訊息），相關注意事項也一併拿掉
