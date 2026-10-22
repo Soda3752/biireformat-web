@@ -94,7 +94,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
             <div class="analytics-chart-body" data-role="chart-composition"></div>
           </div>
           <div class="analytics-chart-card">
-            <div class="analytics-chart-title">原物料：Excel 實付 vs 網站推算</div>
+            <div class="analytics-chart-title">每月原物料（Excel 實付）</div>
             <div class="analytics-chart-body" data-role="chart-material"></div>
           </div>
         </div>
@@ -102,7 +102,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         <div class="analytics-section-label">每月明細</div>
         <p class="analytics-section-hint">
           毛利＝網站營收 − 原物料（Excel 實付）；店務結餘＝網站營收 − 全部支出（不含勾為家用的項目）；含家用結餘＝網站營收 − 全部支出。
-          網站推算＝帳單賣出數量 × 設定頁的商品成本。點月份可展開該月支出明細、勾選家用項目。
+          點月份可展開該月支出明細、勾選家用項目。
         </p>
         <div class="analytics-detail-table-wrap expense-table-wrap">
           <table class="analytics-detail-table-el expense-table" data-role="table"></table>
@@ -268,7 +268,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         renderChips();
         const months = Object.values(loadExpenseMonths());
         const revenueFiles = loadRevenueFiles();
-        const revenue = await computeMonthRevenue(revenueFiles);
+        const revenue = computeMonthRevenue(revenueFiles);
         if (seq !== renderSeq) return;
         const household = loadHouseholdNames();
 
@@ -328,12 +328,6 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         if (rows.length > 0 && missing.length > 0) {
             notes.push(`${missing.join('、')} 還沒有載入帳單檔，這些月份的營收、毛利、結餘先顯示「—」。`);
         }
-        const unset = [...new Set(rows.flatMap((r) => r.unsetCostProducts))].sort();
-        if (revenue.size > 0 && unset.length > 0) {
-            notes.push(
-                `有 ${unset.length} 項商品未填成本，網站推算原物料以 0 計（可到設定頁「帳單排序」補填）：${unset.slice(0, 15).join('、')}${unset.length > 15 ? '…' : ''}`,
-            );
-        }
         noticesEl.innerHTML = notes.map((n) => `<div class="cross-month-warning">${escapeHtml(n)}</div>`).join('');
     };
 
@@ -354,7 +348,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         }
     };
 
-    // 切到本分頁時重算（設定頁改了商品成本、或其他分頁改了資料都會反映）
+    // 切到本分頁時重算（其他分頁改了資料都會反映）
     window.addEventListener('hashchange', () => {
         if (window.location.hash === tab.hash) void render();
     });
@@ -369,11 +363,6 @@ function kpiHtml(y: YearSummary): string {
     const items: { label: string; value: string; hint?: string; tone?: string }[] = [
         {label: '網站營收', value: fmtMoney(y.revenue), hint: `${y.revenueMonths} 個月`},
         {label: '原物料（Excel 實付）', value: fmtMoney(y.materialPaid)},
-        {
-            label: '原物料（網站推算）',
-            value: y.revenueMonths ? fmtMoney(y.materialEst) : '—',
-            hint: y.revenueMonths ? `同期實付 ${fmtMoney(y.materialPaidWithRevenue)}，差 ${fmtSigned(y.materialPaidWithRevenue - y.materialEst)}` : undefined,
-        },
         {
             label: '扣原物料毛利',
             value: y.revenueMonths ? fmtMoney(y.grossProfit) : '—',
@@ -411,8 +400,6 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
       <th>月份</th>
       <th class="is-right">網站營收</th>
       <th class="is-right">原物料<br><small>Excel 實付</small></th>
-      <th class="is-right">原物料<br><small>網站推算</small></th>
-      <th class="is-right">差額<br><small>實付−推算</small></th>
       <th class="is-right">扣原物料毛利</th>
       <th class="is-right">毛利率</th>
       ${OTHER_CATS.map((c) => `<th class="is-right">${c}</th>`).join('')}
@@ -424,13 +411,10 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
 
     const body = rows
         .map((r) => {
-            const diff = r.materialEst === null ? null : r.materialPaid - r.materialEst;
             return `<tr data-month="${r.sortKey}" class="expense-row ${r.sortKey === selected ? 'is-selected' : ''}">
           <td><span class="expense-row-caret">${icon(r.sortKey === selected ? 'chevron-up' : 'chevron-down', 12)}</span>${r.month}月</td>
           <td class="is-right">${fmtOpt(r.revenue)}</td>
           <td class="is-right">${fmtMoney(r.materialPaid)}</td>
-          <td class="is-right">${fmtOpt(r.materialEst)}</td>
-          <td class="is-right">${fmtSigned(diff)}</td>
           <td class="is-right ${toneClass(r.grossProfit)}">${fmtOpt(r.grossProfit)}</td>
           <td class="is-right">${fmtPct(r.grossProfit, r.revenue)}</td>
           ${OTHER_CATS.map((c) => `<td class="is-right">${fmtMoney(r.totals[c])}</td>`).join('')}
@@ -443,13 +427,10 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
         .join('');
 
     const hasRev = y.revenueMonths > 0;
-    const yDiff = hasRev ? y.materialPaidWithRevenue - y.materialEst : null;
     const foot = `<tfoot><tr class="expense-total-row">
       <td>年度累計</td>
       <td class="is-right">${hasRev ? fmtMoney(y.revenue) : '—'}</td>
       <td class="is-right">${fmtMoney(y.materialPaid)}</td>
-      <td class="is-right">${hasRev ? fmtMoney(y.materialEst) : '—'}</td>
-      <td class="is-right">${fmtSigned(yDiff)}</td>
       <td class="is-right ${toneClass(hasRev ? y.grossProfit : null)}">${hasRev ? fmtMoney(y.grossProfit) : '—'}</td>
       <td class="is-right">${hasRev ? fmtPct(y.grossProfit, y.revenue) : '—'}</td>
       ${OTHER_CATS.map((c) => `<td class="is-right">${fmtMoney(y.totals[c])}</td>`).join('')}

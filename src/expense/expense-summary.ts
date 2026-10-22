@@ -15,9 +15,6 @@ export interface MonthSummary {
     revenue: number | null;
     /** 原物料：Excel 實付 */
     materialPaid: number;
-    /** 原物料：網站推算（數量 × 商品成本） */
-    materialEst: number | null;
-    unsetCostProducts: string[];
     totals: Record<ExpenseCategory, number>;
     /** 「其他」中被勾為家用的金額 */
     household: number;
@@ -47,8 +44,6 @@ export function summarizeMonth(expense: MonthExpense, revenue: MonthRevenue | un
         expense,
         revenue: rev,
         materialPaid: expense.totals['原物料'],
-        materialEst: revenue ? revenue.estCost : null,
-        unsetCostProducts: revenue?.unsetCostProducts ?? [],
         totals: expense.totals,
         household: householdAmount,
         shopExpense,
@@ -65,9 +60,6 @@ export interface YearSummary {
     revenueMonths: number;
     revenue: number;
     materialPaid: number;
-    /** 只累計有網站營收的月份，方便與 materialEst 對照 */
-    materialPaidWithRevenue: number;
-    materialEst: number;
     totals: Record<ExpenseCategory, number>;
     household: number;
     shopExpense: number;
@@ -85,8 +77,6 @@ export function summarizeYear(rows: ReadonlyArray<MonthSummary>): YearSummary {
         revenueMonths: 0,
         revenue: 0,
         materialPaid: 0,
-        materialPaidWithRevenue: 0,
-        materialEst: 0,
         totals,
         household: 0,
         shopExpense: 0,
@@ -104,8 +94,6 @@ export function summarizeYear(rows: ReadonlyArray<MonthSummary>): YearSummary {
         if (r.revenue !== null) {
             y.revenueMonths += 1;
             y.revenue += r.revenue;
-            y.materialPaidWithRevenue += r.materialPaid;
-            y.materialEst += r.materialEst ?? 0;
             y.grossProfit += r.grossProfit ?? 0;
             y.shopBalance += r.shopBalance ?? 0;
             y.allBalance += r.allBalance ?? 0;

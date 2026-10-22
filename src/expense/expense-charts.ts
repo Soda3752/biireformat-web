@@ -69,17 +69,15 @@ export function compositionOption(rows: ReadonlyArray<MonthSummary>): EChartsOpt
     };
 }
 
-/** 原物料：Excel 實付 vs 網站推算 */
+/** 每月原物料（Excel 實付） */
 export function materialOption(rows: ReadonlyArray<MonthSummary>): EChartsOption {
     return {
         tooltip: {trigger: 'axis', valueFormatter: moneyTooltip},
-        legend: {top: 0},
-        grid: {left: 8, right: 8, top: 36, bottom: 8, containLabel: true},
+        grid: {left: 8, right: 8, top: 16, bottom: 8, containLabel: true},
         xAxis: {type: 'category', data: rows.map((r) => `${r.month}月`), axisLabel: {fontSize: 11}},
         yAxis: {type: 'value', axisLabel: {formatter: (v: number) => fmtMoney(v)}},
         series: [
             {name: 'Excel 實付', type: 'bar', data: rows.map((r) => r.materialPaid), itemStyle: {color: PALETTE.cost}},
-            {name: '網站推算', type: 'bar', data: rows.map((r) => r.materialEst), itemStyle: {color: CATEGORY_PALETTE[4]}},
         ],
     };
 }

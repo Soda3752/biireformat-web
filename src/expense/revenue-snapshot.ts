@@ -1,5 +1,5 @@
 /**
- * 帳單檔 → 每月商品銷售快照，以及依目前商品成本換算「網站推算原物料成本」。
+ * 帳單檔 → 每月商品銷售快照，並彙總成每月網站營收。
  *
  * 營收計算沿用數據分析的 buildDataset（數量 × 單價），月份以 row.year + row.month 切分，
  * 與跨月數據分析的 rowMonthSortKey 規約一致。
@@ -9,7 +9,7 @@ import {parseBillFile} from '@/readers/bill-reader';
 import {Bill} from '@/domain/models/bill';
 import {ExcelRowType} from '@/domain/excel-row-data';
 import {loadCategoryMap} from '@/analytics/category-loader';
-import {type CostMap, loadCostMap} from '@/analytics/cost-loader';
+import {loadCostMap} from '@/analytics/cost-loader';
 import {buildDataset} from '@/analytics/dataset-builder';
 import {rowMonthSortKey} from '@/analytics/cross-month/month-aggregators';
 import type {ProductSale, RevenueFile} from './expense-store';
@@ -56,27 +56,15 @@ export async function parseBillToRevenueFile(file: File): Promise<RevenueFile> {
 export interface MonthRevenue {
     /** 網站營收（數量 × 單價） */
     amount: number;
-    /** 網站推算原物料成本（數量 × 商品成本，未填成本以 0 計） */
-    estCost: number;
-    /** 未填成本的商品 */
-    unsetCostProducts: string[];
     fileNames: string[];
 }
 
-export async function computeMonthRevenue(files: ReadonlyArray<RevenueFile>): Promise<Map<string, MonthRevenue>> {
-    const costMap: CostMap = await loadCostMap();
+export function computeMonthRevenue(files: ReadonlyArray<RevenueFile>): Map<string, MonthRevenue> {
     const out = new Map<string, MonthRevenue>();
     for (const f of files) {
         for (const [key, products] of Object.entries(f.months)) {
-            const acc = out.get(key) ?? {amount: 0, estCost: 0, unsetCostProducts: [], fileNames: []};
-            const unset = new Set(acc.unsetCostProducts);
-            for (const p of products) {
-                acc.amount += p.amount;
-                const cost = costMap.get(p.name);
-                if (cost === undefined || cost === null) unset.add(p.name);
-                else acc.estCost += p.count * cost;
-            }
-            acc.unsetCostProducts = [...unset].sort();
+            const acc = out.get(key) ?? {amount: 0, fileNames: []};
+            for (const p of products) acc.amount += p.amount;
             acc.fileNames.push(f.fileName);
             out.set(key, acc);
         }
