@@ -581,8 +581,8 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             ? `<div class="ac-table-wrap"><table class="ac-table">
                 <thead><tr><th>代號</th><th>客人</th><th>哪幾期</th><th class="ac-num">金額</th><th>原因</th><th>標記日期</th><th></th></tr></thead>
                 <tbody>${groups.map((g) => `<tr><td>${esc(g.code)}</td><td><b>${esc(g.name)}</b></td>
-                  <td class="ac-periods">${g.items.length
-                    ? g.items.map((i) => `${esc(i.period)}${i.manual?.reason ? `（${esc(i.manual.reason)}）` : ''} ${money(i.owed)}`).join('<br>')
+                  <td class="ac-periods">${g.lines.length
+                    ? g.lines.map((i) => `${esc(i.period)}${i.manual?.reason ? `（${esc(i.manual.reason)}）` : ''} ${money(i.owed)}`).join('<br>')
                     : '<span class="muted">目前沒有符合的期別</span>'}</td>
                   <td class="ac-num">${money(g.total)}</td>
                   <td>${esc(g.reason || '（未填）')}</td>
@@ -659,7 +659,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             : `<button type="button" class="ac-name-link" data-jump="${esc(custId(c))}" title="跳到下面這位的催款訊息"><b>${esc(c.name)}</b></button>`);
         const row = (c: Debtor): string => `<tr data-row="${esc(custId(c))}" class="${copied.has(custId(c)) ? 'is-done' : ''}">
                 <td>${esc(c.code)}</td><td>${nameCell(c)}${monthlyTag(c)}${periodsInfo(c)}</td>
-                <td class="ac-periods">${c.items.map((i) => itemHtml(c, i)).join('<br>')}${pendingInfo(c)}</td>
+                <td class="ac-periods">${c.lines.map((i) => itemHtml(c, i)).join('<br>')}${pendingInfo(c)}</td>
                 <td class="ac-num"><b>${money(c.total)}</b></td>
                 <td>${c.notes.map((n) => `<div class="ac-note">${esc(n)}</div>`).join('')}</td>
                 <td class="ac-btns">${c.group !== 'one' ? `<button type="button" class="btn btn-secondary btn-xs" data-copy="${esc(custId(c))}">複製訊息</button>` : ''}
@@ -752,13 +752,13 @@ function clearDialog(hasMarks: boolean): Promise<{clearMarks: boolean} | null> {
 
 /** 「已結清」視窗：選填原因。 */
 function settleDialog(c: Debtor): Promise<{reason: string} | null> {
-    const periods = c.items.map((i) => `${esc(i.period)}${i.manual?.reason ? `（${esc(i.manual.reason)}）` : ''} ${money(i.owed)} 元`).join('<br>');
+    const periods = c.lines.map((i) => `${esc(i.period)}${i.manual?.reason ? `（${esc(i.manual.reason)}）` : ''} ${money(i.owed)} 元`).join('<br>');
     const body = `<p><b>${esc(c.code)} ${esc(c.name)}</b>　目前欠款 ${money(c.total)} 元</p>
       <div class="ac-settle-periods">${periods}</div>
       <label class="ac-field"><span>原因（選填）</span>
         <input class="app-form-input" type="text" data-role="reason" placeholder="例如：已補款、回饋金自扣" autocomplete="off"></label>
       <div class="ac-chips" data-role="chips"></div>
-      <div class="ac-settle-note">確定後，上面這 ${c.items.length} 筆不再算欠款。之後新的月份沒付仍會出現；按錯可以在畫面上方按「復原」。</div>`;
+      <div class="ac-settle-note">確定後，上面這 ${c.lines.length} 筆不再算欠款。之後新的月份沒付仍會出現；按錯可以在畫面上方按「復原」。</div>`;
     const {dialog, close} = openModal('標記已結清', body,
         `<button type="button" class="btn btn-secondary" data-act="cancel">取消</button>
          <button type="button" class="btn btn-primary" data-act="ok">確定</button>`);
@@ -846,12 +846,18 @@ function settleDialog(c: Debtor): Promise<{reason: string} | null> {
 
 const periodText = (key: string, half: '上' | '下'): string => `${monthLabel(key)}${half}期`;
 
-/** 「加一筆欠款」／修改視窗：期別（記住的月份＋上下期，或輸入更早的年月）、金額（正整數）、原因（選填）。 */
+/**
+ * 「加一筆欠款」／修改視窗：期別（記住的月份＋上下期，或輸入更早的年月）、金額（正整數）、原因（選填）。
+ * 月結客人只選月份（記成下期；修改時沿用原本的上下期）。
+ */
 function debtDialog(c: Debtor, history: History, editing?: ManualDebt): Promise<ManualDebtInput | null> {
     const OTHER = '__other';
     const monthKeys = [...new Set([...Object.keys(history.months), ...(editing ? [editing.month_key] : [])])].sort().reverse();
-    const opts = monthKeys.flatMap((k) => (['上', '下'] as const).map((h) =>
-        `<option value="${k}|${h}">${esc(periodText(k, h))}</option>`));
+    const halfOf = (k: string): '上' | '下' => (editing?.month_key === k ? editing.half : '下');
+    const opts = c.monthly
+        ? monthKeys.map((k) => `<option value="${k}|${halfOf(k)}">${esc(monthLabel(k))}</option>`)
+        : monthKeys.flatMap((k) => (['上', '下'] as const).map((h) =>
+            `<option value="${k}|${h}">${esc(periodText(k, h))}</option>`));
     const cur = editing ? `${editing.month_key}|${editing.half}` : '';
     const body = `<p><b>${esc(c.code)} ${esc(c.name)}</b>　目前欠款 ${money(c.total)} 元</p>
       <label class="ac-field"><span>期別</span>
@@ -859,7 +865,7 @@ function debtDialog(c: Debtor, history: History, editing?: ManualDebt): Promise<
           <option value="">請選擇期別…</option>${opts}<option value="${OTHER}">其他月份（自己輸入年月）…</option></select></label>
       <div class="ac-field-row" data-role="other" hidden>
         <label class="ac-field"><span>年月</span><input class="app-form-input" type="month" data-role="month"></label>
-        <label class="ac-field"><span>上／下期</span>
+        <label class="ac-field"${c.monthly ? ' hidden' : ''}><span>上／下期</span>
           <select class="app-form-input" data-role="half"><option value="上">上期</option><option value="下">下期</option></select></label>
       </div>
       <label class="ac-field"><span>金額（元，正整數）</span>

@@ -55,7 +55,7 @@ export async function buildSummaryXlsx(result: CollectResult): Promise<Blob> {
     ws = addSheet(wb, '各期明細', ['代號', '客人', '期別', '帳單金額', '已收', '欠款', '收款日／備註（原檔）', '情形'],
         [8, 18, 14, 12, 12, 12, 30, 10]);
     for (const c of customers) {
-        for (const i of c.items) {
+        for (const i of c.lines) {
             addStyledRow(ws, [c.code, c.name, i.period, i.manual ? null : i.amt, i.paid || null, i.owed,
                 i.manual ? i.manual.reason : [i.date_text, i.memo].filter(Boolean).join('；'),
                 i.manual ? '手動加入' : i.partial ? '部分付款' : '未付'],

@@ -859,7 +859,7 @@ describe('月結客人未到期與月結本月該付', () => {
         expect(c.items.map((i) => i.period)).toEqual(['9月上期', '9月下期']);
         expect(res.chase.map((x) => x.code)).toEqual(['1001']);
         expect([res.chase_total, res.light.length]).toEqual([8700, 0]);
-        expect(c.message).toBe(['寶米 您好～', '提醒您以下帳款尚未收到：', '・9月上期：8,000 元', '・9月下期：700 元', '合計：8,700 元', '', NEW_CLOSING].join('\n'));
+        expect(c.message).toBe(['寶米 您好～', '提醒您以下帳款尚未收到：', '・9月：8,700 元', '合計：8,700 元', '', NEW_CLOSING].join('\n'));
         const txt = buildMessagesText(res, '2026-10-21 12:00');
         expect(txt).toContain('月結：本月該付（1 位）');
         expect(txt).not.toContain('7,000');
@@ -1002,7 +1002,9 @@ describe('手動修改催款訊息', () => {
         expect(added.auto_message).not.toBe(c0.auto_message);
         const mo = pick(h, setMonthly(m, c0, true));
         expect(mo.message).toBe(EDITED);
-        expect(mo.edit?.stale).toBe(mo.auto_message !== c0.auto_message);
+        // 設為月結只是期別改寫月份、同月合併，各月金額不變 → 不提醒
+        expect(mo.auto_message).not.toBe(c0.auto_message);
+        expect(mo.edit?.stale).toBe(false);
         // 新月份進來
         const h2 = hist({...build().months as never, '2026-10': {上: [owe('7016', '寶米早餐', 222)]}} as never);
         expect(pick(h2, m).edit?.stale).toBe(true);
@@ -1283,5 +1285,85 @@ describe('編輯訊息儲存時重算合計', () => {
         const total = 7114;
         expect(sumMessageLines(MSG('7,050'))).not.toBe(total);
         expect(sumMessageLines(MSG('7,114').replace('64 元', '128 元'))).toBe(7114);
+    });
+});
+
+describe('月結客人期別寫月份', () => {
+    const TODAY_NOV = new Date(2026, 10, 15);
+    // 熱河雪球咖啡（月結）：8 月、9 月只有下期帳單；甲（一般）照舊
+    const h = () => hist({
+        '2026-08': {下: [owe('5001', '熱河雪球咖啡', 7195, '月')]},
+        '2026-09': {上: [owe('1001', '甲', 100)], 下: [owe('5001', '熱河雪球咖啡', 6290, '月'), owe('1001', '甲', 200)]},
+    });
+    const find = (hh: History, code: string, marks = emptyMarks()) => compute(hh, marks, {}, TODAY_NOV).customers.find((c) => c.code === code)!;
+    const CLOSING = (n: number) => closingFor(n, DEFAULT_TEMPLATES);
+
+    test('月結客人訊息與總表只寫月份；期數算法與結尾句不變', () => {
+        const c = find(h(), '5001');
+        expect(c.message).toBe(['熱河雪球咖啡 您好～', '提醒您以下帳款尚未收到：', '・8月：7,195 元', '・9月：6,290 元', '合計：13,485 元', '', CLOSING(2)].join('\n'));
+        expect(c.periods).toBe(2);
+        expect(c.items.map((i) => i.period)).toEqual(['8月下期', '9月下期']); // 原始期別（已結清標記用）不變
+        expect(c.lines.map((i) => [i.period, i.owed])).toEqual([['8月', 7195], ['9月', 6290]]);
+    });
+
+    test('一般客人完全不變', () => {
+        const c = find(h(), '1001');
+        expect(c.lines).toEqual(c.items);
+        expect(c.message).toContain('・9月上期：100 元\n・9月下期：200 元');
+    });
+
+    test('同月上下期都有：合成一行金額相加；部分付款照合併後的數字', () => {
+        const hh = hist({
+            '2026-08': {上: [owe('5001', '咖啡', 90, '月')]},
+            '2026-09': {上: [owe('5001', '咖啡', 1000, '月')], 下: [['5001', '咖啡', 2000, 500, '月']]},
+        });
+        const c = find(hh, '5001');
+        expect(c.periods).toBe(2);
+        expect(c.lines.map((i) => [i.period, i.amt, i.paid, i.owed, i.partial])).toEqual([['8月', 90, 0, 90, false], ['9月', 3000, 500, 2500, true]]);
+        expect(c.message).toContain('・9月：2,500 元（帳單 3,000 元，已收 500 元）\n合計：2,590 元');
+    });
+
+    test('手動加一筆欠款：月結客人也只寫月份，各自一行', () => {
+        const c0 = find(h(), '5001');
+        const c = find(h(), '5001', addManualDebt(emptyMarks(), c0, {month_key: '2026-09', half: '下', amount: 64, reason: '少付'}));
+        expect(c.message).toContain('・9月：6,290 元\n・9月（少付）：64 元\n合計：13,549 元');
+    });
+
+    test('跨年時月份帶年份', () => {
+        const hh = hist({'2025-12': {下: [owe('5001', '咖啡', 50, '月')]}, '2026-01': {下: [owe('5001', '咖啡', 60, '月')]}});
+        expect(find(hh, '5001').lines.map((i) => i.period)).toEqual(['2025年12月', '2026年1月']);
+    });
+
+    test('下載的總表與文字檔也用月份', async () => {
+        const res = compute(h(), emptyMarks(), {}, TODAY_NOV);
+        const txt = buildMessagesText(res, '2026-11-15 10:00');
+        expect(txt).toContain('・8月：7,195 元');
+        expect(txt).not.toContain('8月下期');
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(await (await buildSummaryXlsx(res)).arrayBuffer());
+        const sum = wb.getWorksheet('催款總表')!.getRows(2, 3)!.find((r) => r.getCell(1).value === '5001')!;
+        expect([sum.getCell(4).value, sum.getCell(5).value]).toEqual(['8月、9月', '8月 7,195、9月 6,290']);
+        const det = wb.getWorksheet('各期明細')!.getRows(2, 10)!.filter((r) => r.getCell(1).value === '5001').map((r) => r.getCell(3).value);
+        expect(det).toEqual(['8月', '9月']);
+        const plain = wb.getWorksheet('各期明細')!.getRows(2, 10)!.filter((r) => r.getCell(1).value === '1001').map((r) => r.getCell(3).value);
+        expect(plain).toEqual(['9月上期', '9月下期']);
+    });
+
+    test('舊版編輯過的訊息：改成月份寫法（含同月合併）不算欠款變動；金額真的變了才提醒', () => {
+        const hh = hist({
+            '2026-08': {下: [owe('5001', '咖啡', 7195, '月')]},
+            '2026-09': {上: [owe('5001', '咖啡', 1000, '月')], 下: [owe('5001', '咖啡', 6290, '月')]},
+        });
+        const c = find(hh, '5001');
+        const oldAuto = ['咖啡 您好～', '提醒您以下帳款尚未收到：', '・8月下期：7,195 元', '・9月上期：1,000 元', '・9月下期：6,290 元', '合計：14,485 元', '', '舊結尾'].join('\n');
+        const old = {...emptyMarks(), edits: {'5001': {text: '我改的', base: oldAuto, edited_at: '2026-10-01T10:00:00'}}};
+        expect(find(hh, '5001', old).message).toBe('我改的');
+        expect(find(hh, '5001', old).edit?.stale).toBe(false);
+        const changed = {...old, edits: {'5001': {...old.edits['5001'], base: oldAuto.replace('1,000 元', '900 元').replace('14,485', '14,385')}}};
+        expect(find(hh, '5001', changed).edit?.stale).toBe(true);
+        // 新加一個月的欠款也要提醒
+        const more = hist({...hh.months as never, '2026-10': {上: [owe('5001', '咖啡', 50, '月')], 下: [owe('5001', '咖啡', 60, '月')]}} as never);
+        expect(compute(more, old, {}, TODAY_NOV).customers.find((x) => x.code === '5001')!.edit?.stale).toBe(true);
+        expect(c.edit).toBeNull();
     });
 });

@@ -8,6 +8,7 @@
  * - 同客人（依代號）跨好幾個月、好幾期的欠款加總；店名用最新月份的。
  * - 依欠幾期分組：4 期以上／3 期／2 期／月結：本月該付／1 期（只顯示、不催、不算進總額）。月結客人同月上下期合算 1 期；手動加的欠款不算期數。
  * - 月結客人「這個月還沒結完」（該月下期被略過，或就是今天所在月份且下期尚未記住）的期別＝未到期：不算欠款、不算期數、不進訊息與下載檔，只在畫面標示。
+ * - 月結客人的訊息、總表與下載檔期別只寫月份（「8月」），同月上下期合成一行、金額相加；手動加的欠款各自一行。
  * - 月結客人只欠「上個月」（今天所在月份的前一個月）1 期、沒有更早的欠款＝「月結：本月該付」，列入要催的名單；欠更早的月份就照期數分組。
  * - 還沒結帳的期別（整期沒有人付款，或下期和上個月下期幾乎一樣＝複製來的佔位）略過，不算欠款。
  */
@@ -115,6 +116,8 @@ export interface SettledGroup {
     code: string;
     name: string;
     items: DebtItem[];
+    /** 顯示用的期別（見 displayItems）。 */
+    lines: DebtItem[];
     total: number;
     reason: string;
     marked_at: string;
@@ -135,6 +138,8 @@ export interface Debtor {
     code: string;
     name: string;
     items: DebtItem[];
+    /** 顯示用的期別（訊息、總表、下載檔）：月結客人寫月份、同月上下期合成一行；一般客人同 items。 */
+    lines: DebtItem[];
     notes: string[];
     total: number;
     /** 實際使用的訊息：有手動改過就是她改的版本，否則是自動產生的。畫面、複製、下載都用這個。 */
@@ -630,6 +635,48 @@ export function unsettledPeriods(history: History): Map<string, SkippedPeriod> {
     return out;
 }
 
+/**
+ * 顯示用的期別：月結客人只寫月份（「8月」），同月的上下期合成一行（帳單、已收、欠款相加，有收到款就算部分付款）；
+ * 手動加的欠款各自一行、一樣只寫月份。一般客人原樣回傳。
+ */
+export function displayItems(items: DebtItem[], monthly: boolean): DebtItem[] {
+    if (!monthly) return items;
+    const out: DebtItem[] = [];
+    const byMonth = new Map<string, DebtItem>();
+    const join = (a: string, b: string): string => [...new Set([a, b].filter(Boolean))].join('；');
+    for (const i of items) {
+        const period = i.period.replace(/[上下]期$/, '');
+        const same = i.manual ? undefined : byMonth.get(i.month_key);
+        if (!same) {
+            const line = {...i, period};
+            if (!i.manual) byMonth.set(i.month_key, line);
+            out.push(line);
+            continue;
+        }
+        same.amt += i.amt;
+        same.paid += i.paid;
+        same.owed += i.owed;
+        same.partial = same.paid > 0;
+        same.date_text = join(same.date_text, i.date_text);
+        same.memo = join(same.memo, i.memo);
+    }
+    return out;
+}
+
+/** 欠款明細裡各期別的金額（月結寫法：期別去掉上下期、同期相加）＋合計行，用來判斷改寫法前後欠款是否一樣。 */
+function monthlyDebtSig(msg: string): string {
+    const sums = new Map<string, number>();
+    const lines = messageBody(msg).split('\n');
+    for (const l of lines) {
+        const a = lineAmount(l);
+        if (a === null) continue;
+        const label = l.replace(/^\s*・/, '').split(/[：:]/)[0].trim().replace(/^((?:\d+年)?\d+月)[上下]期/, '$1');
+        sums.set(label, (sums.get(label) ?? 0) + a);
+    }
+    const total = lines.find((l) => TOTAL_LINE_RE.test(l)) ?? '';
+    return JSON.stringify([[...sums].sort(), total.replace(/\s/g, '')]);
+}
+
 const GROUP_RANK: Record<DebtGroup, number> = {four: 0, three: 1, two: 2, monthly_due: 3, one: 4};
 const groupOf = (periods: number, monthlyDue: boolean): DebtGroup =>
     (periods >= 4 ? 'four' : periods === 3 ? 'three' : periods === 2 ? 'two' : monthlyDue ? 'monthly_due' : 'one');
@@ -780,13 +827,17 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         // 期數：每個有欠款的期別 1 期，月結客人同月上下期合成 1 期；手動加的欠款不算
         const periods = new Set(c.items.filter((i) => !i.manual).map((i) => (monthly ? i.month_key : periodKey(i)))).size;
         const monthlyDue = monthly && periods === 1 && c.items.every((i) => i.month_key === prevKey);
-        const d: Debtor = {...c, total, message: '', auto_message: '', edit: null, periods, group: groupOf(periods, monthlyDue), monthly,
+        const d: Debtor = {...c, lines: displayItems(c.items, monthly), total, message: '', auto_message: '', edit: null, periods,
+            group: groupOf(periods, monthlyDue), monthly,
             pending, pending_total: pending.reduce((t, i) => t + i.owed, 0)};
         d.auto_message = buildMessage(d, templates);
         const edit = marks.edits?.[customerKey(c)];
         d.message = edit ? edit.text : d.auto_message;
-        // 只比對欠款明細（到「合計」那行為止）；結尾句因範本改變不算欠款變動
-        d.edit = edit ? {...edit, stale: messageBody(edit.base) !== messageBody(d.auto_message)} : null;
+        // 只比對欠款明細（到「合計」那行為止）；結尾句因範本改變不算欠款變動。
+        // 月結客人只比各期別金額：期別改寫成月份、同月上下期合併（舊版編輯當時是「8月上期」「8月下期」）不算變動
+        const stale = !!edit && messageBody(edit.base) !== messageBody(d.auto_message)
+            && !(monthly && monthlyDebtSig(edit.base) === monthlyDebtSig(d.auto_message));
+        d.edit = edit ? {...edit, stale} : null;
         customers.push(d);
     }
     const isCode = (x: string): boolean => /^\d+$/.test(x);
@@ -811,16 +862,20 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
     const sumOwed = (items: DebtItem[]): number => items.reduce((t, i) => t + i.owed, 0);
     for (const [who, sb] of settledBy) {
         const base = [...custs.values()].find((c) => (c.code || c.name) === who)!;
+        const monthly = marks.monthly?.[customerKey(base)] ?? base.monthly_auto;
         for (const [id, items] of sb.manual) {
             const m = marks.settled.find((x) => x.id === id)!;
-            settled.push({id, kind: 'manual', customer: who, code: base.code, name: base.name, items, total: sumOwed(items),
+            settled.push({id, kind: 'manual', customer: who, code: base.code, name: base.name, items,
+                lines: displayItems(items, monthly), total: sumOwed(items),
                 reason: m.reason, marked_at: m.marked_at});
         }
     }
     for (const [who, p] of Object.entries(legacy)) {
         const base = [...custs.values()].find((c) => (c.code || c.name) === who);
         const items = settledBy.get(who)?.auto ?? [];
+        const monthly = base ? marks.monthly?.[customerKey(base)] ?? base.monthly_auto : false;
         settled.push({id: `legacy:${who}`, kind: 'legacy', customer: who, code: base?.code ?? p.code, name: base?.name ?? p.name, items,
+            lines: displayItems(items, monthly),
             total: sumOwed(items), reason: LEGACY_REASON, marked_at: p.marked_at});
     }
     settled.sort((a, b) => {
@@ -848,9 +903,10 @@ export function filterCustomers(customers: Debtor[], keyword: string, onlyNotes 
 /** 訊息裡欠款明細的部分（到「合計」那行為止），不含結尾句。 */
 export const messageBody = (msg: string): string => /^[\s\S]*?\n合計：[^\n]*/.exec(msg)?.[0] ?? msg;
 
-export function buildMessage(c: Pick<Debtor, 'name' | 'items' | 'total' | 'periods' | 'group'>, templates: MessageTemplates = DEFAULT_TEMPLATES): string {
+export function buildMessage(c: Pick<Debtor, 'name' | 'items' | 'total' | 'periods' | 'group'> & Partial<Pick<Debtor, 'lines'>>,
+    templates: MessageTemplates = DEFAULT_TEMPLATES): string {
     const lines = [`${c.name} 您好～`, '提醒您以下帳款尚未收到：'];
-    for (const i of c.items) {
+    for (const i of c.lines ?? c.items) {
         let line = `・${i.period}${i.manual?.reason ? `（${i.manual.reason}）` : ''}：${money(i.owed)} 元`;
         if (i.partial) line += `（帳單 ${money(i.amt)} 元，已收 ${money(i.paid)} 元）`;
         lines.push(line);
@@ -861,6 +917,6 @@ export function buildMessage(c: Pick<Debtor, 'name' | 'items' | 'total' | 'perio
 
 const itemLabel = (i: DebtItem): string => `${i.period}${i.manual?.reason ? `（${i.manual.reason}）` : ''}`;
 
-export const periodsText = (c: Debtor): string => c.items.map(itemLabel).join('、');
+export const periodsText = (c: Debtor): string => c.lines.map(itemLabel).join('、');
 
-export const amountsText = (c: Debtor): string => c.items.map((i) => `${itemLabel(i)} ${money(i.owed)}`).join('、');
+export const amountsText = (c: Debtor): string => c.lines.map((i) => `${itemLabel(i)} ${money(i.owed)}`).join('、');
