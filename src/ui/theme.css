@@ -2465,7 +2465,7 @@ p {
     background-color: var(--color-danger-soft);
 }
 
-.analytics-least-profit tbody tr.is-loss td:nth-child(10) {
+.analytics-least-profit tbody tr.is-loss td:nth-child(11) {
     color: var(--color-danger);
     font-weight: var(--font-weight-semibold);
 }
@@ -2477,6 +2477,81 @@ p {
 
 .analytics-least-profit tbody td.cell-premium {
     color: var(--color-success);
+}
+
+/* 客戶商品明細展開 */
+.analytics-least-profit-expand-th,
+.analytics-least-profit-expand-cell {
+    width: 1%;
+    padding-right: 0 !important;
+}
+
+.analytics-least-profit-expand {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-surface);
+    color: var(--color-text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.analytics-least-profit-expand:hover,
+.analytics-least-profit-expand[aria-expanded="true"] {
+    background-color: var(--color-primary-soft);
+    color: var(--color-text-primary);
+}
+
+.analytics-least-profit tbody tr.analytics-least-profit-breakdown-row > td {
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    background-color: var(--color-surface-hover);
+}
+
+.analytics-least-profit tbody tr.analytics-least-profit-breakdown-row:hover {
+    background-color: transparent;
+}
+
+/* 釘在外層表左側，外層橫捲時小表仍在可視範圍；手機寬度下小表自己可橫向捲動 */
+.analytics-least-profit-breakdown {
+    position: sticky;
+    left: var(--space-3);
+    display: inline-block;
+    max-width: calc(100vw - 64px);
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background-color: var(--color-surface);
+}
+
+.analytics-least-profit-breakdown table {
+    border-collapse: collapse;
+}
+
+.analytics-least-profit-breakdown th {
+    padding: var(--space-1) var(--space-3);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+    border-bottom: 1px solid var(--color-border);
+    text-align: left;
+    white-space: nowrap;
+    cursor: help;
+}
+
+.analytics-least-profit-breakdown th.is-right {
+    text-align: right;
+}
+
+.analytics-least-profit-breakdown td {
+    padding: var(--space-1) var(--space-3);
+}
+
+.analytics-least-profit-breakdown tfoot td {
+    border-top: 2px solid var(--color-border);
+    border-bottom: none;
+    font-weight: var(--font-weight-semibold);
 }
 
 .analytics-warn-pill {

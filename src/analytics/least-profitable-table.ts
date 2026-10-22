@@ -41,6 +41,15 @@ interface CustomerAgg {
     relativePnL: number;    // Σ (客戶單價 − 商品均價) × 數量；正 = 營利、負 = 虧損（該漲價）
     perUnitPnL: number;     // relativePnL / count
     allCostUnset: boolean;
+    products: Map<string, ProductBreakdown>;
+}
+
+/** 客戶在單一商品上的價差拆解，展開列用。 */
+interface ProductBreakdown {
+    productName: string;
+    count: number;
+    priceAmount: number;  // Σ 單價 × 數量（客戶單價加權平均的分子）
+    productAvg: number;   // 該商品在資料集的整體加權均價
 }
 
 export interface LeastProfitableTableOptions {
@@ -71,6 +80,7 @@ export function createLeastProfitableTable(
       <table class="analytics-detail-table-el">
         <thead>
           <tr>
+            <th class="analytics-least-profit-expand-th" aria-label="展開商品明細"></th>
             <th data-sort-key="rank" class="is-right">排名<span class="sort-indicator"></span></th>
             <th data-sort-key="customer">客戶<span class="sort-indicator"></span></th>
             <th>線別</th>
@@ -97,6 +107,8 @@ export function createLeastProfitableTable(
     let sortKey: SortKey = 'relativePnL';
     let sortDir: SortDir = 'asc';
     let minCount = 0;
+    // 已展開商品明細的客戶代碼；跨 render 保留，排序/門檻變動時不會收合
+    const expanded = new Set<string>();
 
     const fmt = (v: number) => v.toLocaleString('zh-TW');
     const fmtMoney = (v: number) => Math.round(v).toLocaleString('zh-TW');
@@ -111,6 +123,14 @@ export function createLeastProfitableTable(
         if (Math.abs(v) < 0.05) return '0';
         return (v > 0 ? '+' : '') + v.toFixed(1);
     };
+    const fmtPrice = (v: number) =>
+        v.toLocaleString('zh-TW', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+    const fmtSignedPrice = (v: number) => {
+        if (Math.abs(v) < 0.05) return '0';
+        return (v > 0 ? '+' : '') + fmtPrice(v);
+    };
+    // 與 fmtSigned* 的歸零門檻一致，避免顯示 0 卻上色
+    const signClass = (v: number, eps: number) => (v >= eps ? 'cell-positive' : v <= -eps ? 'cell-negative' : '');
 
     const aggregate = (): CustomerAgg[] => {
         // 第一輪：算每項商品在「目前資料集」的整體均價（跨所有客戶）
@@ -142,6 +162,7 @@ export function createLeastProfitableTable(
                     relativePnL: 0,
                     perUnitPnL: 0,
                     allCostUnset: true,
+                    products: new Map(),
                 };
                 map.set(r.customerCode, g);
             }
@@ -155,6 +176,14 @@ export function createLeastProfitableTable(
             const ps = productStats.get(r.productName);
             const productAvg = ps && ps.count > 0 ? ps.amount / ps.count : 0;
             g.relativePnL += (r.price - productAvg) * r.count;
+
+            let pb = g.products.get(r.productName);
+            if (!pb) {
+                pb = {productName: r.productName, count: 0, priceAmount: 0, productAvg};
+                g.products.set(r.productName, pb);
+            }
+            pb.count += r.count;
+            pb.priceAmount += r.price * r.count;
         }
         // 計算 avgUnitProfit / perUnitPnL
         for (const g of map.values()) {
@@ -210,7 +239,7 @@ export function createLeastProfitableTable(
         statsEl.textContent = `符合條件 ${aggs.length.toLocaleString()} 位 / 全部 ${aggsAll.length.toLocaleString()} 位${filterHint} / 顯示 ${limited.length.toLocaleString()} 位`;
 
         if (limited.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--color-text-muted);padding:24px">無符合條件的客戶</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--color-text-muted);padding:24px">無符合條件的客戶</td></tr>`;
         } else {
             tbody.innerHTML = limited
                 .map((g) => {
@@ -230,8 +259,10 @@ export function createLeastProfitableTable(
                         : g.relativePnL < 0
                             ? 'cell-raise-price'
                             : '';
-                    return `
+                    const isOpen = expanded.has(g.customerCode);
+                    const row = `
               <tr class="${rowClass}" data-customer-code="${escapeHtml(g.customerCode)}" ${options.onCustomerClick ? 'title="點擊以篩選此客戶"' : ''}>
+                <td class="analytics-least-profit-expand-cell"><button type="button" class="analytics-least-profit-expand" data-role="expand" aria-expanded="${isOpen}" title="${isOpen ? '收合' : '展開'}商品明細">${isOpen ? '▾' : '▸'}</button></td>
                 <td class="is-right">${rank}</td>
                 <td>${escapeHtml(g.customerName)}（${escapeHtml(g.customerCode)}）${warn}</td>
                 <td>${escapeHtml(lines)}</td>
@@ -245,6 +276,7 @@ export function createLeastProfitableTable(
                 <td class="is-right">${fmtPct(margin)}</td>
               </tr>
             `;
+                    return isOpen ? row + renderBreakdown(g) : row;
                 })
                 .join('');
         }
@@ -259,6 +291,18 @@ export function createLeastProfitableTable(
             }
         });
 
+        // 展開按鈕 → 切換商品明細；stopPropagation 避免同時觸發整列的「篩選此客戶」
+        tbody.querySelectorAll<HTMLButtonElement>('button[data-role="expand"]').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const code = btn.closest<HTMLTableRowElement>('tr')?.dataset.customerCode ?? '';
+                if (!code) return;
+                if (expanded.has(code)) expanded.delete(code);
+                else expanded.add(code);
+                render();
+            });
+        });
+
         // 列點擊 → 觸發 onCustomerClick（每次 render 都重綁，因為 innerHTML 重建）
         if (options.onCustomerClick) {
             tbody.querySelectorAll<HTMLTableRowElement>('tr[data-customer-code]').forEach((tr) => {
@@ -268,6 +312,70 @@ export function createLeastProfitableTable(
                 });
             });
         }
+    };
+
+    /**
+     * 客戶商品明細：每樣商品 他的單價 vs 大家平均單價，
+     * 合計差多少 = (他的單價 − 平均) × 數量，加總即為該客戶的相對均價損益。
+     */
+    const renderBreakdown = (g: CustomerAgg): string => {
+        const items = [...g.products.values()]
+            .map((p) => {
+                const unitPrice = p.count > 0 ? p.priceAmount / p.count : 0;
+                const diff = unitPrice - p.productAvg;
+                return {...p, unitPrice, diff, total: diff * p.count};
+            })
+            .sort((a, b) => a.total - b.total || a.productName.localeCompare(b.productName));
+
+        // 合計列的單價皆為依數量加權，使「每個差多少 × 數量 = 合計差多少」仍成立
+        const avgSum = items.reduce((s, p) => s + p.productAvg * p.count, 0);
+        const priceSum = items.reduce((s, p) => s + p.priceAmount, 0);
+        const totalUnit = g.count > 0 ? priceSum / g.count : 0;
+        const totalAvg = g.count > 0 ? avgSum / g.count : 0;
+
+        const body = items
+            .map((p) => `
+                <tr>
+                  <td>${escapeHtml(p.productName)}</td>
+                  <td class="is-right">${fmt(p.count)}</td>
+                  <td class="is-right">${p.count > 0 ? fmtPrice(p.unitPrice) : '—'}</td>
+                  <td class="is-right">${fmtPrice(p.productAvg)}</td>
+                  <td class="is-right ${signClass(p.diff, 0.05)}">${fmtSignedPrice(p.diff)}</td>
+                  <td class="is-right ${signClass(p.total, 0.5)}">${fmtSignedMoney(p.total)}</td>
+                </tr>`)
+            .join('');
+
+        return `
+              <tr class="analytics-least-profit-breakdown-row">
+                <td colspan="12">
+                  <div class="analytics-least-profit-breakdown">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>商品名稱</th>
+                          <th class="is-right">數量</th>
+                          <th class="is-right" title="該客戶此商品的單價（依數量加權平均）">他的單價</th>
+                          <th class="is-right" title="此商品在目前篩選範圍內所有客戶的加權均價">大家平均單價</th>
+                          <th class="is-right" title="他的單價 − 大家平均單價">每個差多少</th>
+                          <th class="is-right" title="每個差多少 × 數量">合計差多少</th>
+                        </tr>
+                      </thead>
+                      <tbody>${body}</tbody>
+                      <tfoot>
+                        <tr>
+                          <td>合計</td>
+                          <td class="is-right">${fmt(g.count)}</td>
+                          <td class="is-right">${g.count > 0 ? fmtPrice(totalUnit) : '—'}</td>
+                          <td class="is-right">${g.count > 0 ? fmtPrice(totalAvg) : '—'}</td>
+                          <td class="is-right ${signClass(g.perUnitPnL, 0.05)}">${fmtSignedPrice(g.perUnitPnL)}</td>
+                          <td class="is-right ${signClass(g.relativePnL, 0.5)}">${fmtSignedMoney(g.relativePnL)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </td>
+              </tr>
+            `;
     };
 
     // 排序事件
