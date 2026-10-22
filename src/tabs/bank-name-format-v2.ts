@@ -50,6 +50,7 @@ import {
     writeBack,
 } from '@/domain/auto-reconcile-engine';
 import {getBankInfos, loadBankInfos} from '@/domain/bank-info-loader';
+import {addConfirmedLastFive, removeConfirmedLastFive} from '@/domain/reconcile-lastfive-sync';
 import {restoreExternalLinks} from '@/domain/xlsx-external-links';
 import {localSettings} from '@/infra/local-settings-store';
 import {parseTransRecord} from '@/readers/trans-record-reader';
@@ -978,8 +979,26 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         } else {
             memory[entry.key] = {...m, at: new Date().toISOString().slice(0, 10)};
             saveMemory();
+            if (m.flag === '已確認') {
+                void rebuild().then(() => syncLastFive(entry));
+                return;
+            }
         }
         rerun();
+    };
+
+    /** 確認後（重算完）把這筆對到的各店加進設定頁末五碼；現付、單次付款、新客戶不加 */
+    const syncLastFive = (entry: ReconcileEntry) => {
+        const r = lastResult?.results.find((x) => x.idx === entry.idx && x.key === entry.key);
+        if (!lastResult || !r || r.src !== '已確認' || memory[entry.key]?.flag !== '已確認') return;
+        const cust = lastResult.cust;
+        const codes = [...new Set(r.alloc.map(([c]) => c))].filter((c) => cust[c]);
+        const n = addConfirmedLastFive(entry.key, codes.map((c) => ({code: c, name: cust[c].name})));
+        if (n) {
+            // 設定表多了列，其他同帳號的入帳也照新的設定重算
+            rerun();
+            showToast({variant: 'success', title: '已加入設定 → 末五碼', message: `${codes.map((c) => cust[c].name).join('、')}：${n} 筆`});
+        }
     };
 
     /** 多家店合併確認：照選的各店期別回填，並記住此帳號對應這幾家店 */
@@ -1008,6 +1027,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             delete memory[entry.key];
             saveMemory();
         }
+        if (!isCheque(entry.kind)) removeConfirmedLastFive(entry.key);
         if (acctFile?.rows.some((x) => x.val === entry.key && isConfirmFlag(x.flag))) acctCancelled.add(entry.key);
         rerun();
     };

@@ -48,6 +48,7 @@ import {
 } from '@/domain/default-excluded-customers-loader';
 import type {BankInfo} from '@/domain/models/bank-info';
 import {equalsBankInfo} from '@/domain/models/bank-info';
+import {autoLastFiveOf, LASTFIVE_CHANGED_EVENT, loadAutoLastFive, saveAutoLastFive} from '@/domain/reconcile-lastfive-sync';
 import {parseBankInfo as parseBankInfoXlsx} from '@/readers/bank-info-reader';
 import {readXlsxAsRows} from '@/infra/excel-codec';
 import {icon} from '@/ui/icons';
@@ -609,8 +610,9 @@ function bindCargoPane(panel: HTMLElement): void {
     });
 
     addBtn.addEventListener('click', () => {
-        rows.push({id: '', name: '', fee: '0', cost: ''});
+        rows.unshift({id: '', name: '', fee: '0', cost: ''});
         renderTable();
+        focusFirstRow(tableWrap);
         void persist();
     });
 
@@ -845,9 +847,10 @@ function bindDailyPane(panel: HTMLElement): void {
     });
 
     addBtn.addEventListener('click', () => {
-        const lastGroup = rows.length > 0 ? rows[rows.length - 1].group : '';
-        rows.push({group: lastGroup, code: '', name: '', cost: ''});
+        const firstGroup = rows.length > 0 ? rows[0].group : '';
+        rows.unshift({group: firstGroup, code: '', name: '', cost: ''});
         renderTable();
+        focusFirstRow(tableWrap);
         persist();
     });
 
@@ -1147,8 +1150,9 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     renderTable();
 
     addBtn.addEventListener('click', () => {
-        entries.push({code: '', name: ''});
+        entries.unshift({code: '', name: ''});
         renderTable();
+        focusFirstRow(tableWrap);
         persist();
     });
 
@@ -1248,6 +1252,8 @@ function bindLastFivePane(panel: HTMLElement): void {
     let query = '';
     let sort: {col: number; dir: 'asc' | 'desc'} | null = null;
     let matched = 0;
+    /** 剛按「新增一列」的列：搜尋/排序中也先固定顯示在最上面，離開這列後才依搜尋、排序歸位 */
+    let pinned: LastFiveRow | null = null;
 
     const refreshStatus = () => {
         const overridden = localSettings.hasLastFiveDigit();
@@ -1272,9 +1278,13 @@ function bindLastFivePane(panel: HTMLElement): void {
         const q = query.trim().toLowerCase();
         const all = rows.map((_, i) => i);
         if (q.length === 0) return all;
-        return all.filter((i) =>
-            LAST_FIVE_FIELDS.some((f) => rows[i][f].toLowerCase().includes(q))
-        );
+        const pin = pinned ? rows.indexOf(pinned) : -1;
+        return [
+            ...(pin >= 0 ? [pin] : []),
+            ...all.filter((i) =>
+                i !== pin && LAST_FIVE_FIELDS.some((f) => rows[i][f].toLowerCase().includes(q))
+            ),
+        ];
     };
 
     const renderTable = () => {
@@ -1287,6 +1297,10 @@ function bindLastFivePane(panel: HTMLElement): void {
                 headers: LAST_FIVE_HEADER,
                 rows: view.map((i) => rows[i]),
                 rowToCells: (row) => [row.customerName, row.storeCode, row.customerLine, row.lastFiveDigit],
+                rowTag: (row) => {
+                    const a = autoLastFiveOf(row, autos);
+                    return a ? `對帳自動加入 ${a.at}` : null;
+                },
                 sort,
                 onSortHeader: (colIdx) => sortRows(colIdx),
                 // 搜尋中畫面只有部分列，搬移的目標位置無從對應，先關掉
@@ -1342,11 +1356,48 @@ function bindLastFivePane(panel: HTMLElement): void {
         sort = {col: colIdx, dir};
         const field = LAST_FIVE_FIELDS[colIdx];
         const sign = dir === 'asc' ? 1 : -1;
+        pinned = null;
         rows.sort((a, b) => sign * a[field].localeCompare(b[field], 'zh-Hant', {numeric: true}));
         resetEditableTableScroll(tableWrap);
         renderTable();
         persist();
     };
+
+    /** 離開剛新增的那列：依原本的排序歸位（沒排序就留在最上面），搜尋中不符條件的就收起來 */
+    const unpin = (next: EventTarget | null) => {
+        if (!pinned) return;
+        const keepSort = pinnedSort;
+        pinned = null;
+        pinnedSort = null;
+        if (!keepSort && !query.trim()) return;
+        // 重繪前記下使用者點去的格子，重繪後把游標放回去
+        const cell = next instanceof HTMLInputElement ? next.closest('td') : null;
+        const tr = cell?.closest<HTMLElement>('tbody tr');
+        const view = visibleIndices();
+        const target = tr ? rows[view[Number(tr.dataset.rowIdx)]] : undefined;
+        const col = cell && tr ? [...tr.querySelectorAll('td')].indexOf(cell) : -1;
+        if (keepSort) {
+            const field = LAST_FIVE_FIELDS[keepSort.col];
+            const sign = keepSort.dir === 'asc' ? 1 : -1;
+            rows.sort((a, b) => sign * a[field].localeCompare(b[field], 'zh-Hant', {numeric: true}));
+            sort = keepSort;
+            persist();
+        }
+        renderTable();
+        if (target && col >= 0) {
+            const di = visibleIndices().indexOf(rows.indexOf(target));
+            const input = tableWrap.querySelectorAll<HTMLElement>('tbody tr')[di]?.querySelectorAll('td')[col]?.querySelector('input');
+            input?.focus();
+        }
+    };
+    let pinnedSort: {col: number; dir: 'asc' | 'desc'} | null = null;
+    tableWrap.addEventListener('focusout', (ev) => {
+        if (!pinned) return;
+        const pinTr = tableWrap.querySelector<HTMLElement>('tbody tr:first-child');
+        const next = (ev as FocusEvent).relatedTarget as Node | null;
+        if (pinTr && next && pinTr.contains(next)) return;
+        unpin(next);
+    });
 
     const clearSearch = () => {
         searchInput.value = '';
@@ -1356,7 +1407,18 @@ function bindLastFivePane(panel: HTMLElement): void {
 
     // 初始載入：localStorage 沒值就空陣列起步（與其他兩個不同，無內建 fallback）
     rows = loadLastFiveRows();
+    // 對帳 2.0 自動加入的列（只用來顯示標籤）；已被刪掉的紀錄順手清掉
+    let autos = loadAutoLastFive().filter((a) => rows.some((r) => autoLastFiveOf(r, [a])));
+    saveAutoLastFive(autos);
     renderTable();
+    window.addEventListener(LASTFIVE_CHANGED_EVENT, () => {
+        rows = loadLastFiveRows();
+        autos = loadAutoLastFive();
+        pinned = null;
+        pinnedSort = null;
+        sort = null;
+        renderTable();
+    });
 
     const applySearch = () => {
         query = searchInput.value;
@@ -1382,11 +1444,14 @@ function bindLastFivePane(panel: HTMLElement): void {
     });
 
     addBtn.addEventListener('click', () => {
-        // 新增的空白列不符合任何搜尋條件，先清掉搜尋才看得到它
-        clearSearch();
-        rows.push(emptyLastFiveRow());
+        // 搜尋、排序中也先把新列固定在最上面，離開這列後才歸位
+        const row = emptyLastFiveRow();
+        rows.unshift(row);
+        pinned = row;
+        pinnedSort = sort;
         sort = null;
         renderTable();
+        focusFirstRow(tableWrap);
         persist();
     });
 
@@ -1598,8 +1663,9 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     renderTable();
 
     addBtn.addEventListener('click', () => {
-        entries.push({code: '', name: ''});
+        entries.unshift({code: '', name: ''});
         renderTable();
+        focusFirstRow(tableWrap);
         persist();
     });
 
@@ -1694,6 +1760,8 @@ interface EditableTableSpec<T> {
     reorderable?: boolean;
     /** 沒有資料時顯示的文字 */
     emptyText?: string;
+    /** 列尾小標籤（例：對帳自動加入 M/D）；回傳 null 不顯示 */
+    rowTag?: (row: T) => string | null;
 }
 
 function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
@@ -1797,6 +1865,13 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
             actionTd.className = 'settings-table-action-col';
             const actions = document.createElement('div');
             actions.className = 'settings-table-actions';
+            const tag = spec.rowTag?.(row);
+            if (tag) {
+                const badge = document.createElement('span');
+                badge.className = 'settings-badge settings-badge-overridden settings-row-tag';
+                badge.textContent = tag;
+                actions.appendChild(badge);
+            }
 
             if (reorderable) {
                 const insertAboveBtn = document.createElement('button');
@@ -1877,6 +1952,16 @@ function mountEditableTable(host: HTMLElement, next: HTMLElement): void {
     host.appendChild(next);
     next.scrollTop = prevScrollTop;
     next.scrollLeft = prevScrollLeft;
+}
+
+/** 「新增一列」後：新列放在最上面，捲到看得到它並把游標放在第一格，可以直接打字。 */
+function focusFirstRow(host: HTMLElement): void {
+    const scroll = host.querySelector<HTMLElement>('.settings-table-scroll');
+    if (scroll) scroll.scrollTop = 0;
+    const input = host.querySelector<HTMLInputElement>('tbody tr:first-child .settings-table-input');
+    if (!input) return;
+    input.scrollIntoView({block: 'center'});
+    input.focus({preventScroll: true});
 }
 
 /** 整份資料被替換（匯入檔案）時先呼叫，讓接下來的重繪回到列表頂端而非沿用舊位置。 */
