@@ -27,6 +27,7 @@ export const TABS: readonly TabDefinition[] = [
         hash: '#cross-month-analytics',
         hidden: true
     },
+    {id: 'expense', label: '支出', icon: 'receipt', hash: '#expense', hidden: true},
     {id: 'settings', label: '設定', icon: 'settings', hash: '#settings'},
 ] as const;
 

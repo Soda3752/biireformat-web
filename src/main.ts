@@ -27,6 +27,7 @@ import {renderHandfillTransferPanel} from '@/tabs/handfill-transfer';
 import {renderSfShippingPanel} from '@/tabs/sf-shipping';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
+import {renderExpensePanel} from '@/tabs/expense';
 import {hideCostColumn, isCostColumnRevealed, renderSettingsPanel, revealCostColumn,} from '@/tabs/settings';
 import {loadSortingList} from '@/domain/sorting-list';
 import {migrateDailyCostToCargo, type CostMigrationResult} from '@/domain/cost-migration';
@@ -95,6 +96,8 @@ async function bootstrap(): Promise<void> {
         mainHost.appendChild(renderDataAnalyticsPanel(tab));
     } else if (tab.id === 'cross-month-analytics') {
         mainHost.appendChild(renderCrossMonthAnalyticsPanel(tab));
+    } else if (tab.id === 'expense') {
+        mainHost.appendChild(renderExpensePanel(tab));
     } else if (tab.id === 'settings') {
         mainHost.appendChild(renderSettingsPanel(tab));
     } else {
@@ -184,31 +187,34 @@ function bindHiddenTabUnlock(
         const allRevealed =
             isHiddenTabRevealed('analytics') &&
             isHiddenTabRevealed('cross-month-analytics') &&
+            isHiddenTabRevealed('expense') &&
             isCostColumnRevealed();
 
         if (allRevealed) {
             // 已全部解鎖 → 連點再次收起
             hideHiddenTab('analytics');
             hideHiddenTab('cross-month-analytics');
+            hideHiddenTab('expense');
             hideCostColumn();
             renderSideNav(navHost, switchTab);
             // 若使用者目前停在被收起的分頁，切回預設分頁
             const currentHash = window.location.hash;
-            if (currentHash === '#analytics' || currentHash === '#cross-month-analytics') {
+            if (currentHash === '#analytics' || currentHash === '#cross-month-analytics' || currentHash === '#expense') {
                 switchTab(resolveInitialTab());
             }
             showToast({
                 variant: 'success',
                 title: '已收起隱藏功能',
-                message: '「數據分析」「跨月數據分析」與「成本」欄位已隱藏',
+                message: '「數據分析」「跨月數據分析」「支出」與「成本」欄位已隱藏',
             });
             return;
         }
 
         const analyticsRevealed = revealHiddenTab('analytics');
         const crossMonthRevealed = revealHiddenTab('cross-month-analytics');
+        const expenseRevealed = revealHiddenTab('expense');
         const costRevealed = revealCostColumn();
-        if (analyticsRevealed || crossMonthRevealed) {
+        if (analyticsRevealed || crossMonthRevealed || expenseRevealed) {
             renderSideNav(navHost, switchTab);
             if (analyticsRevealed) {
                 switchTab('analytics');
