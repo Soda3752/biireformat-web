@@ -352,7 +352,7 @@ export class BillWriter {
     const max = this.halfMonthMaxRow;
     createHeader(ws, max);
       createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
-      createDateRangeRow(ws, this.displayDateRange, 0, BILL_ROW_HEIGHT_POI);
+      createDateRangeRow(ws, this.displayDateRange, 0, BILL_ROW_HEIGHT_POI, true);
     // 數量為 0 的品項不顯示（數量 0 → 合計 0，總計不變；負數退貨仍保留）
     const sources = this.halfMonthSlots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
     const products = customer.productList.filter((p) => p.getCountForDates(sources) !== 0);
@@ -370,7 +370,7 @@ export class BillWriter {
 
     // 上半月：日期 1..15，maxDate=16
     // 上下半各自隱藏該段數量為 0 的品項；整段沒有品項時留一列空白框線
-    createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16, BILL_ROW_HEIGHT_POI);
+    createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16, BILL_ROW_HEIGHT_POI, true);
     const upperRange = createProductRow(ws, this.nonZeroIn(customer, FULL_MONTH_FIRST_RANGE), FULL_MONTH_FIRST_RANGE, 16);
     if (!upperRange) createBlankProductRow(ws, max);
 
@@ -378,7 +378,7 @@ export class BillWriter {
     ws.addRow([]);
 
     // 下半月：日期 16..31，maxDate=16
-    createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16, BILL_ROW_HEIGHT_POI);
+    createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16, BILL_ROW_HEIGHT_POI, true);
     const lowerRange = createProductRow(ws, this.nonZeroIn(customer, FULL_MONTH_SECOND_RANGE), FULL_MONTH_SECOND_RANGE, 16);
     if (!lowerRange) createBlankProductRow(ws, max);
 

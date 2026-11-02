@@ -30,6 +30,8 @@ import {getItemIndex} from '@/domain/sorting-list';
    ============================================================ */
 export const TITLE_SIZE_POI = 400;
 export const FONT_SIZE_POI = 300;
+/** 請款單日期表頭數字用的粗體字型（Mac / Windows 皆有真粗體） */
+const DIGIT_BOLD_FONT = 'Times New Roman';
 export const CUSTINFO_FONT_POI = FONT_SIZE_POI + 40;
 /** 請款單客戶編號/名稱字級（維持 18pt）；獨立常數以免影響代送費共用的 createSingleLineCustInfo。 */
 export const BILL_CUSTINFO_FONT_POI = 360;
@@ -107,6 +109,16 @@ const styles = {
   dateBold: () =>
     buildStyle({
       font: { name: KAI_FONT, bold: true, size: poiFontSize(FONT_SIZE_POI) },
+      border: true,
+      align: 'center',
+    }),
+  /**
+   * 請款單日期數字粗體：楷體-簡 的數字在 Excel 粗體下幾乎看不出差異，
+   * 改用 Times New Roman（Mac / Windows 皆內建真粗體，襯線外觀與楷體數字相近）。
+   */
+  dateDigitBold: () =>
+    buildStyle({
+      font: { name: DIGIT_BOLD_FONT, bold: true, size: poiFontSize(FONT_SIZE_POI) },
       border: true,
       align: 'center',
     }),
@@ -342,13 +354,19 @@ export function createDateRangeRow(
   sheet: ExcelJS.Worksheet,
   dateRange: ReadonlyArray<number>,
   maxDate = 0,
-  rowHeightPoi: number = ROW_HEIGHT_POI
+  rowHeightPoi: number = ROW_HEIGHT_POI,
+  /**
+   * true：整列（標籤、日期、補位、數量/單價/合計）皆粗體；請款單使用。
+   * 中文標籤維持楷體粗體，日期數字改用有真粗體的 Times New Roman 以便在 Excel 看得出加粗。
+   */
+  allBold = false
 ): void {
-  const base = styles.cellWithBorder();
   const dateBold = styles.dateBold();
+  const base = allBold ? dateBold : styles.cellWithBorder();
+  const dayStyle = allBold ? styles.dateDigitBold() : dateBold;
 
   const cells: StyledCell[] = [['訂貨日期', base]];
-  for (const day of dateRange) cells.push([day, dateBold]);
+  for (const day of dateRange) cells.push([day, dayStyle]);
 
   if (dateRange.length < maxDate) {
     const pad = maxDate - dateRange.length;
