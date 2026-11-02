@@ -65,9 +65,34 @@ const findPostOfficeHeaderIndex = (rows: ReadonlyArray<ReadonlyArray<string>>): 
     return -1;
 };
 
+/**
+ * 沒有標題列的郵局明細（例：被 WPS / Excel 打開另存後標題列被刪掉）：
+ * 依欄位形狀判斷——第一欄民國日期（115/10/19 + 時間）、第三欄摘要、第五欄存款金額（數字）。
+ * 前 10 列非空列至少 8 成符合才認定，避免把其他銀行格式誤判成郵局。
+ */
+const ROC_DATE_RE = /^\d{2,3}\/\d{1,2}\/\d{1,2}/;
+const AMOUNT_RE = /^-?[\d,]+(\.\d+)?$/;
+const HEADERLESS_COL = {date: 0, summary: 2, withdraw: 3, deposit: 4, note: 6} as const;
+
+const looksLikePostOfficeRow = (row: ReadonlyArray<string>): boolean => {
+    const cells = row.map((c) => cleanCell(c));
+    if (cells.length < 5) return false;
+    const deposit = cells[HEADERLESS_COL.deposit];
+    return ROC_DATE_RE.test(cells[HEADERLESS_COL.date])
+        && cells[HEADERLESS_COL.summary] !== ''
+        && (deposit === '' || AMOUNT_RE.test(deposit));
+};
+
+const isHeaderlessPostOffice = (rows: ReadonlyArray<ReadonlyArray<string>>): boolean => {
+    const sample = rows.filter((r) => r.some((c) => cleanCell(c) !== '')).slice(0, 10);
+    if (sample.length === 0 || !looksLikePostOfficeRow(sample[0])) return false;
+    return sample.filter(looksLikePostOfficeRow).length >= Math.ceil(sample.length * 0.8);
+};
+
 const isPostOfficeFormat = (rows: ReadonlyArray<ReadonlyArray<string>>): boolean => {
     if (rows.length === 0) return false;
     if (findPostOfficeHeaderIndex(rows) >= 0) return true;
+    if (isHeaderlessPostOffice(rows)) return true;
     // 後備偵測：第一列含「6個月內交易明細」
     const firstRowTokens = rows[0].map((c) => cleanCell(c));
     return firstRowTokens.some((c) => c.includes(POST_OFFICE_TITLE));
@@ -107,17 +132,24 @@ const isMeaningfulDeposit = (amount: string): boolean => {
 };
 
 const normalizePostOffice = (rows: ReadonlyArray<ReadonlyArray<string>>): string[][] => {
-    const headerIdx = findPostOfficeHeaderIndex(rows);
-    if (headerIdx < 0) return rows.map((r) => [...r]);
-
-    const hdr = rows[headerIdx].map((c) => cleanCell(c));
-    const col = {
-        date: hdr.indexOf('交易日期'),
-        summary: hdr.indexOf('摘要'),
-        withdraw: hdr.indexOf('提款金額'),
-        deposit: hdr.indexOf('存款金額'),
-        note: hdr.indexOf('備註'),
-    };
+    let headerIdx = findPostOfficeHeaderIndex(rows);
+    let col: { date: number; summary: number; withdraw: number; deposit: number; note: number };
+    if (headerIdx >= 0) {
+        const hdr = rows[headerIdx].map((c) => cleanCell(c));
+        col = {
+            date: hdr.indexOf('交易日期'),
+            summary: hdr.indexOf('摘要'),
+            withdraw: hdr.indexOf('提款金額'),
+            deposit: hdr.indexOf('存款金額'),
+            note: hdr.indexOf('備註'),
+        };
+    } else if (isHeaderlessPostOffice(rows)) {
+        // 無標題列：照郵局固定欄位讀，從第一列開始都是資料
+        headerIdx = -1;
+        col = {...HEADERLESS_COL};
+    } else {
+        return rows.map((r) => [...r]);
+    }
     const out: string[][] = [STANDARD_HEADER.slice()];
     let current: string[] | null = null;
     let supplements: string[] = [];
@@ -167,8 +199,13 @@ const parseTransRecordCsv = async (file: File): Promise<string[][]> => {
   const buffer = await file.arrayBuffer();
   const text = decodeCsv(buffer);
 
+  // 郵局 CSV 每格前綴 \t（`\t,\t,...`），PapaParse 自動判斷會誤選 \t 當分隔符號，整份讀成 0 筆；
+  // 逗號不少於 tab 時直接指定逗號，其餘交給自動判斷。
+  const commaCount = (text.match(/,/g) ?? []).length;
+  const tabCount = (text.match(/\t/g) ?? []).length;
   const result = Papa.parse<string[]>(text, {
     header: false,
+    delimiter: commaCount > 0 && commaCount >= tabCount ? ',' : '',
     skipEmptyLines: 'greedy',
       transform: (value) => {
           const s = typeof value === 'string' ? value : String(value ?? '');

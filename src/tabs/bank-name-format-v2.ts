@@ -85,6 +85,9 @@ const STATUS_LABEL: Record<FilterKey, string> = {
     支票: '支票',
     漏付: '漏付',
 };
+/** 銀行對帳單讀到 0 筆入帳時的提示 */
+const NO_BANK_ROWS_MSG = '這個檔讀不到入帳資料，請重新從郵局／銀行下載，下載後不要打開存檔再上傳';
+
 /** 沿用 reconcile-status-pill 的配色 */
 const STATUS_PILL: Record<AutoReconcileStatus, string> = {
     OK: 'is-matched',
@@ -397,6 +400,9 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             }
             try {
                 const rows = readBankRows(await parseTransRecord(file));
+                if (rows.length === 0) {
+                    showToast({variant: 'error', title: `${file.name} 讀不到入帳資料`, message: NO_BANK_ROWS_MSG});
+                }
                 bankFiles.push({name: file.name, rows});
                 renderBankList();
                 void rebuild();
@@ -557,7 +563,21 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
 
     // ---------- 對帳
 
+    /** 任何未預期的錯誤都要結束「對帳中...」狀態並顯示原因，不能讓畫面卡住。 */
     const rebuild = async () => {
+        const seq = runSeq + 1;
+        try {
+            await doRebuild();
+        } catch (err) {
+            console.error(err);
+            if (seq !== runSeq) return;
+            lastResult = null;
+            lastError = '對帳失敗：' + (err instanceof Error ? err.message : String(err));
+            render();
+        }
+    };
+
+    const doRebuild = async () => {
         const seq = ++runSeq;
         lastError = null;
         const ss = sortedStmts();
@@ -584,6 +604,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         });
         if (bank.length === 0 || ss.length === 0) {
             lastResult = null;
+            if (bankFiles.length > 0 && bank.length === 0) lastError = NO_BANK_ROWS_MSG;
             render();
             return;
         }
