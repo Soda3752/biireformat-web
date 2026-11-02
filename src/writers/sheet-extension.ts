@@ -572,6 +572,21 @@ export function createTotalRowBySlots(
 }
 
 /**
+ * 帳單分頁專用：某一段（上半／下半）沒有任何數量非 0 的品項時，
+ * 只在日期表頭下留一列空白框線列，維持表格外觀（不寫公式，不影響總計）。
+ */
+export function createBlankProductRow(sheet: ExcelJS.Worksheet, rowMaxSize: number): void {
+    const cellStyle = styles.cellWithBorder();
+    const cells: StyledCell[] = [];
+    for (let i = 0; i <= rowMaxSize; i++) cells.push(['', cellStyle]);
+    const row = writeMixedRow(sheet, cells, cellStyle);
+    setRowHeightPoi(row, BILL_ROW_HEIGHT_POI);
+}
+
+/** 頁尾（前置空白列 15pt + 3 列文字）自然高度總和（pt），供請款單判斷是否放得下頁尾。 */
+export const BILL_FOOTER_HEIGHT_PT = 15 + 3 * (BILL_ROW_HEIGHT_POI / 20);
+
+/**
  * 帳單頁尾：訂貨專線 / 銀行資訊 / 提醒。
  * 對應 `Sheet.createFooter(rowMaxSize)`.
  */

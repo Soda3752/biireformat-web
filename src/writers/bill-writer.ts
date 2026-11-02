@@ -25,8 +25,10 @@ import {
 } from '@/infra/excel-service';
 
 import {
+  BILL_FOOTER_HEIGHT_PT,
   BILL_ROW_HEIGHT_POI,
   CENTER_LINE_WIDTH_POI,
+  createBlankProductRow,
   createCustInfo,
   createDateRangeRow,
   createFooter,
@@ -45,6 +47,7 @@ import {
 
 import type {Bill} from '@/domain/models/bill';
 import type {CustomerModel} from '@/domain/models/customer-model';
+import type {Product} from '@/domain/models/product';
 
 const BILL_PRINT_SETTINGS: PrintSettingOptions = {
     landscape: true,
@@ -100,9 +103,9 @@ const COMPACT_BLANK_H = 1;
 const COMPACT_GAP_H = 8;
 
 /** 依列在區塊中的位置判斷緊湊版型字級；endRow（尾部空白）回傳 null。 */
-function compactFontForRow(r: number, startRow: number, endRow: number): number | null {
+function compactFontForRow(r: number, startRow: number, endRow: number, hasFooter: boolean): number | null {
     if (r === endRow) return null;                                           // 尾部空白列（a）
-    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT;     // 尾3列 footer（先判，防止極短區塊重疊）
+    if (hasFooter && r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_FONT; // 尾3列 footer（先判，防止極短區塊重疊）
     if (r <= startRow + 1) return COMPACT_HEADER_FONT;                      // 標題2列（青坊食品行/請款單）
     if (r <= startRow + 3) return COMPACT_CUSTINFO_FONT;                    // 客戶編號/名稱2列（維持 18pt，不放大）
     return COMPACT_CONTENT_FONT;
@@ -113,9 +116,11 @@ function compactFontForRow(r: number, startRow: number, endRow: number): number 
  * 有高度的內容列 → COMPACT_CONTENT_H；無高度的視覺間距列 → COMPACT_GAP_H；
  * 尾部結構空白列 (a) → COMPACT_BLANK_H。
  */
-function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number, endRow: number): number {
+function compactHeightForRow(
+    ws: ExcelJS.Worksheet, r: number, startRow: number, endRow: number, hasFooter: boolean
+): number {
     if (r === endRow) return COMPACT_BLANK_H;
-    if (r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_H;
+    if (hasFooter && r >= endRow - 3 && r <= endRow - 1) return COMPACT_FOOTER_H;
     if (r <= startRow + 3) return COMPACT_HEADER_H;
     return ws.getRow(r).height != null ? COMPACT_CONTENT_H : COMPACT_GAP_H;
 }
@@ -124,6 +129,7 @@ function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number,
  * 將 [startRow, endRow]（單一客戶的請款單，含其後屬於本頁的空白列）壓進一頁。
  *
  * 放得下的客戶（自然高度 ≤ PAGE_BUDGET_PT）完全不動。
+ * （頁尾是否保留已由 writeCustomers 先決定：放不下時先拿掉頁尾 3 列，再進到這裡。）
  * 超出上限的客戶套用「緊湊版型」：
  *   - 標題2列 21.75pt/20pt、客戶編號名稱2列 21.75pt/18pt、中間內容 19.5pt/15pt、尾3列 12.75pt/14pt。
  *   - 列高以字級為基準計算緊湊高度；若緊湊高度仍超過上限，再等比例縮小列高
@@ -132,7 +138,7 @@ function compactHeightForRow(ws: ExcelJS.Worksheet, r: number, startRow: number,
  * 注意：ExcelJS 合併儲存格附屬格共用主格樣式，因此採兩階段（先快照、再寫入）
  * 以避免共用樣式被重複縮放而壓成趨近 0 / 科學記號，導致 Excel 無法開啟。
  */
-function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: number): void {
+function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: number, hasFooter: boolean): void {
     let total = 0;
     for (let r = startRow; r <= endRow; r++) {
         total += ws.getRow(r).height ?? DEFAULT_ROW_PT;
@@ -142,7 +148,7 @@ function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: numb
     // 計算緊湊版型基礎列高總和，必要時等比例縮小列高（字級保持不動）
     let compactTotal = 0;
     for (let r = startRow; r <= endRow; r++) {
-        compactTotal += compactHeightForRow(ws, r, startRow, endRow);
+        compactTotal += compactHeightForRow(ws, r, startRow, endRow, hasFooter);
     }
     const scale = compactTotal > PAGE_BUDGET_PT ? PAGE_BUDGET_PT / compactTotal : 1;
 
@@ -150,8 +156,8 @@ function fitBlockToOnePage(ws: ExcelJS.Worksheet, startRow: number, endRow: numb
     const targetHeights: number[] = [];
     const fontTargets: Array<{ cell: ExcelJS.Cell; font: Partial<ExcelJS.Font>; size: number }> = [];
     for (let r = startRow; r <= endRow; r++) {
-        targetHeights.push(compactHeightForRow(ws, r, startRow, endRow) * scale);
-        const targetSize = compactFontForRow(r, startRow, endRow);
+        targetHeights.push(compactHeightForRow(ws, r, startRow, endRow, hasFooter) * scale);
+        const targetSize = compactFontForRow(r, startRow, endRow, hasFooter);
         if (targetSize !== null) {
             ws.getRow(r).eachCell({ includeEmpty: true }, (cell) => {
                 if (cell.master !== cell) return; // 跳過合併附屬格
@@ -305,6 +311,7 @@ export class BillWriter {
     customers: ReadonlyArray<CustomerModel>,
     mode: 'half' | 'full'
   ): void {
+    const max = mode === 'full' ? FULL_MONTH_MAX_ROW : this.halfMonthMaxRow;
     customers.forEach((customer, idx) => {
       const blockStart = (ws.lastRow?.number ?? 0) + 1;
       if (mode === 'full') {
@@ -313,6 +320,15 @@ export class BillWriter {
         this.writeHalfMonthBlock(ws, customer);
       }
 
+      // 頁尾 3 列（訂貨專線／銀行／匯款提醒）：整張以自然高度放得下才保留；
+      // 放不下就整段不寫，把空間讓給品項，之後仍超出才進入緊湊縮小。
+      let bodyHeight = 0;
+      for (let r = blockStart; r <= (ws.lastRow?.number ?? blockStart); r++) {
+        bodyHeight += ws.getRow(r).height ?? DEFAULT_ROW_PT;
+      }
+      const hasFooter = bodyHeight + BILL_FOOTER_HEIGHT_PT + 1 <= PAGE_BUDGET_PT;
+      if (hasFooter) createFooter(ws, max);
+
       // 對應桌面版： row {} ; setRowBreak(lastRowNum) ; row {}
       // 空白列 (a)/(c) 均設為 1pt，避免佔用版面空間
       const rowA = ws.addRow([]); // (a)：頁尾緩衝列，納入壓縮估算
@@ -320,7 +336,7 @@ export class BillWriter {
       const blockEnd = rowA.number;
 
       // 品項過多會破版的客戶：套用緊湊版型，壓回一頁；完成後確保 (a) 仍為 1pt
-      fitBlockToOnePage(ws, blockStart, blockEnd);
+      fitBlockToOnePage(ws, blockStart, blockEnd, hasFooter);
       rowA.height = 1;
 
       // 分頁起始列 (c)：先建立列再標記分頁，避免預先建立列導致高度設定失效
@@ -337,9 +353,13 @@ export class BillWriter {
     createHeader(ws, max);
       createCustInfo(ws, customer, this.displayYear, this.displayMonth, max);
       createDateRangeRow(ws, this.displayDateRange, 0, BILL_ROW_HEIGHT_POI);
-    const range = createProductRowBySlots(ws, customer.productList, this.halfMonthSlots);
+    // 數量為 0 的品項不顯示（數量 0 → 合計 0，總計不變；負數退貨仍保留）
+    const sources = this.halfMonthSlots.map((s) => ({month: s.sourceMonth, day: s.sourceDay}));
+    const products = customer.productList.filter((p) => p.getCountForDates(sources) !== 0);
+    const range = createProductRowBySlots(ws, products, this.halfMonthSlots);
+    if (!range) createBlankProductRow(ws, max);
     createTotalRowBySlots(ws, customer, max, this.halfMonthSlots, range ? [range] : []);
-    createFooter(ws, max);
+    // 頁尾由 writeCustomers 依剩餘空間決定是否寫入
   }
 
   private writeFullMonthBlock(ws: ExcelJS.Worksheet, customer: CustomerModel): void {
@@ -349,21 +369,29 @@ export class BillWriter {
       createCustInfo(ws, customer, year, month, max);
 
     // 上半月：日期 1..15，maxDate=16
+    // 上下半各自隱藏該段數量為 0 的品項；整段沒有品項時留一列空白框線
     createDateRangeRow(ws, FULL_MONTH_FIRST_RANGE, 16, BILL_ROW_HEIGHT_POI);
-    const upperRange = createProductRow(ws, customer.productList, FULL_MONTH_FIRST_RANGE, 16);
+    const upperRange = createProductRow(ws, this.nonZeroIn(customer, FULL_MONTH_FIRST_RANGE), FULL_MONTH_FIRST_RANGE, 16);
+    if (!upperRange) createBlankProductRow(ws, max);
 
     // 中間空白列
     ws.addRow([]);
 
     // 下半月：日期 16..31，maxDate=16
     createDateRangeRow(ws, FULL_MONTH_SECOND_RANGE, 16, BILL_ROW_HEIGHT_POI);
-    const lowerRange = createProductRow(ws, customer.productList, FULL_MONTH_SECOND_RANGE, 16);
+    const lowerRange = createProductRow(ws, this.nonZeroIn(customer, FULL_MONTH_SECOND_RANGE), FULL_MONTH_SECOND_RANGE, 16);
+    if (!lowerRange) createBlankProductRow(ws, max);
 
     const ranges = [upperRange, lowerRange].filter(
         (r): r is NonNullable<typeof r> => r !== null
     );
     createTotalRow(ws, customer, max, ranges);
-    createFooter(ws, max);
+    // 頁尾由 writeCustomers 依剩餘空間決定是否寫入
+  }
+
+  /** 該日期段內數量不為 0 的品項（與 createProductRow 相同以 day 比對）。 */
+  private nonZeroIn(customer: CustomerModel, range: ReadonlyArray<number>): Product[] {
+    return customer.productList.filter((p) => p.getDateRangeCount(range) !== 0);
   }
 
   /* ------------------------------------------------------------
