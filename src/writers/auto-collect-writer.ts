@@ -46,7 +46,7 @@ export async function buildSummaryXlsx(result: CollectResult): Promise<Blob> {
 
     let ws = addSheet(wb, '催款總表', ['代號', '客人', '欠幾期', '欠哪幾期', '各期欠款', '合計', '備註'], [8, 18, 14, 30, 44, 12, 60]);
     for (const c of customers) {
-        const row = addStyledRow(ws, [c.code, c.name, groupText(c), periodsText(c), amountsText(c), c.total, c.notes.join('\n')], [6]);
+        const row = addStyledRow(ws, [c.code, c.name, groupText(c), periodsText(c), amountsText(c), c.total, [...c.notes, ...c.info].join('\n')], [6]);
         if (c.notes.length) row.getCell(7).fill = NOTE_FILL;
     }
     addStyledRow(ws, ['', '合計', '', `${customers.length} 位客人`, '', result.chase_total, ''], [6])

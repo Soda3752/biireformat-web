@@ -12,6 +12,8 @@
  * - 自動認月結：備註有「月」，或在已記住的月份裡從沒出現在上期、且至少 2 個月（不含略過的期別）有下期帳單；手動設為／取消月結優先。
  * - 月結客人只欠「上個月」（今天所在月份的前一個月）1 期、沒有更早的欠款＝「月結：本月該付」，列入要催的名單；欠更早的月份就照期數分組。
  * - 還沒結帳的期別（整期沒有人付款，或下期和上個月下期幾乎一樣＝複製來的佔位）略過，不算欠款。
+ * - 已付清（沒有欠款）的期別：備註、多收、金額對不上的入帳只當一般說明（info），不列「需要先確認」；有欠款的期別照舊列注意事項（notes）。
+ * - 「已結清」可只勾部分期別：只有勾的期別不算欠款，其餘照常催。
  */
 
 import {
@@ -141,7 +143,10 @@ export interface Debtor {
     items: DebtItem[];
     /** 顯示用的期別（訊息、總表、下載檔）：月結客人寫月份、同月上下期合成一行；一般客人同 items。 */
     lines: DebtItem[];
+    /** 需要先確認的注意事項（畫面紅字 ⚠、算進「需要先確認」人數）。 */
     notes: string[];
+    /** 一般說明（已付清期別的備註、多收等）：灰色小字，不算需確認。 */
+    info: string[];
     total: number;
     /** 實際使用的訊息：有手動改過就是她改的版本，否則是自動產生的。畫面、複製、下載都用這個。 */
     message: string;
@@ -313,10 +318,28 @@ export function migrateLegacyRules(history: History, marks: Marks, legacy: Legac
 export const customerKey = (c: {code: string; name: string}): string => c.code || c.name;
 export const periodKey = (i: Pick<DebtItem, 'month_key' | 'half'>): string => `${i.month_key}|${i.half}`;
 
-/** 把這位客人目前顯示的幾期（含手動加的欠款）標成已結清。 */
-export function settleDebtor(marks: Marks, c: Pick<Debtor, 'code' | 'name' | 'items'>, reason: string, now: Date = new Date()): Marks {
-    const keys = c.items.filter((i) => !i.manual).map(periodKey);
-    const manual_ids = c.items.flatMap((i) => (i.manual ? [i.manual.id] : []));
+/** 已結清視窗勾選用的鍵：手動欠款用 `manual:${id}`，其餘用期別鍵。 */
+export const itemPick = (i: Pick<DebtItem, 'month_key' | 'half' | 'manual'>): string => (i.manual ? `manual:${i.manual.id}` : periodKey(i));
+
+/**
+ * 顯示的一行（displayItems 的結果）涵蓋哪些勾選鍵：月結客人同月上下期合成一行，那行就涵蓋該月所有非手動的期別。
+ */
+export function linePicks(c: Pick<Debtor, 'items' | 'monthly'>, line: DebtItem): string[] {
+    if (line.manual) return [itemPick(line)];
+    if (!c.monthly) return [periodKey(line)];
+    return c.items.filter((i) => !i.manual && i.month_key === line.month_key).map(periodKey);
+}
+
+/**
+ * 把這位客人目前顯示的幾期（含手動加的欠款）標成已結清。
+ * picks（itemPick 的鍵）有給就只標勾選的期別；沒給＝全部（舊行為）。
+ */
+export function settleDebtor(marks: Marks, c: Pick<Debtor, 'code' | 'name' | 'items'>, reason: string, now: Date = new Date(),
+    picks?: ReadonlyArray<string>): Marks {
+    const chosen = picks ? new Set(picks) : null;
+    const items = chosen ? c.items.filter((i) => chosen.has(itemPick(i))) : c.items;
+    const keys = items.filter((i) => !i.manual).map(periodKey);
+    const manual_ids = items.flatMap((i) => (i.manual ? [i.manual.id] : []));
     if (!keys.length && !manual_ids.length) return marks;
     const at = localIso(now);
     const customer = customerKey(c);
@@ -727,8 +750,8 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         }
     }
 
-    type Cust = Pick<Debtor, 'code' | 'name' | 'items' | 'notes' | 'monthly_auto' | 'monthly_auto_reason'>
-        & {noteMonths: string[]; upper: boolean; lowerMonths: Set<string>};
+    type Cust = Pick<Debtor, 'code' | 'name' | 'items' | 'notes' | 'info' | 'monthly_auto' | 'monthly_auto_reason'>
+        & {noteMonths: string[]; infoMonths: string[]; upper: boolean; lowerMonths: Set<string>};
     const custs = new Map<string, Cust>();
     // 被排除的欠款：客人鍵 → {手動：標記 id → 期別；自動：期別}
     const settledBy = new Map<string, {manual: Map<string, DebtItem[]>; auto: DebtItem[]}>();
@@ -741,13 +764,18 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
                     ckey = hit.size === 1 ? [...hit][0] : rkey;
                 }
                 if (!custs.has(ckey)) {
-                    custs.set(ckey, {code: rec.code || (/^\d+$/.test(ckey) ? ckey : ''), name: rec.name, items: [], notes: [], noteMonths: [], monthly_auto: false,
+                    custs.set(ckey, {code: rec.code || (/^\d+$/.test(ckey) ? ckey : ''), name: rec.name, items: [], notes: [], noteMonths: [], info: [], infoMonths: [], monthly_auto: false,
                         monthly_auto_reason: null, upper: false, lowerMonths: new Set()});
                 }
                 const c = custs.get(ckey)!;
                 const note = (text: string): void => {
                     c.notes.push(text);
                     c.noteMonths.push(k);
+                };
+                // 已付清（沒有欠款）的期別只當一般說明
+                const info = (text: string): void => {
+                    c.info.push(text);
+                    c.infoMonths.push(k);
                 };
                 c.name = rec.name; // 以最新月份的店名為準
                 if (isMonthlyMemo(rec.memo)) c.monthly_auto_reason = 'memo'; // 任一已記住月份有「月」就算（包含略過的期別）
@@ -781,14 +809,18 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
                 if (um.length) {
                     const lst = um.map(([d, a]) => `${d} ${money(a)}`).join('、');
                     const tot = um.length > 1 ? `，合計 ${money(um.reduce((t, [, a]) => t + a, 0))} 元` : ' 元';
-                    note(`${label} 有 ${um.length} 筆入帳金額對不上、沒算進已收（${lst}${tot}），催款前請先確認`);
+                    if (owed) note(`${label} 有 ${um.length} 筆入帳金額對不上、沒算進已收（${lst}${tot}），催款前請先確認`);
+                    else info(`${label} 有 ${um.length} 筆入帳金額對不上、沒算進已收（${lst}${tot}）`);
                 }
-                if (paid !== null && short < 0) note(`${label} 多收 ${money(-short)} 元（未拿來抵其他期）`);
+                if (paid !== null && short < 0) info(`${label} 多收 ${money(-short)} 元（未拿來抵其他期）`);
                 const confirmNoted = !!(owed && paid && needsConfirm(rec));
                 if (confirmNoted) note(`${label} 的收款對帳 2.0 標「需確認」`);
                 if (rec.paid_text) note(`${label} 實收欄寫「${rec.paid_text}」，不是金額，催款前請先確認`);
                 const memo = memoToConfirm(rec.memo ?? '', confirmNoted);
-                if (memo) note(`${label} 備註：${memo}，催款前請先確認`);
+                if (memo) {
+                    if (owed) note(`${label} 備註：${memo}，催款前請先確認`);
+                    else info(`${label} 備註：${memo}`);
+                }
                 if (owed) {
                     c.items.push({
                         period: label, month_key: k, half, amt, paid: paid ?? 0, owed,
@@ -826,7 +858,7 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
 
     const customers: Debtor[] = [];
     for (const c0 of custs.values()) {
-        const {noteMonths, upper: _u, lowerMonths: _l, ...c} = c0;
+        const {noteMonths, infoMonths, upper: _u, lowerMonths: _l, ...c} = c0;
         if (!c.items.length) continue;
         const monthly = marks.monthly?.[customerKey(c)] ?? c.monthly_auto;
         // 月結客人還沒結完的月份：期別算未到期（不算欠款、不算期數、不進訊息），相關注意事項也一併拿掉
@@ -835,6 +867,7 @@ export function compute(history: History, marks: Marks = emptyMarks(), legacy: L
         if (pending.length) {
             c.items = c.items.filter((i) => !isPending(i));
             c.notes = c.notes.filter((_, n) => !unfinished.has(noteMonths[n]));
+            c.info = c.info.filter((_, n) => !unfinished.has(infoMonths[n]));
         }
         if (!c.items.length) continue;
         // 依期別時間順序（同一期原本的欠款在前、手動加的在後）

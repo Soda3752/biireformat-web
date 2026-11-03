@@ -89,6 +89,13 @@
     line-height: 1.5;
 }
 
+/* 一般說明（已付清期別的備註、多收）：不算需確認 */
+.auto-collect .ac-info {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+}
+
 .auto-collect .ac-empty {
     padding: var(--space-6);
     text-align: center;
@@ -184,7 +191,8 @@
 .ac-pick-modal .ac-pick-opt input { margin-top: 4px; }
 .ac-pick-modal .ac-fn { font-weight: var(--font-weight-semibold); }
 
-.ac-pick-modal .ac-tag {
+.ac-pick-modal .ac-tag,
+.ac-settle-pick .ac-tag {
     display: inline-block;
     margin-left: var(--space-2);
     padding: 0 var(--space-2);
@@ -283,6 +291,23 @@
     border-radius: var(--radius-md);
     background: var(--color-bg-subtle, rgba(0, 0, 0, 0.04));
     font-size: var(--font-size-sm);
+}
+
+.ac-settle-hint {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.ac-settle-pick {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 2px 0;
+    cursor: pointer;
+}
+
+.ac-settle-pick input {
+    margin: 0;
 }
 
 .ac-field {

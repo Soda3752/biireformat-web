@@ -27,7 +27,9 @@ import {
     type History,
     type ImportFile,
     importFiles,
+    itemPick,
     KEEP,
+    linePicks,
     extractLegacyRules,
     migrateLegacyRules,
     normalizeMarks,
@@ -141,12 +143,12 @@ describe('欠款計算', () => {
 });
 
 describe('需確認的客人', () => {
-    // 1002 有對不上的入帳、1004 多收 → 有注意事項；1001、1003、1005 沒有
+    // 1002 有對不上的入帳、1004 下期（欠款）有對不上的入帳 → 有注意事項；1004 上期多收只當一般說明；1001、1003、1005 沒有
     const build = async () => {
         const st = await makeStmt(
             [['1001', '甲店', 1000, null, null], ['1002', '乙店', 2000, null, '9/2收999?'],
                 ['1003', '丙店', 3000, null, null], ['1004', '丁店', 4000, 4500, '9/3'], ['1005', '戊店', 500, null, null]],
-            [['1004', '丁店', 100, null, null]],
+            [['1004', '丁店', 100, null, '9/20收99?']],
         );
         const {history} = await run([file('9月.xlsx', 1, st)]);
         return compute(history);
@@ -154,6 +156,9 @@ describe('需確認的客人', () => {
 
     test('有注意事項的排最上面，其餘照代號', async () => {
         const res = await build();
+        const d = res.customers.find((c) => c.code === '1004')!;
+        expect(d.notes).toEqual(['9月下期 有 1 筆入帳金額對不上、沒算進已收（9/20 99 元），催款前請先確認']);
+        expect(d.info).toEqual(['9月上期 多收 500 元（未拿來抵其他期）']);
         expect(res.customers.map((c) => [c.code, c.notes.length > 0])).toEqual(
             [['1002', true], ['1004', true], ['1001', false], ['1003', false], ['1005', false]]);
         expect(res.grand_total).toBe(1000 + 2000 + 3000 + 500 + 100);
@@ -224,12 +229,33 @@ describe('備註欄與實收欄文字列為需確認', () => {
         expect(by['1002'].notes).toEqual([]);
         expect(by['1003'].notes).toEqual(['9月上期 備註：客人說月底一起付，催款前請先確認']);
         expect(by['1004'].notes).toEqual(['9月上期 備註：跟1005合併付，催款前請先確認']);
-        expect(by['1006'].notes).toEqual(['9月上期 備註：老闆娘付現，催款前請先確認']);
+        // 付清的期別：備註只當一般說明，不列需確認
+        expect(by['1006'].notes).toEqual([]);
+        expect(by['1006'].info).toEqual(['9月上期 備註：老闆娘付現']);
         expect(by['1006'].items.map((i) => [i.period, i.owed])).toEqual([['9月下期', 100]]);
         expect(by['1007'].notes).toEqual(['9月上期 有 1 筆入帳金額對不上、沒算進已收（9/30 2,065 元），催款前請先確認']);
         expect(res.grand_total).toBe(2000 + 3000 + 4000 + 500 + 100 + 700);
         expect(res.customers.map((c) => [c.code, c.total])).toEqual(
-            [['1003', 3000], ['1004', 4000], ['1006', 100], ['1007', 700], ['1002', 2000], ['1005', 500]]);
+            [['1003', 3000], ['1004', 4000], ['1007', 700], ['1002', 2000], ['1005', 500], ['1006', 100]]);
+    });
+
+    test('已付清的期別：備註、多收、對不上的入帳只當一般說明，不算需確認；仍欠款的期別照舊', async () => {
+        const st = await makeStmt(
+            [['1001', '甲店', 1000, 1000, '9/1收50?', '+5下'], // 付清＋備註＋對不上的入帳 → 一般說明
+                ['1002', '乙店', 1000, 2935, '9/2', '+5下'], // 多收＋備註 → 一般說明
+                ['1003', '丙店', 1000, null, '9/3收50?', '+5下']], // 欠款 → 照舊要確認
+            [['1001', '甲店', 800, null, null], ['1002', '乙店', 700, null, null], ['1003', '丙店', 600, 600, '9/20']], true);
+        const res = compute((await run([file('9月.xlsx', 1, st)])).history);
+        const by = Object.fromEntries(res.customers.map((c) => [c.code, c]));
+        expect(by['1001'].notes).toEqual([]);
+        expect(by['1001'].info).toEqual(['9月上期 有 1 筆入帳金額對不上、沒算進已收（9/1 50 元）', '9月上期 備註：+5下']);
+        expect(by['1002'].notes).toEqual([]);
+        expect(by['1002'].info).toEqual(['9月上期 多收 1,935 元（未拿來抵其他期）', '9月上期 備註：+5下']);
+        expect(by['1003'].notes).toEqual(['9月上期 有 1 筆入帳金額對不上、沒算進已收（9/3 50 元），催款前請先確認',
+            '9月上期 備註：+5下，催款前請先確認']);
+        expect(by['1003'].info).toEqual([]);
+        expect(filterCustomers(res.customers, '', true).map((c) => c.code)).toEqual(['1003']);
+        expect(res.customers.map((c) => [c.code, c.total])).toEqual([['1003', 1000], ['1001', 800], ['1002', 700]]);
     });
 
     test('實收欄寫字不是金額：列需確認，仍整筆算欠', async () => {
@@ -388,6 +414,66 @@ describe('已結清標記', () => {
         expect(back.customers.map((c) => c.code)).toEqual(compute(h).customers.map((c) => c.code));
         expect(back.grand_total).toBe(compute(h).grand_total);
         expect(back.settled).toEqual([]);
+    });
+
+    test('勾選部分期別：只結清勾的，沒勾的照常算欠款、照常催；取消後恢復', async () => {
+        const h = await build();
+        const before = compute(h);
+        const a = before.customers.find((c) => c.code === '1001')!;
+        expect(a.lines.map((i) => itemPick(i))).toEqual(['2026-08|上', '2026-08|下']);
+        const marks = settleDebtor(emptyMarks(), a, '已補款', NOW, ['2026-08|下']);
+        expect(marks.settled[0]).toMatchObject({keys: ['2026-08|下'], manual_ids: []});
+        const res = compute(h, marks);
+        const left = res.customers.find((c) => c.code === '1001')!;
+        expect(left.items.map((i) => [i.period, i.owed])).toEqual([['8月上期', 1000]]);
+        expect(left.message).toContain('・8月上期：1,000 元');
+        expect(left.message).not.toContain('8月下期');
+        expect(res.settled.map((g) => [g.code, g.items.map((i) => i.period), g.total])).toEqual([['1001', ['8月下期'], 500]]);
+        expect(res.grand_total).toBe(before.grand_total - 500);
+        const back = compute(h, unsettle(marks, res.settled[0].id));
+        expect(back.grand_total).toBe(before.grand_total);
+        expect(back.settled).toEqual([]);
+    });
+
+    test('勾選含手動欠款：只結清勾的手動欠款', async () => {
+        const h = await build();
+        const a0 = compute(h).customers.find((c) => c.code === '1001')!;
+        let marks = addManualDebt(emptyMarks(), a0, {month_key: '2026-09', half: '上', amount: 64, reason: '少付'}, NOW);
+        marks = addManualDebt(marks, a0, {month_key: '2026-09', half: '下', amount: 30, reason: '運費'}, NOW);
+        const a = compute(h, marks).customers.find((c) => c.code === '1001')!;
+        const manualPick = a.lines.filter((i) => i.manual?.reason === '少付').map((i) => itemPick(i));
+        const res = compute(h, settleDebtor(marks, a, '', NOW, manualPick));
+        const left = res.customers.find((c) => c.code === '1001')!;
+        expect(left.items.map((i) => [i.period, i.owed])).toEqual([['8月上期', 1000], ['8月下期', 500], ['9月下期', 30]]);
+        expect(res.settled[0].items.map((i) => [i.period, i.owed])).toEqual([['9月上期', 64]]);
+    });
+
+    test('月結客人：勾一個月份＝該月上下期一起結清，其他月份照常', async () => {
+        const aug = await makeStmt([['1001', '甲店', 1000, null, null]], [['1001', '甲店', 1100, null, null]]);
+        const sep = await makeStmt([['1001', '甲店', 1200, null, null]], [['1001', '甲店', 1300, null, null]]);
+        const {history} = await run([file('8月.xlsx', 1, aug), file('9月.xlsx', 2, sep)]);
+        const today = new Date(2026, 10, 15);
+        const base = setMonthly(emptyMarks(), {code: '1001', name: '甲店', monthly_auto: false}, true);
+        const c = compute(history, base, {}, today).customers[0];
+        expect(c.lines.map((i) => i.period)).toEqual(['8月', '9月']);
+        const marks = settleDebtor(base, c, '', NOW, linePicks(c, c.lines[0]));
+        expect(marks.settled.at(-1)!.keys).toEqual(['2026-08|上', '2026-08|下']);
+        const res = compute(history, marks, {}, today);
+        expect(res.customers[0].lines.map((i) => [i.period, i.owed])).toEqual([['9月', 2500]]);
+        expect(res.settled[0].lines.map((i) => [i.period, i.owed])).toEqual([['8月', 2100]]);
+    });
+
+    test('舊的整批已結清記錄相容：沒給勾選＝全部結清；舊資料照樣排除', async () => {
+        const h = await build();
+        const a = compute(h).customers.find((c) => c.code === '1001')!;
+        const all = settleDebtor(emptyMarks(), a, '已補款', NOW);
+        const picked = settleDebtor(emptyMarks(), a, '已補款', NOW, a.lines.map((i) => itemPick(i)));
+        expect(picked).toEqual(all);
+        const old = normalizeMarks({version: 1, settled: [{id: 'old-1', customer: '1001', code: '1001', name: '甲店',
+            keys: ['2026-08|上', '2026-08|下'], manual_ids: [], reason: '已補款', marked_at: '2026-10-01T09:00:00'}]});
+        const res = compute(h, old);
+        expect(res.customers.some((c) => c.code === '1001')).toBe(false);
+        expect(res.settled[0]).toMatchObject({id: 'old-1', total: 1500});
     });
 
     // 舊版「有收到款就算付清」設定（localStorage 裡可能還留著）

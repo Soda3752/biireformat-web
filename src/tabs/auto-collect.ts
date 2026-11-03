@@ -41,6 +41,7 @@ import {
     removeMonth,
     setMessageEdit,
     setMonthly,
+    linePicks,
     settleDebtor,
     unsettle,
     updateManualDebt,
@@ -382,11 +383,11 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
             const c = result.customers.find((x) => custId(x) === settleBtn.dataset.settle);
             const ans = c && await settleDialog(c);
             if (c && ans) {
-                const next = settleDebtor(marks, c, ans.reason);
+                const next = settleDebtor(marks, c, ans.reason, new Date(), ans.picks);
                 const id = next.settled[next.settled.length - 1]?.id;
                 if (next !== marks && persistMarks(next)) {
                     render();
-                    showUndoBar(`已將 ${c.name} 標為已結清`, () => {
+                    showUndoBar(ans.all ? `已將 ${c.name} 標為已結清` : `已將 ${c.name} 的 ${ans.periods.join('、')} 標為已結清`, () => {
                         if (persistMarks(unsettle(marks, id))) render();
                     });
                 }
@@ -652,6 +653,9 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
            <button type="button" class="ac-link" data-msg="revert" data-cust="${esc(custId(c))}">還原成自動產生</button>` : ''}
         ${editing.has(custId(c)) ? '' : `<button type="button" class="ac-link" data-msg="edit" data-cust="${esc(custId(c))}">編輯</button>`}</div>`;
 
+    /** 一般說明（已付清期別的備註、多收）：灰色小字，不算需確認。 */
+    const infoHtml = (c: Debtor): string => c.info.map((n) => `<div class="ac-info">${esc(n)}</div>`).join('');
+
     const renderList = () => {
         const list = filterCustomers(result.customers, search.value, onlyNotes);
         const byGroup = (key: DebtGroup): Debtor[] => list.filter((c) => c.group === key);
@@ -662,7 +666,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
                 <td>${esc(c.code)}</td><td>${nameCell(c)}${monthlyTag(c)}${periodsInfo(c)}</td>
                 <td class="ac-periods">${c.lines.map((i) => itemHtml(c, i)).join('<br>')}${pendingInfo(c)}</td>
                 <td class="ac-num"><b>${money(c.total)}</b></td>
-                <td>${c.notes.map((n) => `<div class="ac-note">${esc(n)}</div>`).join('')}</td>
+                <td>${c.notes.map((n) => `<div class="ac-note">${esc(n)}</div>`).join('')}${infoHtml(c)}</td>
                 <td class="ac-btns">${c.group !== 'one' ? `<button type="button" class="btn btn-secondary btn-xs" data-copy="${esc(custId(c))}">複製訊息</button>` : ''}
                   <button type="button" class="btn btn-secondary btn-xs" data-adddebt="${esc(custId(c))}">加一筆欠款</button>
                   ${monthlyBtn(c)}
@@ -689,7 +693,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
               <button type="button" class="btn btn-secondary btn-xs" data-settle="${esc(custId(c))}">已結清</button>
               <button type="button" class="btn btn-secondary btn-xs" data-back="${esc(custId(c))}" title="回到上面總表這位的那一列">↑ 回到總表</button>
               <button type="button" class="btn btn-primary btn-xs" data-copy="${esc(custId(c))}">複製</button></span></div>
-            ${c.notes.map((n) => `<div class="ac-note">⚠ ${esc(n)}</div>`).join('')}
+            ${c.notes.map((n) => `<div class="ac-note">⚠ ${esc(n)}</div>`).join('')}${infoHtml(c)}
             ${msgTools(c)}${msgBody(c)}</div>`)];
         });
         $('messages').innerHTML = msgs.join('') || '<div class="ac-empty">沒有訊息</div>';
@@ -751,19 +755,36 @@ function clearDialog(hasMarks: boolean): Promise<{clearMarks: boolean} | null> {
     });
 }
 
-/** 「已結清」視窗：選填原因。 */
-function settleDialog(c: Debtor): Promise<{reason: string} | null> {
-    const periods = c.lines.map((i) => `${esc(i.period)}${i.manual?.reason ? `（${esc(i.manual.reason)}）` : ''} ${money(i.owed)} 元`).join('<br>');
+/** 「已結清」視窗：勾選要結清的期別（預設全勾）、選填原因。 */
+function settleDialog(c: Debtor): Promise<{reason: string; picks: string[]; periods: string[]; all: boolean} | null> {
+    const lineLabel = (i: DebtItem): string => `${i.period}${i.manual?.reason ? `（${i.manual.reason}）` : ''}`;
+    const periods = c.lines.map((i, n) => `<label class="ac-settle-pick"><input type="checkbox" data-pick="${n}" checked>
+        <span>${esc(lineLabel(i))} ${money(i.owed)} 元${i.manual ? '<span class="ac-tag">手動</span>' : ''}</span></label>`).join('');
     const body = `<p><b>${esc(c.code)} ${esc(c.name)}</b>　目前欠款 ${money(c.total)} 元</p>
+      <div class="ac-settle-hint">勾選已經結清的期別（沒勾的照常算欠款、照常催）：</div>
       <div class="ac-settle-periods">${periods}</div>
       <label class="ac-field"><span>原因（選填）</span>
         <input class="app-form-input" type="text" data-role="reason" placeholder="例如：已補款、回饋金自扣" autocomplete="off"></label>
       <div class="ac-chips" data-role="chips"></div>
-      <div class="ac-settle-note">確定後，上面這 ${c.lines.length} 筆不再算欠款。之後新的月份沒付仍會出現；按錯可以在畫面上方按「復原」。</div>`;
+      <div class="ac-settle-note" data-role="settle-note"></div>`;
     const {dialog, close} = openModal('標記已結清', body,
         `<button type="button" class="btn btn-secondary" data-act="cancel">取消</button>
          <button type="button" class="btn btn-primary" data-act="ok">確定</button>`);
     const reason = dialog.querySelector<HTMLInputElement>('[data-role="reason"]')!;
+    const okBtn = dialog.querySelector<HTMLButtonElement>('[data-act="ok"]')!;
+    const noteEl = dialog.querySelector<HTMLElement>('[data-role="settle-note"]')!;
+    const checked = (): number[] => [...dialog.querySelectorAll<HTMLInputElement>('[data-pick]')].filter((x) => x.checked).map((x) => +x.dataset.pick!);
+    const updatePicks = (): void => {
+        const n = checked().length;
+        okBtn.disabled = !n;
+        noteEl.textContent = n
+            ? `確定後，勾選的 ${n} 筆不再算欠款${n < c.lines.length ? `，其餘 ${c.lines.length - n} 筆照常催` : ''}。之後新的月份沒付仍會出現；按錯可以在畫面上方按「復原」。`
+            : '請至少勾選一期。';
+    };
+    dialog.addEventListener('change', (e) => {
+        if ((e.target as HTMLElement).matches('[data-pick]')) updatePicks();
+    });
+    updatePicks();
     const chipBox = dialog.querySelector<HTMLElement>('[data-role="chips"]')!;
     let chips = loadReasonChips();
     let adding = false;
@@ -838,7 +859,11 @@ function settleDialog(c: Debtor): Promise<{reason: string} | null> {
             }
             const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act;
             if (!act) return;
-            const ans = {reason: reason.value.trim()};
+            const sel = checked();
+            if (act === 'ok' && !sel.length) return;
+            const lines = sel.map((n) => c.lines[n]);
+            const ans = {reason: reason.value.trim(), picks: lines.flatMap((i) => linePicks(c, i)),
+                periods: lines.map(lineLabel), all: sel.length === c.lines.length};
             close();
             done(act === 'ok' ? ans : null);
         });
