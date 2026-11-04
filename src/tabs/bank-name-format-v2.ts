@@ -14,7 +14,8 @@
 import ExcelJS from 'exceljs';
 import {saveAs} from 'file-saver';
 import {
-    describeWriteError, downloadSequentially, ensureWritable, isHandleGone, loadFolderHandle, pickFolder, saveFolderHandle, supportsFolderSave, writeFiles,
+    BACKUP_DIR, backupFiles, describeWriteError, downloadSequentially, ensureWritable, type FileStamp, isHandleGone, loadFolderHandle, pickFolder,
+    sameStamp, saveFolderHandle, stampOf, statFile, supportsFolderSave, writeFiles,
 } from '../infra/folder-save';
 
 import type {
@@ -107,6 +108,8 @@ interface BankFileEntry {
 interface StmtFileEntry {
     name: string;
     buf: ArrayBuffer;
+    /** 上傳（或上次存檔寫出）時檔案的大小與修改時間：存檔前與資料夾裡的檔比對，不一致代表被別處改過。 */
+    stamp: FileStamp;
     month: number | null;
     /** 自動判斷下期還沒結帳時，比對的是哪個月的下期（null＝判斷為已結帳）。 */
     autoSkipRef: number | null;
@@ -440,7 +443,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 const wb = await loadWorkbook(buf);
                 if (!isStatementWorkbook(wb)) throw new Error('找不到「上期」「下期」工作表，不像月結明細');
                 stmtFiles = stmtFiles.filter((x) => x.name !== file.name);
-                stmtFiles.push({name: file.name, buf, month: monthOf(file.name), autoSkipRef: null});
+                stmtFiles.push({name: file.name, buf, stamp: stampOf(file), month: monthOf(file.name), autoSkipRef: null});
                 renderStmtList();
                 void rebuild();
             } catch (err) {
@@ -1500,10 +1503,49 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             await saveFolderHandle(FOLDER_KEY, dir);
         }
 
+        // 資料夾裡的檔在上傳（或上次存檔）之後被改過（另一個分頁存過、用 Excel 改過）：擋下來不覆蓋，免得把別次的回填蓋掉
+        const ss = lastStmts;
+        const changed: number[] = [];
+        for (const x of ss) {
+            const now = await statFile(dir, stmtFilename(x.month!));
+            if (now && !sameStamp(now, x.stamp)) changed.push(x.month!);
+        }
+        if (changed.length) {
+            showToast({
+                variant: 'error',
+                duration: 0,
+                title: '沒有存檔',
+                message: `資料夾裡的 ${changed.map((m) => `${m}月`).join('、')} 檔在你上傳之後被改過（可能是另一個分頁存過或用 Excel 改過），請重新上傳最新的檔再存`,
+            });
+            return;
+        }
+
         const files = await buildStmtFiles();
         if (!files.length) return;
 
-        const failed = await writeFiles(dir, files);
+        // 覆蓋前先把舊檔複製到「_備份」
+        let backedUp = 0;
+        try {
+            backedUp = await backupFiles(dir, files.map((f) => f.filename));
+        } catch (err) {
+            showToast({variant: 'error', title: '備份舊檔失敗，尚未存檔', message: describeWriteError(err)});
+            return;
+        }
+
+        const written = new Map<string, File>();
+        const failed = await writeFiles(dir, files, (filename, file) => written.set(filename, file));
+        for (const f of files) {
+            const entry = ss.find((x) => x.month === f.month);
+            const w = written.get(f.filename);
+            if (!entry || !w) continue;
+            // 寫好的檔記下新的大小/修改時間，下次存檔比對時不會誤判成被別處改過
+            entry.stamp = stampOf(w);
+            // 全部存成功才把底稿換成剛存出去的內容（下次存檔以它為準，不會倒退、也不會重複回填）；
+            // 部分失敗時維持原底稿，重按一次會用同一份底稿整批重寫
+            if (!failed.length) entry.buf = f.data;
+        }
+        // 底稿換了：重新對帳，已存進去的入帳變成「處理過」自動略過
+        if (!failed.length) void rebuild();
         renderDownloads();
 
         if (failed.length) {
@@ -1520,7 +1562,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             });
             return;
         }
-        showToast({variant: 'success', title: '全部存檔完成', message: `已存 ${files.length} 份到『${dir.name}』並確認檔案大小，覆蓋舊檔`});
+        showToast({variant: 'success', title: '全部存檔完成', message: `已存 ${files.length} 份到『${dir.name}』並確認檔案大小，覆蓋舊檔`
+            + (backedUp ? `；舊檔 ${backedUp} 份已備份到「${BACKUP_DIR}」` : '')});
     });
 
     const saveWorkbook = async (wb: ExcelJS.Workbook, filename: string) => {

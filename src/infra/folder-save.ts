@@ -81,10 +81,97 @@ export const pickFolder = async (): Promise<FileSystemDirectoryHandle | null> =>
     }
 };
 
-/** 逐檔寫入（同名覆蓋）；close() 成功後再讀回大小比對，一致才算成功。回傳失敗清單，不因單檔失敗中斷其他檔 */
+/** 檔案的大小與修改時間（用來判斷資料夾裡的檔在上傳後有沒有被改過）。 */
+export interface FileStamp {
+    size: number;
+    lastModified: number;
+}
+
+export const stampOf = (f: Pick<File, 'size' | 'lastModified'>): FileStamp => ({size: f.size, lastModified: f.lastModified});
+
+export const sameStamp = (a: FileStamp, b: FileStamp): boolean => a.size === b.size && a.lastModified === b.lastModified;
+
+/** 資料夾裡某個檔的大小與修改時間；沒有這個檔回 null。 */
+export const statFile = async (dir: FileSystemDirectoryHandle, filename: string): Promise<FileStamp | null> => {
+    try {
+        return stampOf(await (await dir.getFileHandle(filename)).getFile());
+    } catch (err) {
+        if (err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'TypeMismatchError')) return null;
+        throw err;
+    }
+};
+
+export const BACKUP_DIR = '_備份';
+export const BACKUP_KEEP = 10;
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+/** 備份檔名用的時間戳：20261104-161306 */
+export const backupStamp = (d: Date): string =>
+    `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+
+const splitExt = (filename: string): [string, string] => {
+    const i = filename.lastIndexOf('.');
+    return i > 0 ? [filename.slice(0, i), filename.slice(i)] : [filename, ''];
+};
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 覆蓋前備份：資料夾裡已有的同名檔複製到「_備份」子資料夾，檔名加時間戳（例：9月_已自動對帳_20261104-161306.xlsx）。
+ * 每個檔只留最近 BACKUP_KEEP 份，只刪符合「原檔名_時間戳」格式、由這裡產生的舊備份。
+ * 回傳備份了幾個檔；備份失敗直接丟錯（呼叫端應中止覆蓋）。
+ */
+export const backupFiles = async (
+    dir: FileSystemDirectoryHandle,
+    filenames: ReadonlyArray<string>,
+    now: Date = new Date(),
+    keep: number = BACKUP_KEEP,
+): Promise<number> => {
+    const existing: Array<{name: string; file: File}> = [];
+    for (const name of filenames) {
+        try {
+            existing.push({name, file: await (await dir.getFileHandle(name)).getFile()});
+        } catch (err) {
+            if (err instanceof DOMException && err.name === 'NotFoundError') continue;
+            throw err;
+        }
+    }
+    if (!existing.length) return 0;
+    const bdir = await dir.getDirectoryHandle(BACKUP_DIR, {create: true});
+    const stamp = backupStamp(now);
+    for (const {name, file} of existing) {
+        const [base, ext] = splitExt(name);
+        const fh = await bdir.getFileHandle(`${base}_${stamp}${ext}`, {create: true});
+        const w = await fh.createWritable();
+        try {
+            await w.write(await file.arrayBuffer());
+            await w.close();
+        } catch (err) {
+            await w.abort().catch(() => undefined);
+            throw err;
+        }
+    }
+    // 清掉多的舊備份（時間戳格式固定，字串排序＝時間排序）
+    const names: string[] = [];
+    for await (const [n, h] of (bdir as unknown as {entries(): AsyncIterable<[string, FileSystemHandle]>}).entries()) {
+        if (h.kind === 'file') names.push(n);
+    }
+    for (const {name} of existing) {
+        const [base, ext] = splitExt(name);
+        const re = new RegExp(`^${escapeRe(base)}_\\d{8}-\\d{6}${escapeRe(ext)}$`);
+        const mine = names.filter((n) => re.test(n)).sort();
+        for (const old of mine.slice(0, Math.max(0, mine.length - keep))) {
+            await bdir.removeEntry(old).catch(() => undefined);
+        }
+    }
+    return existing.length;
+};
+
+/** 逐檔寫入（同名覆蓋）；close() 成功後再讀回大小比對，一致才算成功。回傳失敗清單，不因單檔失敗中斷其他檔。
+ *  onWritten：每個檔寫入並確認成功後呼叫，帶回寫好的檔（可取大小與修改時間）。 */
 export const writeFiles = async (
     dir: FileSystemDirectoryHandle,
     files: SaveFile[],
+    onWritten?: (filename: string, written: File) => void,
 ): Promise<FolderSaveError[]> => {
     const failed: FolderSaveError[] = [];
     for (const f of files) {
@@ -102,6 +189,7 @@ export const writeFiles = async (
             if (written.size !== f.data.byteLength) {
                 throw new Error(`寫入後檔案大小不符（預期 ${f.data.byteLength}，實際 ${written.size}）`);
             }
+            onWritten?.(f.filename, written);
         } catch (error) {
             failed.push({filename: f.filename, error});
         }

@@ -1915,7 +1915,9 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
 
     // 結果工作表
     let ws = sheetByName(wbC, RESULT_SHEET);
-    const header = ['日期', '摘要', '存入金額', '銀行', '帳號/備註', '對應客戶與期別', '狀態', '依據', '說明', '確認'];
+    // 沒有新入帳（例如剛存完又按一次存檔）：不再加一段空白的「新增」
+    if (ws && results.length === 0) return;
+    const header =['日期', '摘要', '存入金額', '銀行', '帳號/備註', '對應客戶與期別', '狀態', '依據', '說明', '確認'];
     if (ws) {
         ws.addRow([]);
         const r = ws.addRow([`—— 新增：${results.length ? results[0].date : ''} 起的入帳 ——`]);
