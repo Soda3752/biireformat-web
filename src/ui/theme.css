@@ -5790,6 +5790,21 @@ td.cell-price-down {
     color: var(--color-danger, #c00000);
 }
 
+.auto-recon-period-pick {
+    margin-top: 4px;
+}
+
+.auto-recon-period-pick label {
+    white-space: nowrap;
+}
+
+.auto-recon-period-pick .auto-recon-pick-select {
+    margin-left: 4px;
+    min-width: 150px;
+    max-width: none;
+    width: auto;
+}
+
 .auto-recon-pick-select {
     min-width: 160px;
     max-width: 220px;

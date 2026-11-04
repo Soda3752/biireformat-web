@@ -65,6 +65,8 @@ const CHEQUE_TAB = '支票';
 const MISSED_TAB = '漏付';
 const MISSED_IGNORED_KEY = 'bii.reconcileV2.missedIgnored';
 const MULTI_PICK_KEY = 'bii.reconcileV2.multiPick';
+/** 已對上的入帳使用者改選的回填期別（日期|金額|帳號 → 客戶代號與期別）；「清除記憶」一併清掉。 */
+const PERIOD_PICK_KEY = 'bii.reconcileV2.periodPick';
 type FilterKey = 'all' | AutoReconcileStatus | SpecialKind | typeof CHEQUE_TAB | typeof MISSED_TAB;
 
 /** 銀行摘要為代收票據（含票據、支票字樣；去空白、全半形）＝存入的支票，另列「支票」分頁 */
@@ -309,6 +311,20 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         }
     };
     const pickKeyOf = (b: Pick<BankEntry, 'date' | 'amt' | 'key'>): string => `${b.date}|${b.amt}|${b.key}`;
+    /** 使用者改選的回填期別：重新上傳同一筆入帳時沿用。 */
+    let periodPicks: Record<string, { code: string; per: string }> = {};
+    try {
+        periodPicks = JSON.parse(localStorage.getItem(PERIOD_PICK_KEY) || '{}') || {};
+    } catch {
+        periodPicks = {};
+    }
+    const savePeriodPicks = () => {
+        try {
+            localStorage.setItem(PERIOD_PICK_KEY, JSON.stringify(periodPicks));
+        } catch {
+            // 無法寫入時只在本次有效
+        }
+    };
     const saveMissedIgnored = () => {
         try {
             localStorage.setItem(MISSED_IGNORED_KEY, JSON.stringify([...missedIgnored]));
@@ -602,6 +618,11 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const kept = multiPicks[pickKeyOf(b)];
             if (kept && !(i in rowMulti)) rowMulti[i] = kept;
         });
+        const rowPeriod: Record<number, { code: string; per: string }> = {};
+        bank.forEach((b, i) => {
+            const kept = periodPicks[pickKeyOf(b)];
+            if (kept) rowPeriod[i] = kept;
+        });
         if (bank.length === 0 || ss.length === 0) {
             lastResult = null;
             if (bankFiles.length > 0 && bank.length === 0) lastError = NO_BANK_ROWS_MSG;
@@ -642,6 +663,7 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
                 rowPick,
                 rowPaidChoice,
                 rowMulti,
+                rowPeriod,
                 done: latest ? readDone(latest) : new Set(),
             });
             lastStmts = ss;
@@ -844,12 +866,19 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
             const note = x.userNote
                 ? `<div class="auto-recon-user-note">備註：${escapeHtml(x.userNote)}</div>${escapeHtml(x.note.replace(`備註：${x.userNote}；`, ''))}`
                 : escapeHtml(x.note);
+            const periodPick = x.periodChoices && x.alloc.length === 1
+                ? `<div class="auto-recon-period-pick"><label class="auto-recon-sub">填到
+                    <select class="reconcile-options-input auto-recon-pick-select" data-period-pick="${x.idx}"
+                            aria-label="這筆入帳要填到哪一期" title="改選後，實收金額與收款日改填到選的那期（會記住）">
+                      ${x.periodChoices.map((c) => `<option value="${escapeHtml(c.per)}"${c.per === x.alloc[0][1][0] ? ' selected' : ''}>${escapeHtml(c.per)}（明細 ${c.amt.toLocaleString()}${c.fee ? `，扣手續費${c.fee}` : ''}）${c.per === x.periodDefault ? '・預設' : ''}</option>`).join('')}
+                    </select></label></div>`
+                : '';
             const missedNote = missedLines(x, r.cust).map((m) => `<div class="auto-recon-missed">⚠ ${escapeHtml(m)}</div>`).join('');
             return `<tr>
               <td class="auto-recon-date">${escapeHtml(x.date.slice(5))}</td>
               <td class="col-money">${x.amt.toLocaleString()}</td>
               <td class="auto-recon-key">${escapeHtml(x.key) || '—'}<div class="auto-recon-sub">${escapeHtml(x.kind)} ${escapeHtml(x.bank)}</div></td>
-              <td>${escapeHtml(x.who) || '<span class="auto-recon-sub">—</span>'}</td>
+              <td>${escapeHtml(x.who) || '<span class="auto-recon-sub">—</span>'}${periodPick}</td>
               <td><span class="reconcile-status-pill ${STATUS_PILL[x.status]}">${STATUS_LABEL[x.status]}</span></td>
               <td class="auto-recon-note">${note}${missedNote}${x.src ? `<div class="auto-recon-sub">依據：${escapeHtml(x.src)}</div>` : ''}</td>
               <td><div class="auto-recon-act">
@@ -1267,6 +1296,17 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         if ((e.target as HTMLElement).closest('[data-memo-period], [data-multi-chip]')) e.preventDefault();
     });
     tbody.addEventListener('change', (e) => {
+        const perSel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-period-pick]');
+        if (perSel) {
+            const entry = byIdx(perSel.dataset.periodPick);
+            if (!entry || entry.alloc.length !== 1) return;
+            const k = pickKeyOf(entry);
+            if (perSel.value === entry.periodDefault) delete periodPicks[k];
+            else periodPicks[k] = {code: entry.alloc[0][0], per: perSel.value};
+            savePeriodPicks();
+            rerun();
+            return;
+        }
         const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('[data-pick-select]');
         if (sel) {
             const entry = pending ? byIdx(String(pending.idx)) : undefined;
@@ -1328,6 +1368,8 @@ export function renderBankNameFormatV2Panel(tab: TabDefinition): HTMLElement {
         if (!window.confirm('確定要清除這台電腦記住的確認紀錄嗎？')) return;
         memory = {};
         saveMemory();
+        periodPicks = {};
+        savePeriodPicks();
         rerun();
     });
 

@@ -160,6 +160,17 @@ export interface ReconcileEntry extends BankEntry {
     sumGroup?: { feeHere: boolean };
     /** 這筆入帳回填到某期後，發現同客戶更早的期別沒付（漏付提醒）。 */
     missed?: Missed[];
+    /** 單店單期回填的入帳可改選的期別（由舊到新；含目前回填的那期）；只有一個可選時不給。 */
+    periodChoices?: PeriodChoice[];
+    /** 系統預設回填的期別（使用者改選前）。 */
+    periodDefault?: string;
+}
+
+/** 可改選的回填期別：期別、明細金額、扣的手續費。 */
+export interface PeriodChoice {
+    per: string;
+    amt: number;
+    fee: number;
 }
 
 /** 漏付：客戶 code 的 per 期（明細 amt）沒有實收，卻已付了比它晚的 paidPer 期。 */
@@ -577,6 +588,8 @@ export interface ReconcileInput {
     rowPaidChoice?: Record<number, 'pick' | 'stack'>;
     /** 本次對帳使用者手動選的各店期別（以 idx 為鍵）：差額 0/-15/-30 或填了備註就照選的回填。 */
     rowMulti?: Record<number, Array<[string, string[]]>>;
+    /** 使用者改選的回填期別（以 idx 為鍵；客戶代號要與系統對到的相同才套用）。 */
+    rowPeriod?: Record<number, { code: string; per: string }>;
     done?: Set<string>;
 }
 
@@ -744,6 +757,7 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
     const rowPick = input.rowPick ?? {};
     const rowPaidChoice = input.rowPaidChoice ?? {};
     const rowMulti = input.rowMulti ?? {};
+    const rowPeriod = input.rowPeriod ?? {};
     const done = input.done ?? new Set<string>();
     if (input.stmts.length === 0) throw new Error('沒有月結明細');
 
@@ -1282,6 +1296,39 @@ export function reconcile(input: ReconcileInput): AutoReconcileResult {
             : r.alloc.map(([c]) => cust[c].name).join('、');
         r.custNames = r.alloc.map(([c]) => cust[c].name);
         if (r.cash === 'ok') r.who = (r.who || cashNames[r.idx]) + '（現付）';
+    }
+
+    // 單店單期回填的入帳：列出金額也對得上的其他未收期別讓使用者改選（預設不變，改選的照選的回填）
+    const fillsOf = (r: ReconcileEntry): string[] => ((r.status === 'OK' || r.status === '需確認')
+        ? r.alloc.flatMap(([cd, run]) => run.map((per) => cd + '|' + per)) : []);
+    for (const r of results) {
+        if (!(r.status === 'OK' || r.status === '需確認') || r.alloc.length !== 1 || r.alloc[0][1].length !== 1) continue;
+        if (r.special || r.cash === 'ok' || r.cash === 'warn' || r.paidDup || r.sumGroup || r.noteShares || r.allocShares
+            || r.manualMulti || r.multiAlts || r.autoMemo || r.userNote) continue;
+        const [code, [cur]] = r.alloc[0];
+        const p = cust[code].p;
+        const others = new Set(results.filter((x) => x !== r).flatMap(fillsOf));
+        const fees = isChequeKind(r.kind) ? [0] : [0, FEE, FEE * 2];
+        const choices = PERIODS.flatMap((per): PeriodChoice[] => {
+            const c = p[per];
+            if (!c) return [];
+            if (per === cur) return [{per, amt: c.amt, fee: r.fee}];
+            if (c.paid || others.has(code + '|' + per) || !avail(per, r.date)) return [];
+            const fee = fees.find((f) => c.amt - f === r.amt);
+            return fee === undefined ? [] : [{per, amt: c.amt, fee}];
+        });
+        if (choices.length < 2) continue;
+        r.periodChoices = choices;
+        r.periodDefault = cur;
+        const want = rowPeriod[r.idx];
+        const ch = want && want.code === code && want.per !== cur ? choices.find((x) => x.per === want.per) : undefined;
+        if (!ch) continue;
+        const oldFee = r.fee;
+        r.alloc = [[code, [ch.per]]];
+        r.fee = ch.fee;
+        r.who = fmtAlloc(r.alloc);
+        const body = oldFee ? r.note.replace(`扣手續費${oldFee}；`, '').replace(`扣手續費${oldFee}`, '') : r.note;
+        r.note = [ch.fee ? `扣手續費${ch.fee}` : '', `已改選 ${ch.per}（原本 ${cur}）`, body].filter(Boolean).join('；');
     }
 
     // 金額不符：決定回填期別（預設＝原本紅字提醒那一期），填了備註就照一般 OK 回填
