@@ -3,7 +3,7 @@
  */
 
 import {EXPENSE_CATEGORIES, type ExpenseCategory, type MonthExpense, sumTotals} from './expense-model';
-import {householdKey} from './expense-store';
+import {isHouseholdName} from './expense-store';
 import type {MonthRevenue} from './revenue-snapshot';
 
 export interface MonthSummary {
@@ -16,7 +16,7 @@ export interface MonthSummary {
     /** 原物料：Excel 實付 */
     materialPaid: number;
     totals: Record<ExpenseCategory, number>;
-    /** 「其他」中被勾為家用的金額 */
+    /** 「其他」中算家用的金額（預設全部，扣掉被取消勾選＝店務的項目） */
     household: number;
     /** 店務支出（全部支出 − 家用） */
     shopExpense: number;
@@ -30,9 +30,10 @@ export interface MonthSummary {
     allBalance: number | null;
 }
 
-export function summarizeMonth(expense: MonthExpense, revenue: MonthRevenue | undefined, household: ReadonlySet<string>): MonthSummary {
+/** @param shopNames 被取消家用勾選（=店務）的「其他」項目名稱；其餘「其他」項目一律算家用 */
+export function summarizeMonth(expense: MonthExpense, revenue: MonthRevenue | undefined, shopNames: ReadonlySet<string>): MonthSummary {
     const householdAmount = expense.items
-        .filter((it) => it.category === '其他' && household.has(householdKey(it.name)))
+        .filter((it) => it.category === '其他' && isHouseholdName(it.name, shopNames))
         .reduce((s, it) => s + it.amount, 0);
     const totalExpense = sumTotals(expense.totals);
     const shopExpense = totalExpense - householdAmount;

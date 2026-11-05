@@ -3,7 +3,7 @@
  * 算出扣原物料後的毛利、扣全部支出後的結餘，並可看年度累計。
  *
  * - 收支表每月重新上傳即覆蓋該月；帳單檔以檔名＋大小為鍵，同檔重傳即覆蓋。
- * - 「其他」明細可逐項勾為家用（以項目名稱記住，下個月同名自動套用），
+ * - 「其他」明細預設全部勾為家用，可逐項取消勾選改算店務（以項目名稱記住被取消的，下個月同名自動套用），
  *   結餘分「店務結餘」（不含家用）與「含家用結餘」兩種。
  * - 資料皆存在瀏覽器 localStorage（見 expense-store）。
  */
@@ -17,10 +17,10 @@ import {EXPENSE_CATEGORIES, type ExpenseCategory, type ExpenseItem} from '@/expe
 import {parseExpenseWorkbook} from '@/expense/expense-parser';
 import {readExpenseGrids} from '@/expense/expense-workbook';
 import {
-    householdKey,
+    isHouseholdName,
     loadExpenseMonths,
-    loadHouseholdNames,
     loadRevenueFiles,
+    loadShopNames,
     removeExpenseMonth,
     removeRevenueFile,
     saveExpenseMonths,
@@ -102,7 +102,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         <div class="analytics-section-label">每月明細</div>
         <p class="analytics-section-hint">
           毛利＝網站營收 − 原物料（Excel 實付）；店務結餘＝網站營收 − 全部支出（不含勾為家用的項目）；含家用結餘＝網站營收 − 全部支出。
-          點月份可展開該月支出明細、勾選家用項目。
+          點月份可展開該月支出明細；「其他」預設全部算家用，取消勾選的項目改算店務。
         </p>
         <div class="analytics-detail-table-wrap expense-table-wrap">
           <table class="analytics-detail-table-el expense-table" data-role="table"></table>
@@ -270,7 +270,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         const revenueFiles = loadRevenueFiles();
         const revenue = computeMonthRevenue(revenueFiles);
         if (seq !== renderSeq) return;
-        const household = loadHouseholdNames();
+        const shopNames = loadShopNames();
 
         const years = [...new Set(months.map((m) => m.year))].sort((a, b) => a - b);
         if (selectedYear === null || !years.includes(selectedYear)) selectedYear = years[years.length - 1] ?? null;
@@ -278,7 +278,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         const rows: MonthSummary[] = months
             .filter((m) => m.year === selectedYear)
             .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-            .map((m) => summarizeMonth(m, revenue.get(m.sortKey), household));
+            .map((m) => summarizeMonth(m, revenue.get(m.sortKey), shopNames));
 
         renderNotices(rows, revenue, new Set(months.map((m) => m.sortKey)));
 
@@ -306,7 +306,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         kpiEl.innerHTML = kpiHtml(year);
         tableEl.innerHTML = tableHtml(rows, year, selectedMonth);
         const selected = rows.find((r) => r.sortKey === selectedMonth);
-        detailEl.innerHTML = selected ? detailHtml(selected, household) : '';
+        detailEl.innerHTML = selected ? detailHtml(selected, shopNames) : '';
 
         await renderCharts(rows);
         statusEl.textContent =
@@ -442,7 +442,7 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
     return head + `<tbody>${body}</tbody>` + foot;
 }
 
-function detailHtml(r: MonthSummary, household: ReadonlySet<string>): string {
+function detailHtml(r: MonthSummary, shopNames: ReadonlySet<string>): string {
     const byCat = new Map<ExpenseCategory, ExpenseItem[]>();
     for (const it of r.expense.items) {
         const list = byCat.get(it.category) ?? [];
@@ -454,9 +454,9 @@ function detailHtml(r: MonthSummary, household: ReadonlySet<string>): string {
         const isOther = cat === '其他';
         const list = items
             .map((it) => {
-                const isHousehold = isOther && household.has(householdKey(it.name));
+                const isHousehold = isOther && isHouseholdName(it.name, shopNames);
                 return `<li class="expense-item ${isHousehold ? 'is-household' : ''}">
-              ${isOther ? `<label class="expense-household-toggle" title="勾選為家用（同名項目之後每月自動套用）">
+              ${isOther ? `<label class="expense-household-toggle" title="預設為家用；取消勾選改算店務（同名項目之後每月自動套用）">
                 <input type="checkbox" data-household="${escapeHtml(it.name)}" ${isHousehold ? 'checked' : ''}>家用</label>` : ''}
               <span class="expense-item-name">${escapeHtml(it.name)}</span>
               ${it.note ? `<span class="expense-item-note">${escapeHtml(it.note)}</span>` : ''}

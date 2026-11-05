@@ -3,7 +3,9 @@
  *
  * Schema：
  *  - `bii.expense.months.v1`：Record<sortKey, MonthExpense>，同月份重新上傳即覆蓋
- *  - `bii.expense.household.v1`：string[]，被勾為「家用」的「其他」項目名稱（同名項目跨月自動套用）
+ *  - `bii.expense.shop.v1`：string[]，被取消「家用」勾選（=店務）的「其他」項目名稱（同名項目跨月自動套用）。
+ *    「其他」項目預設都算家用；不在此清單的一律勾選為家用，新月份新項目也一樣。
+ *    （舊版 `bii.expense.household.v1` 記的是「勾為家用」的名稱，新規則下那些本來就是勾選，故不再讀取。）
  *  - `bii.expense.revenue.v1`：Record<fileId, RevenueFile>，帳單檔解析後的每月商品銷售快照。
  *    只存數量與金額，成本在顯示時才依當下設定的商品成本計算，改了成本不必重傳帳單。
  */
@@ -11,7 +13,7 @@
 import type {MonthExpense} from './expense-model';
 
 const MONTHS_KEY = 'bii.expense.months.v1';
-const HOUSEHOLD_KEY = 'bii.expense.household.v1';
+const SHOP_KEY = 'bii.expense.shop.v1';
 const REVENUE_KEY = 'bii.expense.revenue.v1';
 
 export interface ProductSale {
@@ -62,26 +64,32 @@ export function removeExpenseMonth(sortKey: string): void {
     writeJson(MONTHS_KEY, all);
 }
 
-/* ---------- 家用標記 ---------- */
+/* ---------- 家用標記（預設家用，記住被取消勾選＝店務的名稱） ---------- */
 
 export function householdKey(name: string): string {
     return name.trim();
 }
 
-export function loadHouseholdNames(): Set<string> {
-    const arr = readJson<unknown>(HOUSEHOLD_KEY, []);
+/** 被取消家用勾選（=店務）的「其他」項目名稱 */
+export function loadShopNames(): Set<string> {
+    const arr = readJson<unknown>(SHOP_KEY, []);
     return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []);
 }
 
+/** 「其他」項目是否算家用：不在店務清單裡就是家用 */
+export function isHouseholdName(name: string, shopNames: ReadonlySet<string>): boolean {
+    return !shopNames.has(householdKey(name));
+}
+
 export function setHousehold(name: string, household: boolean): void {
-    const set = loadHouseholdNames();
+    const set = loadShopNames();
     const key = householdKey(name);
-    if (household) set.add(key);
-    else set.delete(key);
+    if (household) set.delete(key);
+    else set.add(key);
     try {
-        writeJson(HOUSEHOLD_KEY, [...set]);
+        writeJson(SHOP_KEY, [...set]);
     } catch (err) {
-        console.warn('[expense-store] persist household failed', err);
+        console.warn('[expense-store] persist shop names failed', err);
     }
 }
 
