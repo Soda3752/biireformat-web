@@ -7,7 +7,7 @@ import {beforeEach, describe, expect, test} from 'bun:test';
 import {existsSync, readFileSync} from 'node:fs';
 
 import {EXPENSE_CATEGORIES, type ExpenseCategory, type ExpenseItem, type MonthExpense, sumTotals} from '../src/expense/expense-model';
-import {isHouseholdName, loadShopNames, setHousehold} from '../src/expense/expense-store';
+import {isHouseholdName, loadShopNames, migrateLegacyHousehold, saveExpenseMonths, setHousehold} from '../src/expense/expense-store';
 import {summarizeMonth, summarizeYear} from '../src/expense/expense-summary';
 import {parseExpenseWorkbook} from '../src/expense/expense-parser';
 import {readExpenseGrids} from '../src/expense/expense-workbook';
@@ -67,10 +67,56 @@ describe('家用預設全勾', () => {
         expect(loadShopNames().size).toBe(0);
     });
 
-    test('舊 key（household.v1）不再讀取，不影響預設全勾', () => {
+    test('有舊 key 但瀏覽器沒存月份：轉換無項目可改，維持預設全勾', () => {
         store.set('bii.expense.household.v1', JSON.stringify(['妹學費']));
         const r = summarizeMonth(month(1, [['妹學費', 10000], ['保險', 3000]]), undefined, loadShopNames());
         expect(r.household).toBe(13000);
+    });
+});
+
+describe('舊版家用標記一次性轉換（household.v1 → shop.v1）', () => {
+    const LEGACY = 'bii.expense.household.v1';
+    const SHOP = 'bii.expense.shop.v1';
+    const FLAG = 'bii.expense.shop.migrated.v1';
+
+    test('沒在舊清單的變店務、在舊清單的仍家用、已存在的店務名稱保留、旗標寫入', () => {
+        saveExpenseMonths([
+            month(1, [['妹學費', 10000], ['下午茶', 300], [' 保險 ', 3000]]),
+            month(2, [['下午茶 ', 200], ['紅包', 600]]),
+        ]);
+        store.set(LEGACY, JSON.stringify(['妹學費', '保險']));
+        store.set(SHOP, JSON.stringify(['妹學費', '已取消項']));
+
+        const shop = loadShopNames();
+        expect([...shop].sort()).toEqual(['下午茶', '妹學費', '已取消項', '紅包'].sort());
+        expect(isHouseholdName('保險', shop)).toBe(true); // 舊清單（正規化比對）→ 仍家用
+        expect(isHouseholdName('下午茶', shop)).toBe(false); // 舊版沒勾 → 店務
+        expect(isHouseholdName('妹學費', shop)).toBe(false); // 新版已取消勾選 → 聯集保留
+        expect(store.get(FLAG)).toBe('1');
+        expect(store.has(LEGACY)).toBe(true); // 舊 key 保留
+
+        const jan = summarizeMonth(month(1, [['妹學費', 10000], ['下午茶', 300], ['保險', 3000]]), undefined, shop);
+        expect(jan.household).toBe(3000);
+    });
+
+    test('旗標寫入後重跑不重複改動：之後勾回家用不會被轉換再改掉', () => {
+        saveExpenseMonths([month(1, [['下午茶', 300], ['保險', 3000]])]);
+        store.set(LEGACY, JSON.stringify(['保險']));
+        expect([...loadShopNames()]).toEqual(['下午茶']);
+
+        setHousehold('下午茶', true);
+        saveExpenseMonths([month(2, [['新項目', 100]])]);
+        migrateLegacyHousehold();
+        expect(loadShopNames().size).toBe(0);
+        expect(isHouseholdName('新項目', loadShopNames())).toBe(true);
+    });
+
+    test('沒有舊 key：不做任何事、不寫旗標，維持預設全勾', () => {
+        saveExpenseMonths([month(1, [['下午茶', 300]])]);
+        store.set(SHOP, JSON.stringify(['已取消項']));
+        expect([...loadShopNames()]).toEqual(['已取消項']);
+        expect(store.has(FLAG)).toBe(false);
+        expect(isHouseholdName('下午茶', loadShopNames())).toBe(true);
     });
 });
 
