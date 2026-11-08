@@ -7,6 +7,7 @@ import {
     hideHiddenTab,
     isHiddenTabRevealed,
     jumpToSettingsSubtab,
+    onSidebarChange,
     renderSideNav,
     resolveInitialTab,
     revealHiddenTab,
@@ -125,6 +126,12 @@ async function bootstrap(): Promise<void> {
 
   renderSideNav(navHost, switchTab);
   switchTab(resolveInitialTab());
+
+  // 側邊欄顯示設定變動（設定頁勾選、隱藏功能解鎖）→ 重畫選單並保留目前分頁的選取狀態
+  onSidebarChange(() => {
+    renderSideNav(navHost, switchTab);
+    setActiveTab(navHost, mainHost, resolveInitialTab());
+  });
 
   window.addEventListener('hashchange', () => {
     switchTab(resolveInitialTab());

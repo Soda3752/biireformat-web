@@ -54,6 +54,7 @@ import {readXlsxAsRows} from '@/infra/excel-codec';
 import {icon} from '@/ui/icons';
 import {showToast} from '@/ui/toast';
 import type {TabDefinition} from '@/ui/tabs';
+import {isTabLockedVisible, isTabUserHidden, listConfigurableTabs, onSidebarChange, setTabUserHidden,} from '@/ui/tabs';
 
 interface CargoRow {
     id: string;
@@ -188,6 +189,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
         <button type="button" class="settings-subnav-item" data-subtab="overview-customer" role="tab" aria-selected="false">明細客戶</button>
         <button type="button" class="settings-subnav-item" data-subtab="lastfive" role="tab" aria-selected="false">末五碼</button>
         <button type="button" class="settings-subnav-item" data-subtab="default-excluded" role="tab" aria-selected="false">預設排除店家</button>
+        <button type="button" class="settings-subnav-item" data-subtab="sidebar" role="tab" aria-selected="false">左側選單顯示</button>
       </nav>
 
       <section class="settings-pane is-active" data-pane="cargo" role="tabpanel">
@@ -300,6 +302,14 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
         </div>
         <div class="settings-table-wrap" data-role="default-excluded-table-wrap"></div>
       </section>
+
+      <section class="settings-pane" data-pane="sidebar" role="tabpanel" hidden>
+        <p class="settings-pane-hint">
+          打勾＝在左側選單顯示，取消＝隱藏。勾選後立即生效，只存在這台電腦的瀏覽器。<br>
+          隱藏只是不列在選單，分頁功能與資料都不受影響；「設定」固定顯示、不能隱藏。
+        </p>
+        <ul class="settings-import-list settings-sidebar-list" data-role="sidebar-list"></ul>
+      </section>
     </div>
   `;
 
@@ -311,6 +321,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
     bindCustomerOrderPane(panel, 'overview');
     bindLastFivePane(panel);
     bindDefaultExcludedPane(panel);
+    bindSidebarPane(panel);
 
     return panel;
 }
@@ -516,6 +527,45 @@ function bindSubnav(panel: HTMLElement): void {
             });
         });
     });
+}
+
+// ============================================================================
+// 左側選單顯示（勾選＝顯示，取消＝隱藏；存在 tabs.ts 的 bii.sidebar.hidden）
+// ============================================================================
+
+function bindSidebarPane(panel: HTMLElement): void {
+    const list = panel.querySelector<HTMLUListElement>('[data-role="sidebar-list"]');
+    if (!list) return;
+
+    const render = () => {
+        list.innerHTML = listConfigurableTabs()
+            .map((tab) => {
+                const locked = isTabLockedVisible(tab.id);
+                const checked = locked || !isTabUserHidden(tab.id);
+                return `
+          <li class="settings-import-row settings-sidebar-row">
+            <label class="settings-sidebar-label${locked ? ' is-locked' : ''}">
+              <input type="checkbox" data-sidebar-tab="${escapeHtml(tab.id)}"
+                     ${checked ? 'checked' : ''} ${locked ? 'disabled' : ''} />
+              <span class="settings-sidebar-icon">${icon(tab.icon, 16)}</span>
+              <span class="settings-import-row-label">${escapeHtml(tab.label)}</span>
+            </label>
+            ${locked ? '<span class="settings-import-row-empty">固定顯示</span>' : ''}
+          </li>`;
+            })
+            .join('');
+    };
+
+    list.addEventListener('change', (e) => {
+        const input = e.target as HTMLInputElement;
+        const tabId = input.dataset.sidebarTab;
+        if (!tabId) return;
+        setTabUserHidden(tabId, !input.checked);
+    });
+
+    render();
+    // 隱藏功能解鎖／收起時，清單要跟著增減
+    onSidebarChange(render);
 }
 
 // ============================================================================

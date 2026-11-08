@@ -62,11 +62,86 @@ function isTabVisible(tab: TabDefinition): boolean {
   return !tab.hidden || revealedHiddenTabs.has(tab.id);
 }
 
+// ============================================================================
+// 使用者自訂「左側選單顯示」：存「隱藏清單」，新加的分頁預設顯示。
+// 只影響側邊欄是否列出，網址 hash 直接指向被隱藏的分頁仍可正常開啟。
+// ============================================================================
+
+const SIDEBAR_HIDDEN_STORAGE_KEY = 'bii.sidebar.hidden';
+/** 固定顯示、不能隱藏的分頁（避免藏掉後找不到設定）。 */
+const ALWAYS_VISIBLE_TAB_IDS: ReadonlySet<string> = new Set(['settings']);
+
+const userHiddenTabs = loadUserHiddenFromStorage();
+const sidebarListeners = new Set<() => void>();
+
+function loadUserHiddenFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(arr)
+        ? arr.filter((x) => typeof x === 'string' && !ALWAYS_VISIBLE_TAB_IDS.has(x))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistUserHidden(): void {
+  try {
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, JSON.stringify([...userHiddenTabs]));
+  } catch (err) {
+    console.warn('[tabs] persist sidebar hidden tabs failed', err);
+  }
+}
+
+function notifySidebarChange(): void {
+  for (const cb of sidebarListeners) {
+    try {
+      cb();
+    } catch (err) {
+      console.error('[tabs] sidebar listener failed', err);
+    }
+  }
+}
+
+/** 側邊欄內容有變動（使用者勾選、隱藏功能解鎖/收起）時通知。回傳取消訂閱函式。 */
+export function onSidebarChange(cb: () => void): () => void {
+  sidebarListeners.add(cb);
+  return () => {
+    sidebarListeners.delete(cb);
+  };
+}
+
+export function isTabLockedVisible(tabId: string): boolean {
+  return ALWAYS_VISIBLE_TAB_IDS.has(tabId);
+}
+
+export function isTabUserHidden(tabId: string): boolean {
+  return !ALWAYS_VISIBLE_TAB_IDS.has(tabId) && userHiddenTabs.has(tabId);
+}
+
+export function setTabUserHidden(tabId: string, hidden: boolean): void {
+  if (ALWAYS_VISIBLE_TAB_IDS.has(tabId)) return;
+  if (hidden === userHiddenTabs.has(tabId)) return;
+  if (hidden) userHiddenTabs.add(tabId);
+  else userHiddenTabs.delete(tabId);
+  persistUserHidden();
+  notifySidebarChange();
+}
+
+/** 設定頁「左側選單顯示」要列出的分頁：依側邊欄順序，未解鎖的隱藏功能不列。 */
+export function listConfigurableTabs(): TabDefinition[] {
+  return TABS.filter((t) => isTabVisible(t));
+}
+
 export function revealHiddenTab(tabId: string): boolean {
   const tab = TABS.find((t) => t.id === tabId);
   if (!tab || !tab.hidden || revealedHiddenTabs.has(tabId)) return false;
   revealedHiddenTabs.add(tabId);
   persistRevealed();
+  notifySidebarChange();
   return true;
 }
 
@@ -75,6 +150,7 @@ export function hideHiddenTab(tabId: string): boolean {
   if (!tab || !tab.hidden || !revealedHiddenTabs.has(tabId)) return false;
   revealedHiddenTabs.delete(tabId);
   persistRevealed();
+  notifySidebarChange();
   return true;
 }
 
@@ -85,7 +161,7 @@ export function isHiddenTabRevealed(tabId: string): boolean {
 export function renderSideNav(host: HTMLElement, onSelect: (tabId: string) => void): void {
   host.innerHTML = '';
   for (const tab of TABS) {
-    if (!isTabVisible(tab)) continue;
+    if (!isTabVisible(tab) || isTabUserHidden(tab.id)) continue;
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'sidenav-item';
