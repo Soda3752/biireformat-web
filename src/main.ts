@@ -26,6 +26,7 @@ import {renderDailyCountPanel} from '@/tabs/daily-count';
 import {renderHandfillPanel} from '@/tabs/handfill';
 import {renderHandfillTransferPanel} from '@/tabs/handfill-transfer';
 import {renderSfShippingPanel} from '@/tabs/sf-shipping';
+import {renderInvoicePanel} from '@/tabs/invoice';
 import {renderDataAnalyticsPanel} from '@/tabs/data-analytics';
 import {renderCrossMonthAnalyticsPanel} from '@/tabs/cross-month-analytics';
 import {renderExpensePanel} from '@/tabs/expense';
@@ -93,6 +94,8 @@ async function bootstrap(): Promise<void> {
         mainHost.appendChild(renderHandfillTransferPanel(tab));
     } else if (tab.id === 'sf-shipping') {
         mainHost.appendChild(renderSfShippingPanel(tab));
+    } else if (tab.id === 'invoice') {
+        mainHost.appendChild(renderInvoicePanel(tab));
     } else if (tab.id === 'analytics') {
         mainHost.appendChild(renderDataAnalyticsPanel(tab));
     } else if (tab.id === 'cross-month-analytics') {
