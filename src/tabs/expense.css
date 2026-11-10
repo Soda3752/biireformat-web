@@ -166,3 +166,55 @@
     cursor: pointer;
     flex-shrink: 0;
 }
+
+/* ---------- 分析區塊 ---------- */
+
+.expense-analysis {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+}
+
+.expense-analysis-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+}
+
+.expense-analysis-title {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+
+.expense-analysis .analytics-section-hint {
+    margin: 0;
+}
+
+.expense-table td.expense-anomaly {
+    color: var(--color-danger);
+    font-weight: var(--font-weight-semibold);
+    background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.expense-anomaly-list {
+    margin: 0;
+    padding-left: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--font-size-sm);
+    color: var(--color-danger);
+}
+
+.expense-breakeven-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.expense-breakeven-grid .analytics-kpi-hint {
+    white-space: normal;
+}

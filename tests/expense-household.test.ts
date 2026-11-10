@@ -43,8 +43,9 @@ describe('家用預設全勾', () => {
         expect(r.household).toBe(13000);
         expect(r.shopExpense).toBe(1000);
         expect(r.totalExpense).toBe(14000);
-        expect(r.shopBalance).toBe(49000);
-        expect(r.allBalance).toBe(36000);
+        expect(r.operatingBalance).toBe(49000);
+        expect(r.afterRepayBalance).toBe(49000);
+        expect(r.netBalance).toBe(36000);
     });
 
     test('取消某項後該項變店務，他月同名（含前後空白）也套用；重新勾回又變家用', () => {

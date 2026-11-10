@@ -4,7 +4,8 @@
  *
  * - 收支表每月重新上傳即覆蓋該月；帳單檔以檔名＋大小為鍵，同檔重傳即覆蓋。
  * - 「其他」明細預設全部勾為家用，可逐項取消勾選改算店務（以項目名稱記住被取消的，下個月同名自動套用），
- *   結餘分「店務結餘」（不含家用）與「含家用結餘」兩種。
+ *   「銀行」是還貸款本金，不算費用，畫面上改稱「還款」；結餘分「營業結餘」「還款後結餘」「實際剩下的錢」三層。
+ * - 下方「分析」區塊：各項占營收 %、近 3 個月平均毛利率、支出異常、每月至少要賣多少才不虧、家用占還款後結餘 %。
  * - 資料皆存在瀏覽器 localStorage（見 expense-store）。
  */
 
@@ -28,8 +29,22 @@ import {
     setHousehold,
 } from '@/expense/expense-store';
 import {computeMonthRevenue, type MonthRevenue, parseBillToRevenueFile} from '@/expense/revenue-snapshot';
-import {type MonthSummary, summarizeMonth, summarizeYear, type YearSummary} from '@/expense/expense-summary';
-import {balanceOption, compositionOption, materialOption} from '@/expense/expense-charts';
+import {categoryLabel, type MonthSummary, summarizeMonth, summarizeYear, type YearSummary} from '@/expense/expense-summary';
+import {balanceOption, compositionOption, marginOption, materialOption, shareOption} from '@/expense/expense-charts';
+import {
+    ANOMALY_KEYS,
+    ANOMALY_THRESHOLD,
+    anomalyAmount,
+    breakeven,
+    detectAnomalies,
+    HEALTHY_MATERIAL_LABOR_RATIO,
+    householdShares,
+    revenueRows,
+    revenueShares,
+    rollingMargins,
+    ROLLING_MONTHS,
+    SHARE_KEYS,
+} from '@/expense/expense-analysis';
 
 const fmtMoney = (v: number) => Math.round(v).toLocaleString('zh-TW');
 const fmtOpt = (v: number | null) => (v === null ? '—' : fmtMoney(v));
@@ -49,7 +64,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
       <header class="card-header">
         <h1 class="card-title">支出</h1>
         <p class="card-subtitle">
-          上傳收支表 Excel（每月各類支出）與當月帳單檔（網站營收），算出扣掉原物料後的毛利，以及扣掉全部支出後的結餘。
+          上傳收支表 Excel（每月各類支出）與當月帳單檔（網站營收），算出扣掉原物料後的毛利，以及營業結餘、還款後結餘、實際剩下的錢。
           資料存在這台電腦的瀏覽器，同一個月重新上傳會覆蓋。
         </p>
       </header>
@@ -86,7 +101,7 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
 
         <div class="analytics-chart-grid">
           <div class="analytics-chart-card analytics-chart-card-wide">
-            <div class="analytics-chart-title">每月營收、店務支出與結餘</div>
+            <div class="analytics-chart-title">每月營收、營業費用與結餘</div>
             <div class="analytics-chart-body" data-role="chart-balance"></div>
           </div>
           <div class="analytics-chart-card">
@@ -101,13 +116,17 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
 
         <div class="analytics-section-label">每月明細</div>
         <p class="analytics-section-hint">
-          毛利＝網站營收 − 原物料（Excel 實付）；店務結餘＝網站營收 − 全部支出（不含勾為家用的項目）；含家用結餘＝網站營收 − 全部支出。
+          毛利＝網站營收 − 原物料（Excel 實付）。<br>
+          營業費用＝原物料＋營運＋車輛＋人事＋其他（店務部分）；「還款」是還貸款本金，不算費用，「家用」也不算。<br>
+          營業結餘＝網站營收 − 營業費用 → 還款後結餘＝營業結餘 − 還款 → 實際剩下的錢＝還款後結餘 − 家用。<br>
           點月份可展開該月支出明細；「其他」預設全部算家用，取消勾選的項目改算店務。
         </p>
         <div class="analytics-detail-table-wrap expense-table-wrap">
           <table class="analytics-detail-table-el expense-table" data-role="table"></table>
         </div>
         <div data-role="detail"></div>
+
+        <div class="expense-analysis" data-role="analysis"></div>
       </section>
 
       <footer class="action-bar">
@@ -130,18 +149,30 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
     const kpiEl = $('kpi');
     const tableEl = $('table');
     const detailEl = $('detail');
+    const analysisEl = $('analysis');
     const statusEl = $('status');
 
     let selectedYear: number | null = null;
     let selectedMonth: string | null = null;
     /** 解析時產生的一次性提醒（重新整理後不保留） */
     let parseNotices: string[] = [];
-    const charts: { balance: ChartHandle | null; composition: ChartHandle | null; material: ChartHandle | null } = {
-        balance: null,
-        composition: null,
-        material: null,
-    };
+    const charts: {
+        balance: ChartHandle | null;
+        composition: ChartHandle | null;
+        material: ChartHandle | null;
+        share: ChartHandle | null;
+        margin: ChartHandle | null;
+    } = {balance: null, composition: null, material: null, share: null, margin: null};
     let resizeCleanup: (() => void) | null = null;
+    let analysisResizeCleanup: (() => void) | null = null;
+    const disposeAnalysisCharts = () => {
+        analysisResizeCleanup?.();
+        analysisResizeCleanup = null;
+        charts.share?.dispose();
+        charts.margin?.dispose();
+        charts.share = null;
+        charts.margin = null;
+    };
     let renderSeq = 0;
 
     /* ============== 上傳 ============== */
@@ -307,11 +338,14 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
         tableEl.innerHTML = tableHtml(rows, year, selectedMonth);
         const selected = rows.find((r) => r.sortKey === selectedMonth);
         detailEl.innerHTML = selected ? detailHtml(selected, shopNames) : '';
+        const hasAnalysis = revenueRows(rows).length > 0;
+        if (!hasAnalysis) disposeAnalysisCharts();
+        analysisEl.innerHTML = analysisHtml(rows);
 
         await renderCharts(rows);
         statusEl.textContent =
             `${selectedYear}年：支出 ${rows.length} 個月份，其中 ${year.revenueMonths} 個月份已載入帳單營收` +
-            (year.revenueMonths < rows.length ? '（缺帳單的月份不計入毛利與結餘累計）' : '');
+            (year.revenueMonths < rows.length ? '（缺帳單的月份不計入毛利、結餘累計與分析）' : '');
     };
 
     const renderNotices = (rows: MonthSummary[], revenue: Map<string, MonthRevenue>, expenseKeys: Set<string>) => {
@@ -343,6 +377,19 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
             charts.balance.setOption(balanceOption(rows));
             charts.composition?.setOption(compositionOption(rows));
             charts.material?.setOption(materialOption(rows));
+
+            const shareEl = panel.querySelector<HTMLElement>('[data-role="chart-share"]');
+            const marginEl = panel.querySelector<HTMLElement>('[data-role="chart-margin"]');
+            if (shareEl && marginEl) {
+                // 分析區塊每次重繪都會換新 DOM，圖表跟著重建
+                disposeAnalysisCharts();
+                charts.share = await createChart(shareEl);
+                charts.margin = await createChart(marginEl);
+                analysisResizeCleanup = observeChartsResize([charts.share, charts.margin]);
+                const shares = revenueShares(rows);
+                charts.share.setOption(shareOption(shares.year ? [...shares.months, shares.year] : shares.months));
+                charts.margin.setOption(marginOption(rollingMargins(rows)));
+            }
         } catch (err) {
             console.error('[expense] chart failed', err);
         }
@@ -360,26 +407,27 @@ export function renderExpensePanel(tab: TabDefinition): HTMLElement {
 /* ====================== HTML 片段 ====================== */
 
 function kpiHtml(y: YearSummary): string {
+    const hasRev = y.revenueMonths > 0;
+    const opt = (v: number) => (hasRev ? fmtMoney(v) : '—');
+    const tone = (v: number) => toneClass(hasRev ? v : null);
     const items: { label: string; value: string; hint?: string; tone?: string }[] = [
         {label: '網站營收', value: fmtMoney(y.revenue), hint: `${y.revenueMonths} 個月`},
         {label: '原物料（Excel 實付）', value: fmtMoney(y.materialPaid)},
         {
             label: '扣原物料毛利',
-            value: y.revenueMonths ? fmtMoney(y.grossProfit) : '—',
-            hint: y.revenueMonths ? `毛利率 ${fmtPct(y.grossProfit, y.revenue)}` : undefined,
-            tone: toneClass(y.revenueMonths ? y.grossProfit : null),
+            value: opt(y.grossProfit),
+            hint: hasRev ? `毛利率 ${fmtPct(y.grossProfit, y.revenue)}` : undefined,
+            tone: tone(y.grossProfit),
         },
-        {label: '店務支出', value: fmtMoney(y.shopExpense), hint: `家用 ${fmtMoney(y.household)}`},
+        {label: '營業費用', value: fmtMoney(y.operatingExpense), hint: '不含還款、家用'},
+        {label: '營業結餘', value: opt(y.operatingBalance), hint: '營收 − 營業費用', tone: tone(y.operatingBalance)},
+        {label: '還款', value: fmtMoney(y.repayment), hint: '還貸款本金，不算費用'},
+        {label: '還款後結餘', value: opt(y.afterRepayBalance), hint: '營業結餘 − 還款', tone: tone(y.afterRepayBalance)},
         {
-            label: '店務結餘',
-            value: y.revenueMonths ? fmtMoney(y.shopBalance) : '—',
-            tone: toneClass(y.revenueMonths ? y.shopBalance : null),
-        },
-        {
-            label: '含家用結餘',
-            value: y.revenueMonths ? fmtMoney(y.allBalance) : '—',
-            hint: `全部支出 ${fmtMoney(y.totalExpense)}`,
-            tone: toneClass(y.revenueMonths ? y.allBalance : null),
+            label: '實際剩下的錢',
+            value: opt(y.netBalance),
+            hint: `再扣家用 ${fmtMoney(y.household)}；全部支出（含還款、家用）${fmtMoney(y.totalExpense)}`,
+            tone: tone(y.netBalance),
         },
     ];
     return items
@@ -393,7 +441,7 @@ function kpiHtml(y: YearSummary): string {
         .join('');
 }
 
-const OTHER_CATS: ExpenseCategory[] = ['營運', '車輛', '人事', '其他', '銀行'];
+const FEE_CATS: ExpenseCategory[] = ['營運', '車輛', '人事', '其他'];
 
 function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null): string {
     const head = `<thead><tr>
@@ -402,11 +450,13 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
       <th class="is-right">原物料<br><small>Excel 實付</small></th>
       <th class="is-right">扣原物料毛利</th>
       <th class="is-right">毛利率</th>
-      ${OTHER_CATS.map((c) => `<th class="is-right">${c}</th>`).join('')}
-      <th class="is-right">其中家用</th>
-      <th class="is-right">全部支出</th>
-      <th class="is-right">店務結餘</th>
-      <th class="is-right">含家用結餘</th>
+      ${FEE_CATS.map((c) => `<th class="is-right">${c}</th>`).join('')}
+      <th class="is-right">其中家用<br><small>不算營業費用</small></th>
+      <th class="is-right">營業費用<br><small>不含還款、家用</small></th>
+      <th class="is-right">營業結餘<br><small>營收 − 營業費用</small></th>
+      <th class="is-right">還款<br><small>還貸款本金</small></th>
+      <th class="is-right">還款後結餘</th>
+      <th class="is-right">實際剩下的錢<br><small>再扣家用</small></th>
     </tr></thead>`;
 
     const body = rows
@@ -417,29 +467,198 @@ function tableHtml(rows: MonthSummary[], y: YearSummary, selected: string | null
           <td class="is-right">${fmtMoney(r.materialPaid)}</td>
           <td class="is-right ${toneClass(r.grossProfit)}">${fmtOpt(r.grossProfit)}</td>
           <td class="is-right">${fmtPct(r.grossProfit, r.revenue)}</td>
-          ${OTHER_CATS.map((c) => `<td class="is-right">${fmtMoney(r.totals[c])}</td>`).join('')}
+          ${FEE_CATS.map((c) => `<td class="is-right">${fmtMoney(r.totals[c])}</td>`).join('')}
           <td class="is-right expense-muted">${r.household ? fmtMoney(r.household) : '—'}</td>
-          <td class="is-right">${fmtMoney(r.totalExpense)}</td>
-          <td class="is-right ${toneClass(r.shopBalance)}"><strong>${fmtOpt(r.shopBalance)}</strong></td>
-          <td class="is-right ${toneClass(r.allBalance)}">${fmtOpt(r.allBalance)}</td>
+          <td class="is-right">${fmtMoney(r.operatingExpense)}</td>
+          <td class="is-right ${toneClass(r.operatingBalance)}"><strong>${fmtOpt(r.operatingBalance)}</strong></td>
+          <td class="is-right">${fmtMoney(r.repayment)}</td>
+          <td class="is-right ${toneClass(r.afterRepayBalance)}">${fmtOpt(r.afterRepayBalance)}</td>
+          <td class="is-right ${toneClass(r.netBalance)}"><strong>${fmtOpt(r.netBalance)}</strong></td>
         </tr>`;
         })
         .join('');
 
     const hasRev = y.revenueMonths > 0;
+    const opt = (v: number) => (hasRev ? fmtMoney(v) : '—');
+    const tone = (v: number) => toneClass(hasRev ? v : null);
     const foot = `<tfoot><tr class="expense-total-row">
       <td>年度累計</td>
-      <td class="is-right">${hasRev ? fmtMoney(y.revenue) : '—'}</td>
+      <td class="is-right">${opt(y.revenue)}</td>
       <td class="is-right">${fmtMoney(y.materialPaid)}</td>
-      <td class="is-right ${toneClass(hasRev ? y.grossProfit : null)}">${hasRev ? fmtMoney(y.grossProfit) : '—'}</td>
+      <td class="is-right ${tone(y.grossProfit)}">${opt(y.grossProfit)}</td>
       <td class="is-right">${hasRev ? fmtPct(y.grossProfit, y.revenue) : '—'}</td>
-      ${OTHER_CATS.map((c) => `<td class="is-right">${fmtMoney(y.totals[c])}</td>`).join('')}
+      ${FEE_CATS.map((c) => `<td class="is-right">${fmtMoney(y.totals[c])}</td>`).join('')}
       <td class="is-right expense-muted">${y.household ? fmtMoney(y.household) : '—'}</td>
-      <td class="is-right">${fmtMoney(y.totalExpense)}</td>
-      <td class="is-right ${toneClass(hasRev ? y.shopBalance : null)}"><strong>${hasRev ? fmtMoney(y.shopBalance) : '—'}</strong></td>
-      <td class="is-right ${toneClass(hasRev ? y.allBalance : null)}">${hasRev ? fmtMoney(y.allBalance) : '—'}</td>
+      <td class="is-right">${fmtMoney(y.operatingExpense)}</td>
+      <td class="is-right ${tone(y.operatingBalance)}"><strong>${opt(y.operatingBalance)}</strong></td>
+      <td class="is-right">${fmtMoney(y.repayment)}</td>
+      <td class="is-right ${tone(y.afterRepayBalance)}">${opt(y.afterRepayBalance)}</td>
+      <td class="is-right ${tone(y.netBalance)}"><strong>${opt(y.netBalance)}</strong></td>
     </tr></tfoot>`;
     return head + `<tbody>${body}</tbody>` + foot;
+}
+
+/* ---------- 分析區塊 ---------- */
+
+const ratioText = (v: number | null) => (v === null ? '—' : `${(v * 100).toFixed(1)}%`);
+
+function analysisHtml(rows: MonthSummary[]): string {
+    const list = revenueRows(rows);
+    const header = `<div class="analytics-section-label">分析</div>`;
+    if (list.length === 0) {
+        return `${header}<p class="analytics-section-hint">還沒有任何月份載入帳單營收，分析需要網站營收才能計算。</p>`;
+    }
+    const scope = `<p class="analytics-section-hint">以下只用已載入帳單營收的月份計算（${list.map((r) => `${r.month}月`).join('、')}，共 ${list.length} 個月）。</p>`;
+    return [header, scope, shareSectionHtml(rows), marginSectionHtml(rows), anomalySectionHtml(rows), breakevenSectionHtml(rows)].join('');
+}
+
+function shareSectionHtml(rows: MonthSummary[]): string {
+    const {months, year} = revenueShares(rows);
+    const limit = HEALTHY_MATERIAL_LABOR_RATIO;
+    const line = (label: string, r: (typeof months)[number], cls = '') => `<tr class="${cls}">
+        <td>${label}</td>
+        ${SHARE_KEYS.map((k) => `<td class="is-right ${k === '營業結餘' ? toneClass(r.amounts[k]) : ''}">${ratioText(r.pct[k])}</td>`).join('')}
+        <td class="is-right ${r.materialLabor !== null && r.materialLabor > limit ? 'is-negative' : ''}"><strong>${ratioText(r.materialLabor)}</strong></td>
+      </tr>`;
+    const body = months.map((r) => line(`${r.month}月`, r)).join('');
+    const foot = year ? line('年度累計', year, 'expense-total-row') : '';
+    return `<div class="expense-analysis-block">
+      <div class="expense-analysis-title">① 各項占營收比例</div>
+      <p class="analytics-section-hint">
+        每 100 元營收花在哪裡。「原物料＋人事」超過 ${Math.round(limit * 100)}% 標紅——食品業一般認為 60～65% 以內算健康，這只是一般參考，不是硬性標準。
+      </p>
+      <div class="analytics-chart-card analytics-chart-card-wide">
+        <div class="analytics-chart-title">各項占營收 %（虛線為一般參考 ${Math.round(limit * 100)}%）</div>
+        <div class="analytics-chart-body" data-role="chart-share"></div>
+      </div>
+      <div class="analytics-detail-table-wrap expense-table-wrap">
+        <table class="analytics-detail-table-el expense-table">
+          <thead><tr><th>月份</th>${SHARE_KEYS.map((k) => `<th class="is-right">${k}</th>`).join('')}<th class="is-right">原物料＋人事</th></tr></thead>
+          <tbody>${body}</tbody>
+          <tfoot>${foot}</tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
+function marginSectionHtml(rows: MonthSummary[]): string {
+    const margins = rollingMargins(rows);
+    const hh = householdShares(rows);
+    const hhBy = new Map(hh.months.map((h) => [h.sortKey, h]));
+    const hhCell = (h: (typeof hh.months)[number] | undefined | null) => {
+        if (!h) return '<td class="is-right">—</td>';
+        if (h.ratio === null) {
+            return `<td class="is-right is-negative" title="還款後結餘是 ${fmtMoney(h.afterRepayBalance)}，家用沒有結餘可以付">還款後已沒剩（家用靠老本）</td>`;
+        }
+        return `<td class="is-right">${ratioText(h.ratio)}</td>`;
+    };
+    const body = margins
+        .map((m) => {
+            const h = hhBy.get(m.sortKey);
+            return `<tr>
+          <td>${m.month}月</td>
+          <td class="is-right expense-muted">${ratioText(m.margin)}</td>
+          <td class="is-right"><strong>${ratioText(m.average)}</strong>${m.monthsUsed < ROLLING_MONTHS ? ` <small class="expense-muted">（${m.monthsUsed} 個月）</small>` : ''}</td>
+          <td class="is-right ${toneClass(h?.afterRepayBalance ?? null)}">${h ? fmtMoney(h.afterRepayBalance) : '—'}</td>
+          <td class="is-right">${h ? fmtMoney(h.household) : '—'}</td>
+          ${hhCell(h)}
+        </tr>`;
+        })
+        .join('');
+    const y = hh.year;
+    const foot = y
+        ? `<tr class="expense-total-row"><td>年度累計</td><td class="is-right" colspan="2"></td>
+            <td class="is-right ${toneClass(y.afterRepayBalance)}">${fmtMoney(y.afterRepayBalance)}</td>
+            <td class="is-right">${fmtMoney(y.household)}</td>${hhCell(y)}</tr>`
+        : '';
+    return `<div class="expense-analysis-block">
+      <div class="expense-analysis-title">② 近 ${ROLLING_MONTHS} 個月平均毛利率、⑤ 家用占還款後結餘</div>
+      <p class="analytics-section-hint">
+        麵粉等原物料是壓 3 個月才付款，單月毛利率會忽高忽低；看「近 ${ROLLING_MONTHS} 個月平均」（含當月，合計毛利 ÷ 合計營收）比較準。<br>
+        家用占比的分母是「還款後結餘」（營業結餘扣掉還款後剩的錢）：100% 代表還款後剩的錢剛好全拿去家用，超過 100% 代表家用比剩的還多；還款後已是負的月份顯示「還款後已沒剩」。
+      </p>
+      <div class="analytics-chart-card analytics-chart-card-wide">
+        <div class="analytics-chart-title">單月毛利率與近 ${ROLLING_MONTHS} 個月平均</div>
+        <div class="analytics-chart-body" data-role="chart-margin"></div>
+      </div>
+      <div class="analytics-detail-table-wrap expense-table-wrap">
+        <table class="analytics-detail-table-el expense-table">
+          <thead><tr>
+            <th>月份</th><th class="is-right">單月毛利率</th><th class="is-right">近 ${ROLLING_MONTHS} 個月平均毛利率</th>
+            <th class="is-right">還款後結餘</th><th class="is-right">家用</th><th class="is-right">家用占還款後結餘</th>
+          </tr></thead>
+          <tbody>${body}</tbody>
+          <tfoot>${foot}</tfoot>
+        </table>
+      </div>
+    </div>`;
+}
+
+function anomalySectionHtml(rows: MonthSummary[]): string {
+    const list = revenueRows(rows);
+    const anomalies = detectAnomalies(rows);
+    const flagged = new Set(anomalies.map((a) => `${a.sortKey}|${a.key}`));
+    const pct = Math.round(ANOMALY_THRESHOLD * 100);
+    const body = list
+        .map(
+            (r) => `<tr><td>${r.month}月</td>${ANOMALY_KEYS.map((k) => {
+                const hit = flagged.has(`${r.sortKey}|${k}`);
+                return `<td class="is-right ${hit ? 'expense-anomaly' : ''}">${fmtMoney(anomalyAmount(r, k))}</td>`;
+            }).join('')}</tr>`,
+        )
+        .join('');
+    const notes = list.length < 2
+        ? '<li class="expense-muted">至少要有 2 個月營收資料才能比較。</li>'
+        : anomalies.length === 0
+            ? `<li class="expense-muted">沒有哪個月的支出比平常高 ${pct}% 以上。</li>`
+            : anomalies
+                .map(
+                    (a) => `<li>${a.month}月 ${a.key} ${fmtMoney(a.amount)}，比其他月份平均（${fmtMoney(a.average)}）高 ${Math.round(a.over * 100)}%</li>`,
+                )
+                .join('');
+    return `<div class="expense-analysis-block">
+      <div class="expense-analysis-title">③ 支出比平常高的月份</div>
+      <p class="analytics-section-hint">某個月的金額比「同一類其他月份的平均」高 ${pct}% 以上就標紅，提醒去看那個月是不是有特別支出。</p>
+      <ul class="expense-anomaly-list">${notes}</ul>
+      <div class="analytics-detail-table-wrap expense-table-wrap">
+        <table class="analytics-detail-table-el expense-table">
+          <thead><tr><th>月份</th>${ANOMALY_KEYS.map((k) => `<th class="is-right">${k}</th>`).join('')}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function breakevenSectionHtml(rows: MonthSummary[]): string {
+    const b = breakeven(rows);
+    if (!b) return '';
+    const marginTxt = ratioText(b.grossMargin);
+    const card = (label: string, need: number | null, cost: string) => {
+        const gap = need === null ? null : b.avgRevenue - need;
+        const gapTxt = gap === null
+            ? '毛利率不是正的，怎麼賣都打不平'
+            : gap >= 0
+                ? `實際平均每月營收 ${fmtMoney(b.avgRevenue)}，多出 ${fmtMoney(gap)}`
+                : `實際平均每月營收 ${fmtMoney(b.avgRevenue)}，還差 ${fmtMoney(-gap)}`;
+        return `<div class="analytics-kpi-card">
+          <div class="analytics-kpi-label">${label}</div>
+          <div class="analytics-kpi-value ${gap === null ? 'is-negative' : toneClass(gap)}">${need === null ? '—' : fmtMoney(need)}</div>
+          <div class="analytics-kpi-hint" title="${escapeHtml(gapTxt)}">${escapeHtml(gapTxt)}</div>
+          <div class="analytics-kpi-hint" title="${escapeHtml(cost)}">${escapeHtml(cost)}</div>
+        </div>`;
+    };
+    return `<div class="expense-analysis-block">
+      <div class="expense-analysis-title">④ 每月至少要賣多少才不虧</div>
+      <p class="analytics-section-hint">
+        每賣 100 元扣掉原物料剩 ${b.grossMargin === null ? '—' : (b.grossMargin * 100).toFixed(1)} 元（年度累計毛利率 ${marginTxt}），
+        要用這些錢付掉每月的固定支出。至少要賣的營收 ＝ 每月平均要付的錢 ÷ 毛利率。
+      </p>
+      <div class="analytics-kpi-grid expense-breakeven-grid">
+        ${card('營業不虧', b.operating, `固定支出（營運＋車輛＋人事＋其他店務）平均每月 ${fmtMoney(b.avgFixed)}`)}
+        ${card('要還款也不虧', b.withRepayment, `再加還款平均每月 ${fmtMoney(b.avgRepayment)}`)}
+        ${card('連家用也打平', b.withHousehold, `再加家用平均每月 ${fmtMoney(b.avgHousehold)}`)}
+      </div>
+    </div>`;
 }
 
 function detailHtml(r: MonthSummary, shopNames: ReadonlySet<string>): string {
@@ -468,7 +687,7 @@ function detailHtml(r: MonthSummary, shopNames: ReadonlySet<string>): string {
             ? `<div class="expense-block-sub">店務 ${fmtMoney(r.totals[cat] - r.household)}／家用 ${fmtMoney(r.household)}</div>`
             : '';
         return `<div class="expense-block">
-          <div class="expense-block-head"><span>${cat}</span><span>${fmtMoney(r.totals[cat])}</span></div>
+          <div class="expense-block-head"><span>${categoryLabel(cat)}</span><span>${fmtMoney(r.totals[cat])}</span></div>
           ${extra}
           <ul class="expense-item-list">${list || '<li class="expense-muted">（無明細）</li>'}</ul>
         </div>`;
