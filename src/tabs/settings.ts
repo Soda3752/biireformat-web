@@ -217,6 +217,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="cargo-file" hidden />
         </div>
+        ${searchBarHtml('cargo', '搜尋貨品編號／貨品名稱...')}
         <div class="settings-table-wrap" data-role="cargo-table-wrap"></div>
       </section>
 
@@ -244,6 +245,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="daily-file" hidden />
         </div>
+        ${searchBarHtml('daily', '搜尋分類／貨品編號／貨品名稱...')}
         <div class="settings-table-wrap" data-role="daily-table-wrap"></div>
       </section>
 
@@ -269,11 +271,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="lastfive-file" hidden />
         </div>
-        <div class="settings-search-bar">
-          <input type="search" class="settings-search-input" data-role="lastfive-search"
-                 placeholder="搜尋客戶名稱／店家編號／線別／末五碼..." autocomplete="off">
-          <button type="button" class="settings-search-clear" data-role="lastfive-search-clear" aria-label="清除搜尋" hidden>✕</button>
-        </div>
+        ${searchBarHtml('lastfive', '搜尋客戶名稱／店家編號／線別／末五碼...')}
         <div class="settings-table-wrap" data-role="lastfive-table-wrap"></div>
       </section>
 
@@ -300,6 +298,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="default-excluded-file" hidden />
         </div>
+        ${searchBarHtml('default-excluded', '搜尋客戶編號／備註...')}
         <div class="settings-table-wrap" data-role="default-excluded-table-wrap"></div>
       </section>
 
@@ -582,13 +581,14 @@ function bindCargoPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="cargo-file"]')!;
 
     let rows: CargoRow[] = [];
+    const filter = createTableFilter<CargoRow>(panel, 'cargo', tableWrap, (r) => [r.id, r.name], () => renderTable());
 
     const refreshStatus = () => {
         const overridden = localSettings.hasCargoSort();
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">本地覆寫</span>'
             : '<span class="settings-badge settings-badge-default">內建預設</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">共 ${rows.length} 筆</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(rows.length)}</span>`;
     };
 
     const persist = async () => {
@@ -609,9 +609,8 @@ function bindCargoPane(panel: HTMLElement): void {
         const headers = showCost ? CARGO_HEADER_FULL : CARGO_HEADER_BASE;
         mountEditableTable(
             tableWrap,
-            buildEditableTable({
+            buildEditableTable(filter.spec(rows, {
                 headers,
-                rows,
                 rowToCells: (row) =>
                     showCost ? [row.id, row.name, row.fee, row.cost] : [row.id, row.name, row.fee],
                 onCellChange: (rowIdx, colIdx, value) => {
@@ -643,7 +642,7 @@ function bindCargoPane(panel: HTMLElement): void {
                     renderTable();
                     void persist();
                 },
-            })
+            }))
         );
         refreshStatus();
     };
@@ -660,7 +659,9 @@ function bindCargoPane(panel: HTMLElement): void {
     });
 
     addBtn.addEventListener('click', () => {
-        rows.unshift({id: '', name: '', fee: '0', cost: ''});
+        const row: CargoRow = {id: '', name: '', fee: '0', cost: ''};
+        rows.unshift(row);
+        filter.pin(row);
         renderTable();
         focusFirstRow(tableWrap);
         void persist();
@@ -700,6 +701,7 @@ function bindCargoPane(panel: HTMLElement): void {
                 next = parseCargoCsv(text);
             }
             rows = next;
+            filter.reset(true);
             localSettings.setCargoSort(serializeCargoCsv(rows));
             invalidateSortingList();
             invalidateCostMap();
@@ -818,6 +820,9 @@ function bindDailyPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="daily-file"]')!;
 
     let rows: DailyRow[] = [];
+    const filter = createTableFilter<DailyRow>(
+        panel, 'daily', tableWrap, (r) => [r.group, r.code, r.name], () => renderTable()
+    );
 
     const refreshStatus = () => {
         const overridden = localSettings.hasDailyReportList();
@@ -825,7 +830,7 @@ function bindDailyPane(panel: HTMLElement): void {
             ? '<span class="settings-badge settings-badge-overridden">本地覆寫</span>'
             : '<span class="settings-badge settings-badge-default">內建預設</span>';
         const groupCount = new Set(rows.map((r) => r.group).filter((g) => g.length > 0)).size;
-        status.innerHTML = `${tag}<span class="settings-status-text">共 ${rows.length} 筆 / ${groupCount} 個分類</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(rows.length)} / ${groupCount} 個分類</span>`;
     };
 
     const persist = () => {
@@ -839,9 +844,8 @@ function bindDailyPane(panel: HTMLElement): void {
         // 成本欄已搬移到「帳單排序」，單日數量不再顯示成本（舊資料仍封存於序列化結果中）
         mountEditableTable(
             tableWrap,
-            buildEditableTable({
+            buildEditableTable(filter.spec(rows, {
                 headers: DAILY_HEADER_BASE,
-                rows,
                 rowToCells: (row) => [row.group, row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = rows[rowIdx];
@@ -874,7 +878,7 @@ function bindDailyPane(panel: HTMLElement): void {
                     renderTable();
                     persist();
                 },
-            })
+            }))
         );
         refreshStatus();
     };
@@ -889,6 +893,7 @@ function bindDailyPane(panel: HTMLElement): void {
         void (async () => {
             try {
                 rows = await loadDailyRows();
+                filter.reset(false);
                 renderTable();
             } catch (err) {
                 console.error('[settings] daily 重新載入失敗', err);
@@ -898,7 +903,9 @@ function bindDailyPane(panel: HTMLElement): void {
 
     addBtn.addEventListener('click', () => {
         const firstGroup = rows.length > 0 ? rows[0].group : '';
-        rows.unshift({group: firstGroup, code: '', name: '', cost: ''});
+        const row: DailyRow = {group: firstGroup, code: '', name: '', cost: ''};
+        rows.unshift(row);
+        filter.pin(row);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -937,6 +944,7 @@ function bindDailyPane(panel: HTMLElement): void {
                 const text = stripBom(await file.text());
                 rows = parseDailyCsv(text);
             }
+            filter.reset(true);
             localSettings.setDailyReportList(serializeDailyCsv(rows));
             invalidateDailyReportTemplate();
             resetEditableTableScroll(tableWrap);
@@ -1125,6 +1133,7 @@ function customerPaneHtml(paneId: string, _label: string): string {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="${paneId}-file" hidden />
         </div>
+        ${searchBarHtml(paneId, '搜尋客戶代碼／客戶名稱...')}
         <div class="settings-table-wrap" data-role="${paneId}-table-wrap"></div>
       </section>`;
 }
@@ -1142,13 +1151,16 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     const fileInput = panel.querySelector<HTMLInputElement>(role('file'))!;
 
     let entries: CustomerOrderEntry[] = loadCustomerEntries(cfg);
+    const filter = createTableFilter<CustomerOrderEntry>(
+        panel, cfg.paneId, tableWrap, (r) => [r.code, r.name], () => renderTable()
+    );
 
     const refreshStatus = () => {
         const overridden = cfg.has();
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">共 ${entries.length} 筆</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(entries.length)}</span>`;
     };
 
     const persist = () => {
@@ -1161,9 +1173,8 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     const renderTable = () => {
         mountEditableTable(
             tableWrap,
-            buildEditableTable({
+            buildEditableTable(filter.spec(entries, {
                 headers: CUSTOMER_HEADER,
-                rows: entries,
                 rowToCells: (row) => [row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = entries[rowIdx];
@@ -1192,7 +1203,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
                     renderTable();
                     persist();
                 },
-            })
+            }))
         );
         refreshStatus();
     };
@@ -1200,7 +1211,9 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     renderTable();
 
     addBtn.addEventListener('click', () => {
-        entries.unshift({code: '', name: ''});
+        const entry = {code: '', name: ''};
+        entries.unshift(entry);
+        filter.pin(entry);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -1240,6 +1253,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
                 next = parseCustomerOrderCsv(text);
             }
             entries = next;
+            filter.reset(true);
             cfg.set(serializeCustomerOrderCsv(entries));
             cfg.invalidate();
             resetEditableTableScroll(tableWrap);
@@ -1295,11 +1309,9 @@ function bindLastFivePane(panel: HTMLElement): void {
     const exportXlsxBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-export-xlsx"]')!;
     const addBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-add"]')!;
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="lastfive-file"]')!;
-    const searchInput = panel.querySelector<HTMLInputElement>('[data-role="lastfive-search"]')!;
-    const searchClearBtn = panel.querySelector<HTMLButtonElement>('[data-role="lastfive-search-clear"]')!;
 
     let rows: LastFiveRow[] = [];
-    let query = '';
+    const search = bindTableSearch(panel, 'lastfive', tableWrap, () => renderTable());
     let sort: {col: number; dir: 'asc' | 'desc'} | null = null;
     let matched = 0;
     /** 剛按「新增一列」的列：搜尋/排序中也先固定顯示在最上面，離開這列後才依搜尋、排序歸位 */
@@ -1310,9 +1322,7 @@ function bindLastFivePane(panel: HTMLElement): void {
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        const countText = query.trim()
-            ? `符合 ${matched} 筆 / 共 ${rows.length} 筆`
-            : `共 ${rows.length} 筆`;
+        const countText = searchCountText(search.query().length > 0, matched, rows.length);
         status.innerHTML = `${tag}<span class="settings-status-text">${countText}</span>`;
     };
 
@@ -1324,22 +1334,12 @@ function bindLastFivePane(panel: HTMLElement): void {
     };
 
     /** 目前顯示的列在 rows 裡的索引；沒搜尋時就是原順序 */
-    const visibleIndices = (): number[] => {
-        const q = query.trim().toLowerCase();
-        const all = rows.map((_, i) => i);
-        if (q.length === 0) return all;
-        const pin = pinned ? rows.indexOf(pinned) : -1;
-        return [
-            ...(pin >= 0 ? [pin] : []),
-            ...all.filter((i) =>
-                i !== pin && LAST_FIVE_FIELDS.some((f) => rows[i][f].toLowerCase().includes(q))
-            ),
-        ];
-    };
+    const visibleIndices = (): number[] =>
+        filterRowIndices(rows, search.query(), (r) => LAST_FIVE_FIELDS.map((f) => r[f]), pinned);
 
     const renderTable = () => {
         const view = visibleIndices();
-        const filtering = query.trim().length > 0;
+        const filtering = search.query().length > 0;
         matched = view.length;
         mountEditableTable(
             tableWrap,
@@ -1419,7 +1419,7 @@ function bindLastFivePane(panel: HTMLElement): void {
         const keepSort = pinnedSort;
         pinned = null;
         pinnedSort = null;
-        if (!keepSort && !query.trim()) return;
+        if (!keepSort && !search.query()) return;
         // 重繪前記下使用者點去的格子，重繪後把游標放回去
         const cell = next instanceof HTMLInputElement ? next.closest('td') : null;
         const tr = cell?.closest<HTMLElement>('tbody tr');
@@ -1449,12 +1449,6 @@ function bindLastFivePane(panel: HTMLElement): void {
         unpin(next);
     });
 
-    const clearSearch = () => {
-        searchInput.value = '';
-        query = '';
-        searchClearBtn.hidden = true;
-    };
-
     // 初始載入：localStorage 沒值就空陣列起步（與其他兩個不同，無內建 fallback）
     rows = loadLastFiveRows();
     // 對帳 2.0 自動加入的列（只用來顯示標籤）；已被刪掉的紀錄順手清掉
@@ -1468,29 +1462,6 @@ function bindLastFivePane(panel: HTMLElement): void {
         pinnedSort = null;
         sort = null;
         renderTable();
-    });
-
-    const applySearch = () => {
-        query = searchInput.value;
-        searchClearBtn.hidden = query.length === 0;
-        resetEditableTableScroll(tableWrap);
-        renderTable();
-    };
-
-    searchInput.addEventListener('input', (ev) => {
-        searchClearBtn.hidden = searchInput.value.length === 0;
-        // 中文輸入法組字途中也會發 input，這時拿到的是拼音片段（ㄨㄤ…），
-        // 直接篩選會讓列表在打字中途變成「沒有符合的資料」，等組字完成再篩
-        if ((ev as InputEvent).isComposing) return;
-        applySearch();
-    });
-    searchInput.addEventListener('compositionend', applySearch);
-
-    searchClearBtn.addEventListener('click', () => {
-        clearSearch();
-        resetEditableTableScroll(tableWrap);
-        renderTable();
-        searchInput.focus();
     });
 
     addBtn.addEventListener('click', () => {
@@ -1542,7 +1513,7 @@ function bindLastFivePane(panel: HTMLElement): void {
             rows = next;
             localSettings.setLastFiveDigit(serializeLastFiveCsv(rows));
             invalidateBankInfos();
-            clearSearch();
+            search.clear();
             sort = null;
             resetEditableTableScroll(tableWrap);
             renderTable();
@@ -1650,6 +1621,9 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>(role('file'))!;
 
     let entries: DefaultExcludedCustomerEntry[] = loadInitialEntries();
+    const filter = createTableFilter<DefaultExcludedCustomerEntry>(
+        panel, 'default-excluded', tableWrap, (r) => [r.code, r.name], () => renderTable()
+    );
 
     function loadInitialEntries(): DefaultExcludedCustomerEntry[] {
         const csv = localSettings.getDefaultExcludedCustomers();
@@ -1661,7 +1635,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">共 ${entries.length} 筆</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(entries.length)}</span>`;
     };
 
     const persist = () => {
@@ -1674,9 +1648,8 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     const renderTable = () => {
         mountEditableTable(
             tableWrap,
-            buildEditableTable({
+            buildEditableTable(filter.spec(entries, {
                 headers: DEFAULT_EXCLUDED_HEADER,
-                rows: entries,
                 rowToCells: (row) => [row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
                     const r = entries[rowIdx];
@@ -1705,7 +1678,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
                     renderTable();
                     persist();
                 },
-            })
+            }))
         );
         refreshStatus();
     };
@@ -1713,7 +1686,9 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     renderTable();
 
     addBtn.addEventListener('click', () => {
-        entries.unshift({code: '', name: ''});
+        const entry = {code: '', name: ''};
+        entries.unshift(entry);
+        filter.pin(entry);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -1753,6 +1728,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
                 next = parseDefaultExcludedCustomersCsv(text);
             }
             entries = next;
+            filter.reset(true);
             localSettings.setDefaultExcludedCustomers(serializeDefaultExcludedCustomersCsv(entries));
             invalidateDefaultExcludedCustomers();
             resetEditableTableScroll(tableWrap);
@@ -1987,6 +1963,175 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
     wrap.className = 'settings-table-scroll';
     wrap.appendChild(table);
     return wrap;
+}
+
+// ============================================================================
+// 表格搜尋（各子分頁共用）
+// ============================================================================
+
+/** 搜尋框 HTML：放在工具列與表格之間，data-role 為 `${prefix}-search` / `${prefix}-search-clear` */
+function searchBarHtml(prefix: string, placeholder: string): string {
+    return `
+        <div class="settings-search-bar">
+          <input type="search" class="settings-search-input" data-role="${prefix}-search"
+                 placeholder="${placeholder}" autocomplete="off">
+          <button type="button" class="settings-search-clear" data-role="${prefix}-search-clear" aria-label="清除搜尋" hidden>✕</button>
+        </div>`;
+}
+
+interface TableSearch {
+    /** 目前的搜尋字（去頭尾空白、轉小寫）；空字串＝沒在搜尋 */
+    query(): string;
+    /** 清空搜尋框（不重繪，由呼叫端自己決定何時重繪） */
+    clear(): void;
+}
+
+/** 綁定搜尋框：輸入即時篩選（中文組字中不篩），✕ 清空恢復全部；有變動就呼叫 onChange 重繪 */
+function bindTableSearch(
+    panel: HTMLElement,
+    prefix: string,
+    tableWrap: HTMLElement,
+    onChange: () => void
+): TableSearch {
+    const input = panel.querySelector<HTMLInputElement>(`[data-role="${prefix}-search"]`)!;
+    const clearBtn = panel.querySelector<HTMLButtonElement>(`[data-role="${prefix}-search-clear"]`)!;
+    let query = '';
+
+    const clear = () => {
+        input.value = '';
+        query = '';
+        clearBtn.hidden = true;
+    };
+
+    const apply = () => {
+        query = input.value;
+        clearBtn.hidden = query.length === 0;
+        resetEditableTableScroll(tableWrap);
+        onChange();
+    };
+
+    input.addEventListener('input', (ev) => {
+        clearBtn.hidden = input.value.length === 0;
+        // 中文輸入法組字途中也會發 input，這時拿到的是拼音片段（ㄨㄤ…），
+        // 直接篩選會讓列表在打字中途變成「沒有符合的資料」，等組字完成再篩
+        if ((ev as InputEvent).isComposing) return;
+        apply();
+    });
+    input.addEventListener('compositionend', apply);
+
+    clearBtn.addEventListener('click', () => {
+        clear();
+        resetEditableTableScroll(tableWrap);
+        onChange();
+        input.focus();
+    });
+
+    return {query: () => query.trim().toLowerCase(), clear};
+}
+
+/** 符合搜尋字的列在 rows 裡的索引（保持原順序）；pinned 列不論是否符合都固定排第一 */
+function filterRowIndices<T>(
+    rows: T[],
+    q: string,
+    fieldsOf: (row: T) => string[],
+    pinned: T | null = null
+): number[] {
+    const all = rows.map((_, i) => i);
+    if (q.length === 0) return all;
+    const pin = pinned ? rows.indexOf(pinned) : -1;
+    return [
+        ...(pin >= 0 ? [pin] : []),
+        ...all.filter((i) => i !== pin && fieldsOf(rows[i]).some((v) => v.toLowerCase().includes(q))),
+    ];
+}
+
+function searchCountText(searching: boolean, matched: number, total: number): string {
+    return searching ? `符合 ${matched} 筆 / 共 ${total} 筆` : `共 ${total} 筆`;
+}
+
+type RowCallbacks<T> = Omit<EditableTableSpec<T>, 'rows' | 'reorderable' | 'emptyText'>;
+
+interface TableFilter<T> {
+    /** 依目前搜尋組出表格 spec：回呼收到的一律是 rows 原陣列的索引；搜尋中關掉拖曳／上下移／插入 */
+    spec(rows: T[], callbacks: RowCallbacks<T>): EditableTableSpec<T>;
+    /** 狀態列的「共 N 筆」或「符合 M 筆 / 共 N 筆」（以最近一次 spec() 的結果計算） */
+    countText(total: number): string;
+    /** 「新增一列」的新列：搜尋中也先固定在最上面，離開這列後才依搜尋歸位 */
+    pin(row: T): void;
+    /** 資料整份被換掉時呼叫：放掉固定列；clearQuery 為 true 時一併清空搜尋（例：匯入檔案） */
+    reset(clearQuery: boolean): void;
+}
+
+/**
+ * 可搜尋的設定表格（帳單排序、單日數量、客戶排序、預設排除店家共用）。
+ * 篩選只影響畫面；資料、存檔永遠是完整的 rows，隱藏的列不會因篩選遺失。
+ */
+function createTableFilter<T>(
+    panel: HTMLElement,
+    prefix: string,
+    tableWrap: HTMLElement,
+    fieldsOf: (row: T) => string[],
+    rerender: () => void
+): TableFilter<T> {
+    const search = bindTableSearch(panel, prefix, tableWrap, () => rerender());
+    let pinned: T | null = null;
+    let lastRows: T[] = [];
+    let lastView: number[] = [];
+
+    // 離開剛新增的那列：搜尋中就重繪讓它依條件歸位，並把游標放回使用者點去的格子
+    tableWrap.addEventListener('focusout', (ev) => {
+        if (!pinned) return;
+        const pinTr = tableWrap.querySelector<HTMLElement>('tbody tr:first-child');
+        const next = (ev as FocusEvent).relatedTarget;
+        if (pinTr && next instanceof Node && pinTr.contains(next)) return;
+        pinned = null;
+        if (!search.query()) return;
+        const cell = next instanceof HTMLInputElement ? next.closest('td') : null;
+        const tr = cell?.closest<HTMLElement>('tbody tr');
+        const target = tr ? lastRows[lastView[Number(tr.dataset.rowIdx)]] : undefined;
+        const col = cell && tr ? [...tr.querySelectorAll('td')].indexOf(cell) : -1;
+        rerender();
+        if (target !== undefined && col >= 0) {
+            const di = lastView.indexOf(lastRows.indexOf(target));
+            const tds = tableWrap.querySelectorAll<HTMLElement>('tbody tr')[di]?.querySelectorAll('td');
+            tds?.[col]?.querySelector('input')?.focus();
+        }
+    });
+
+    return {
+        spec(rows, cb) {
+            const filtering = search.query().length > 0;
+            const view = filterRowIndices(rows, search.query(), fieldsOf, pinned);
+            lastRows = rows;
+            lastView = view;
+            return {
+                ...cb,
+                rows: view.map((i) => rows[i]),
+                reorderable: !filtering,
+                emptyText: filtering && rows.length > 0 ? '沒有符合搜尋條件的資料。' : undefined,
+                onCellChange: (d, c, v) => cb.onCellChange(view[d], c, v),
+                onDeleteRow: (d) => cb.onDeleteRow(view[d]),
+                // 以下三個只在未搜尋時出現，此時 view 就是原順序；保險起見搜尋中一律忽略
+                onMoveRow: (from, to) => {
+                    if (!filtering) cb.onMoveRow(from, to);
+                },
+                onInsertAbove: (d) => {
+                    if (!filtering) cb.onInsertAbove(view[d]);
+                },
+                onInsertBelow: (d) => {
+                    if (!filtering) cb.onInsertBelow(view[d]);
+                },
+            };
+        },
+        countText: (total) => searchCountText(search.query().length > 0, lastView.length, total),
+        pin(row) {
+            pinned = row;
+        },
+        reset(clearQuery) {
+            pinned = null;
+            if (clearQuery) search.clear();
+        },
+    };
 }
 
 /**
