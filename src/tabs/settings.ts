@@ -217,7 +217,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="cargo-file" hidden />
         </div>
-        ${searchBarHtml('cargo', '搜尋貨品編號／貨品名稱...')}
+        ${searchBarHtml('cargo', '搜尋貨品編號／貨品名稱...', true)}
         <div class="settings-table-wrap" data-role="cargo-table-wrap"></div>
       </section>
 
@@ -245,7 +245,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="daily-file" hidden />
         </div>
-        ${searchBarHtml('daily', '搜尋分類／貨品編號／貨品名稱...')}
+        ${searchBarHtml('daily', '搜尋分類／貨品編號／貨品名稱...', true)}
         <div class="settings-table-wrap" data-role="daily-table-wrap"></div>
       </section>
 
@@ -298,7 +298,7 @@ export function renderSettingsPanel(tab: TabDefinition): HTMLElement {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="default-excluded-file" hidden />
         </div>
-        ${searchBarHtml('default-excluded', '搜尋客戶編號／備註...')}
+        ${searchBarHtml('default-excluded', '搜尋客戶編號／備註...', true)}
         <div class="settings-table-wrap" data-role="default-excluded-table-wrap"></div>
       </section>
 
@@ -581,14 +581,14 @@ function bindCargoPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="cargo-file"]')!;
 
     let rows: CargoRow[] = [];
-    const filter = createTableFilter<CargoRow>(panel, 'cargo', tableWrap, (r) => [r.id, r.name], () => renderTable());
+    const finder = createTableFinder<CargoRow>(panel, 'cargo', tableWrap, (r) => [r.id, r.name]);
 
     const refreshStatus = () => {
         const overridden = localSettings.hasCargoSort();
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">本地覆寫</span>'
             : '<span class="settings-badge settings-badge-default">內建預設</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(rows.length)}</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">共 ${rows.length} 筆</span>`;
     };
 
     const persist = async () => {
@@ -609,7 +609,7 @@ function bindCargoPane(panel: HTMLElement): void {
         const headers = showCost ? CARGO_HEADER_FULL : CARGO_HEADER_BASE;
         mountEditableTable(
             tableWrap,
-            buildEditableTable(filter.spec(rows, {
+            buildEditableTable(finder.spec(rows, {
                 headers,
                 rowToCells: (row) =>
                     showCost ? [row.id, row.name, row.fee, row.cost] : [row.id, row.name, row.fee],
@@ -661,7 +661,6 @@ function bindCargoPane(panel: HTMLElement): void {
     addBtn.addEventListener('click', () => {
         const row: CargoRow = {id: '', name: '', fee: '0', cost: ''};
         rows.unshift(row);
-        filter.pin(row);
         renderTable();
         focusFirstRow(tableWrap);
         void persist();
@@ -701,7 +700,7 @@ function bindCargoPane(panel: HTMLElement): void {
                 next = parseCargoCsv(text);
             }
             rows = next;
-            filter.reset(true);
+            finder.reset(true);
             localSettings.setCargoSort(serializeCargoCsv(rows));
             invalidateSortingList();
             invalidateCostMap();
@@ -820,8 +819,8 @@ function bindDailyPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>('[data-role="daily-file"]')!;
 
     let rows: DailyRow[] = [];
-    const filter = createTableFilter<DailyRow>(
-        panel, 'daily', tableWrap, (r) => [r.group, r.code, r.name], () => renderTable()
+    const finder = createTableFinder<DailyRow>(
+        panel, 'daily', tableWrap, (r) => [r.group, r.code, r.name]
     );
 
     const refreshStatus = () => {
@@ -830,7 +829,7 @@ function bindDailyPane(panel: HTMLElement): void {
             ? '<span class="settings-badge settings-badge-overridden">本地覆寫</span>'
             : '<span class="settings-badge settings-badge-default">內建預設</span>';
         const groupCount = new Set(rows.map((r) => r.group).filter((g) => g.length > 0)).size;
-        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(rows.length)} / ${groupCount} 個分類</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">共 ${rows.length} 筆 / ${groupCount} 個分類</span>`;
     };
 
     const persist = () => {
@@ -844,7 +843,7 @@ function bindDailyPane(panel: HTMLElement): void {
         // 成本欄已搬移到「帳單排序」，單日數量不再顯示成本（舊資料仍封存於序列化結果中）
         mountEditableTable(
             tableWrap,
-            buildEditableTable(filter.spec(rows, {
+            buildEditableTable(finder.spec(rows, {
                 headers: DAILY_HEADER_BASE,
                 rowToCells: (row) => [row.group, row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
@@ -893,7 +892,7 @@ function bindDailyPane(panel: HTMLElement): void {
         void (async () => {
             try {
                 rows = await loadDailyRows();
-                filter.reset(false);
+                finder.reset(false);
                 renderTable();
             } catch (err) {
                 console.error('[settings] daily 重新載入失敗', err);
@@ -905,7 +904,6 @@ function bindDailyPane(panel: HTMLElement): void {
         const firstGroup = rows.length > 0 ? rows[0].group : '';
         const row: DailyRow = {group: firstGroup, code: '', name: '', cost: ''};
         rows.unshift(row);
-        filter.pin(row);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -944,7 +942,7 @@ function bindDailyPane(panel: HTMLElement): void {
                 const text = stripBom(await file.text());
                 rows = parseDailyCsv(text);
             }
-            filter.reset(true);
+            finder.reset(true);
             localSettings.setDailyReportList(serializeDailyCsv(rows));
             invalidateDailyReportTemplate();
             resetEditableTableScroll(tableWrap);
@@ -1133,7 +1131,7 @@ function customerPaneHtml(paneId: string, _label: string): string {
           </div>
           <input type="file" accept=".csv,.xlsx,.xls,text/csv" data-role="${paneId}-file" hidden />
         </div>
-        ${searchBarHtml(paneId, '搜尋客戶代碼／客戶名稱...')}
+        ${searchBarHtml(paneId, '搜尋客戶代碼／客戶名稱...', true)}
         <div class="settings-table-wrap" data-role="${paneId}-table-wrap"></div>
       </section>`;
 }
@@ -1151,8 +1149,8 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     const fileInput = panel.querySelector<HTMLInputElement>(role('file'))!;
 
     let entries: CustomerOrderEntry[] = loadCustomerEntries(cfg);
-    const filter = createTableFilter<CustomerOrderEntry>(
-        panel, cfg.paneId, tableWrap, (r) => [r.code, r.name], () => renderTable()
+    const finder = createTableFinder<CustomerOrderEntry>(
+        panel, cfg.paneId, tableWrap, (r) => [r.code, r.name]
     );
 
     const refreshStatus = () => {
@@ -1160,7 +1158,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(entries.length)}</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">共 ${entries.length} 筆</span>`;
     };
 
     const persist = () => {
@@ -1173,7 +1171,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     const renderTable = () => {
         mountEditableTable(
             tableWrap,
-            buildEditableTable(filter.spec(entries, {
+            buildEditableTable(finder.spec(entries, {
                 headers: CUSTOMER_HEADER,
                 rowToCells: (row) => [row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
@@ -1213,7 +1211,6 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
     addBtn.addEventListener('click', () => {
         const entry = {code: '', name: ''};
         entries.unshift(entry);
-        filter.pin(entry);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -1253,7 +1250,7 @@ function bindCustomerOrderPane(panel: HTMLElement, variant: CustomerVariant): vo
                 next = parseCustomerOrderCsv(text);
             }
             entries = next;
-            filter.reset(true);
+            finder.reset(true);
             cfg.set(serializeCustomerOrderCsv(entries));
             cfg.invalidate();
             resetEditableTableScroll(tableWrap);
@@ -1621,8 +1618,8 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     const fileInput = panel.querySelector<HTMLInputElement>(role('file'))!;
 
     let entries: DefaultExcludedCustomerEntry[] = loadInitialEntries();
-    const filter = createTableFilter<DefaultExcludedCustomerEntry>(
-        panel, 'default-excluded', tableWrap, (r) => [r.code, r.name], () => renderTable()
+    const finder = createTableFinder<DefaultExcludedCustomerEntry>(
+        panel, 'default-excluded', tableWrap, (r) => [r.code, r.name]
     );
 
     function loadInitialEntries(): DefaultExcludedCustomerEntry[] {
@@ -1635,7 +1632,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
         const tag = overridden
             ? '<span class="settings-badge settings-badge-overridden">已建立</span>'
             : '<span class="settings-badge settings-badge-default">尚未建立</span>';
-        status.innerHTML = `${tag}<span class="settings-status-text">${filter.countText(entries.length)}</span>`;
+        status.innerHTML = `${tag}<span class="settings-status-text">共 ${entries.length} 筆</span>`;
     };
 
     const persist = () => {
@@ -1648,7 +1645,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     const renderTable = () => {
         mountEditableTable(
             tableWrap,
-            buildEditableTable(filter.spec(entries, {
+            buildEditableTable(finder.spec(entries, {
                 headers: DEFAULT_EXCLUDED_HEADER,
                 rowToCells: (row) => [row.code, row.name],
                 onCellChange: (rowIdx, colIdx, value) => {
@@ -1688,7 +1685,6 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
     addBtn.addEventListener('click', () => {
         const entry = {code: '', name: ''};
         entries.unshift(entry);
-        filter.pin(entry);
         renderTable();
         focusFirstRow(tableWrap);
         persist();
@@ -1728,7 +1724,7 @@ function bindDefaultExcludedPane(panel: HTMLElement): void {
                 next = parseDefaultExcludedCustomersCsv(text);
             }
             entries = next;
-            filter.reset(true);
+            finder.reset(true);
             localSettings.setDefaultExcludedCustomers(serializeDefaultExcludedCustomersCsv(entries));
             invalidateDefaultExcludedCustomers();
             resetEditableTableScroll(tableWrap);
@@ -1788,6 +1784,8 @@ interface EditableTableSpec<T> {
     emptyText?: string;
     /** 列尾小標籤（例：對帳自動加入 M/D）；回傳 null 不顯示 */
     rowTag?: (row: T) => string | null;
+    /** 列的額外 class（例：搜尋找位置的標亮）；回傳 null 不加 */
+    rowClass?: (row: T, rowIdx: number) => string | null;
 }
 
 function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
@@ -1849,6 +1847,8 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
         spec.rows.forEach((row, rowIdx) => {
             const tr = document.createElement('tr');
             tr.dataset.rowIdx = String(rowIdx);
+            const extraClass = spec.rowClass?.(row, rowIdx);
+            if (extraClass) tr.className = extraClass;
 
             // grip column —— 拖曳手柄
             if (reorderable) {
@@ -1969,13 +1969,28 @@ function buildEditableTable<T>(spec: EditableTableSpec<T>): HTMLElement {
 // 表格搜尋（各子分頁共用）
 // ============================================================================
 
-/** 搜尋框 HTML：放在工具列與表格之間，data-role 為 `${prefix}-search` / `${prefix}-search-clear` */
-function searchBarHtml(prefix: string, placeholder: string): string {
-    return `
+/**
+ * 搜尋框 HTML：放在工具列與表格之間，data-role 為 `${prefix}-search` / `${prefix}-search-clear`。
+ * withNav 為 true 時是「找位置」模式：旁邊多 ↑ ↓ 與「第 n / 共 m 筆」（data-role `${prefix}-search-prev/next/pos`）。
+ */
+function searchBarHtml(prefix: string, placeholder: string, withNav = false): string {
+    const bar = `
         <div class="settings-search-bar">
           <input type="search" class="settings-search-input" data-role="${prefix}-search"
                  placeholder="${placeholder}" autocomplete="off">
           <button type="button" class="settings-search-clear" data-role="${prefix}-search-clear" aria-label="清除搜尋" hidden>✕</button>
+        </div>`;
+    if (!withNav) return bar;
+    return `
+        <div class="settings-search-row">
+          ${bar}
+          <div class="settings-search-nav" data-role="${prefix}-search-nav" hidden>
+            <button type="button" class="settings-table-row-btn" data-role="${prefix}-search-prev"
+                    title="上一筆（Shift+Enter）" aria-label="上一筆符合的資料">${icon('chevron-up', 16)}</button>
+            <button type="button" class="settings-table-row-btn" data-role="${prefix}-search-next"
+                    title="下一筆（Enter）" aria-label="下一筆符合的資料">${icon('chevron-down', 16)}</button>
+            <span class="settings-search-pos" data-role="${prefix}-search-pos" aria-live="polite"></span>
+          </div>
         </div>`;
 }
 
@@ -2049,87 +2064,172 @@ function searchCountText(searching: boolean, matched: number, total: number): st
     return searching ? `符合 ${matched} 筆 / 共 ${total} 筆` : `共 ${total} 筆`;
 }
 
-type RowCallbacks<T> = Omit<EditableTableSpec<T>, 'rows' | 'reorderable' | 'emptyText'>;
+type RowCallbacks<T> = Omit<EditableTableSpec<T>, 'rows' | 'reorderable' | 'emptyText' | 'rowClass'>;
 
-interface TableFilter<T> {
-    /** 依目前搜尋組出表格 spec：回呼收到的一律是 rows 原陣列的索引；搜尋中關掉拖曳／上下移／插入 */
+interface TableFinder<T> {
+    /** 組出表格 spec：全部列照常顯示、可拖曳／上下移／插入／刪除；符合搜尋的列加上標亮 class */
     spec(rows: T[], callbacks: RowCallbacks<T>): EditableTableSpec<T>;
-    /** 狀態列的「共 N 筆」或「符合 M 筆 / 共 N 筆」（以最近一次 spec() 的結果計算） */
-    countText(total: number): string;
-    /** 「新增一列」的新列：搜尋中也先固定在最上面，離開這列後才依搜尋歸位 */
-    pin(row: T): void;
-    /** 資料整份被換掉時呼叫：放掉固定列；clearQuery 為 true 時一併清空搜尋（例：匯入檔案） */
+    /** 資料整份被換掉時呼叫：放掉目前所在那筆；clearQuery 為 true 時一併清空搜尋（例：匯入檔案） */
     reset(clearQuery: boolean): void;
 }
 
 /**
- * 可搜尋的設定表格（帳單排序、單日數量、客戶排序、預設排除店家共用）。
- * 篩選只影響畫面；資料、存檔永遠是完整的 rows，隱藏的列不會因篩選遺失。
+ * 「找位置」搜尋（帳單排序、單日數量、客戶排序、預設排除店家共用）。
+ * 不篩選：整張表照常顯示，只把符合的列淡色標示、目前所在那筆明顯標亮並捲過去，
+ * 找到後可以直接拖曳調整位置。Enter／↓ 下一筆、Shift+Enter／↑ 上一筆，循環。
  */
-function createTableFilter<T>(
+function createTableFinder<T>(
     panel: HTMLElement,
     prefix: string,
     tableWrap: HTMLElement,
-    fieldsOf: (row: T) => string[],
-    rerender: () => void
-): TableFilter<T> {
-    const search = bindTableSearch(panel, prefix, tableWrap, () => rerender());
-    let pinned: T | null = null;
-    let lastRows: T[] = [];
-    let lastView: number[] = [];
+    fieldsOf: (row: T) => string[]
+): TableFinder<T> {
+    const el = <E extends HTMLElement>(name: string) =>
+        panel.querySelector<E>(`[data-role="${prefix}-search${name}"]`)!;
+    const input = el<HTMLInputElement>('');
+    const clearBtn = el<HTMLButtonElement>('-clear');
+    const nav = el<HTMLElement>('-nav');
+    const prevBtn = el<HTMLButtonElement>('-prev');
+    const nextBtn = el<HTMLButtonElement>('-next');
+    const pos = el<HTMLElement>('-pos');
 
-    // 離開剛新增的那列：搜尋中就重繪讓它依條件歸位，並把游標放回使用者點去的格子
-    tableWrap.addEventListener('focusout', (ev) => {
-        if (!pinned) return;
-        const pinTr = tableWrap.querySelector<HTMLElement>('tbody tr:first-child');
-        const next = (ev as FocusEvent).relatedTarget;
-        if (pinTr && next instanceof Node && pinTr.contains(next)) return;
-        pinned = null;
-        if (!search.query()) return;
-        const cell = next instanceof HTMLInputElement ? next.closest('td') : null;
-        const tr = cell?.closest<HTMLElement>('tbody tr');
-        const target = tr ? lastRows[lastView[Number(tr.dataset.rowIdx)]] : undefined;
-        const col = cell && tr ? [...tr.querySelectorAll('td')].indexOf(cell) : -1;
-        rerender();
-        if (target !== undefined && col >= 0) {
-            const di = lastView.indexOf(lastRows.indexOf(target));
-            const tds = tableWrap.querySelectorAll<HTMLElement>('tbody tr')[di]?.querySelectorAll('td');
-            tds?.[col]?.querySelector('input')?.focus();
+    let query = '';
+    let rows: T[] = [];
+    /** 符合的列在 rows 裡的索引（原順序） */
+    let matches: number[] = [];
+    let matchSet = new Set<number>();
+    /** 目前所在那筆在 matches 裡的順位；-1 = 沒有 */
+    let cur = -1;
+    /** 目前所在那筆的資料列：重繪（拖曳、刪除…）後用它找回同一列 */
+    let curRow: T | null = null;
+
+    const normalized = () => query.trim().toLowerCase();
+
+    /** 依目前搜尋字重算符合的列；目前所在那筆優先維持在同一個資料列，找不到就維持同一個順位 */
+    const recompute = () => {
+        const q = normalized();
+        matches = [];
+        if (q) {
+            rows.forEach((r, i) => {
+                if (fieldsOf(r).some((v) => v.toLowerCase().includes(q))) matches.push(i);
+            });
         }
+        matchSet = new Set(matches);
+        if (matches.length === 0) {
+            cur = -1;
+            curRow = null;
+            return;
+        }
+        const keep = curRow ? matches.indexOf(rows.indexOf(curRow)) : -1;
+        cur = keep >= 0 ? keep : Math.min(Math.max(cur, 0), matches.length - 1);
+        curRow = rows[matches[cur]];
+    };
+
+    const classOf = (rowIdx: number): string | null => {
+        if (cur >= 0 && rowIdx === matches[cur]) return 'is-search-current';
+        return matchSet.has(rowIdx) ? 'is-search-match' : null;
+    };
+
+    const paintNav = () => {
+        clearBtn.hidden = input.value.length === 0;
+        nav.hidden = normalized().length === 0;
+        pos.textContent = matches.length > 0 ? `第 ${cur + 1} / 共 ${matches.length} 筆` : '沒有符合的資料';
+        prevBtn.disabled = matches.length === 0;
+        nextBtn.disabled = matches.length === 0;
+    };
+
+    /** 不重繪表格，直接更新現有列的標亮（打字搜尋、跳筆、編輯格子時用，游標不會跑掉） */
+    const paintRows = () => {
+        tableWrap.querySelectorAll<HTMLElement>('tbody tr[data-row-idx]').forEach((tr) => {
+            const c = classOf(Number(tr.dataset.rowIdx));
+            tr.classList.toggle('is-search-current', c === 'is-search-current');
+            tr.classList.toggle('is-search-match', c === 'is-search-match');
+        });
+    };
+
+    /** 把目前所在那筆捲到表格可視區中間 */
+    const scrollToCurrent = () => {
+        if (cur < 0) return;
+        const scroll = tableWrap.querySelector<HTMLElement>('.settings-table-scroll');
+        const tr = tableWrap.querySelector<HTMLElement>(`tbody tr[data-row-idx="${matches[cur]}"]`);
+        if (!scroll || !tr) return;
+        const delta = tr.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+        const theadH = scroll.querySelector('thead')?.getBoundingClientRect().height ?? 0;
+        scroll.scrollTop += delta - theadH - (scroll.clientHeight - theadH - tr.offsetHeight) / 2;
+        // 表格本身在視窗外時，把那列也拉進視窗
+        const r = tr.getBoundingClientRect();
+        if (r.top < 0 || r.bottom > window.innerHeight) tr.scrollIntoView({block: 'nearest'});
+    };
+
+    const refresh = (scroll: boolean) => {
+        paintNav();
+        paintRows();
+        if (scroll) scrollToCurrent();
+    };
+
+    const apply = () => {
+        query = input.value;
+        // 新的搜尋字：從第一筆符合的列開始
+        cur = 0;
+        curRow = null;
+        recompute();
+        refresh(true);
+    };
+
+    const step = (delta: number) => {
+        if (matches.length === 0) return;
+        cur = (cur + delta + matches.length) % matches.length;
+        curRow = rows[matches[cur]];
+        refresh(true);
+    };
+
+    input.addEventListener('input', (ev) => {
+        clearBtn.hidden = input.value.length === 0;
+        // 中文輸入法組字途中拿到的是拼音片段，等組字完成再找
+        if ((ev as InputEvent).isComposing) return;
+        apply();
+    });
+    input.addEventListener('compositionend', apply);
+    input.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+        ev.preventDefault();
+        step(ev.shiftKey ? -1 : 1);
+    });
+    prevBtn.addEventListener('click', () => step(-1));
+    nextBtn.addEventListener('click', () => step(1));
+    clearBtn.addEventListener('click', () => {
+        input.value = '';
+        query = '';
+        recompute();
+        refresh(false);
+        input.focus();
     });
 
     return {
-        spec(rows, cb) {
-            const filtering = search.query().length > 0;
-            const view = filterRowIndices(rows, search.query(), fieldsOf, pinned);
-            lastRows = rows;
-            lastView = view;
+        spec(next, cb) {
+            rows = next;
+            recompute();
+            paintNav();
             return {
                 ...cb,
-                rows: view.map((i) => rows[i]),
-                reorderable: !filtering,
-                emptyText: filtering && rows.length > 0 ? '沒有符合搜尋條件的資料。' : undefined,
-                onCellChange: (d, c, v) => cb.onCellChange(view[d], c, v),
-                onDeleteRow: (d) => cb.onDeleteRow(view[d]),
-                // 以下三個只在未搜尋時出現，此時 view 就是原順序；保險起見搜尋中一律忽略
-                onMoveRow: (from, to) => {
-                    if (!filtering) cb.onMoveRow(from, to);
-                },
-                onInsertAbove: (d) => {
-                    if (!filtering) cb.onInsertAbove(view[d]);
-                },
-                onInsertBelow: (d) => {
-                    if (!filtering) cb.onInsertBelow(view[d]);
+                rows: next,
+                reorderable: true,
+                rowClass: (_row, i) => classOf(i),
+                onCellChange: (rowIdx, colIdx, value) => {
+                    cb.onCellChange(rowIdx, colIdx, value);
+                    // 改了內容可能變成符合／不符合：只更新標亮，不重繪（不打斷輸入）
+                    recompute();
+                    refresh(false);
                 },
             };
         },
-        countText: (total) => searchCountText(search.query().length > 0, lastView.length, total),
-        pin(row) {
-            pinned = row;
-        },
         reset(clearQuery) {
-            pinned = null;
-            if (clearQuery) search.clear();
+            curRow = null;
+            cur = 0;
+            if (clearQuery) {
+                input.value = '';
+                query = '';
+            }
         },
     };
 }

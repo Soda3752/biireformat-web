@@ -1345,6 +1345,37 @@ p {
     outline-offset: 1px;
 }
 
+/* 「找位置」搜尋：搜尋框旁的 ↑ ↓ 與「第 n / 共 m 筆」 */
+.settings-search-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.settings-search-row .settings-search-bar {
+    margin-bottom: 0;
+}
+
+.settings-search-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.settings-search-nav[hidden] {
+    display: none;
+}
+
+.settings-search-pos {
+    margin-left: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
 .settings-table-wrap {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -1496,6 +1527,19 @@ p {
 .settings-table-row-btn-danger:hover:not(:disabled) {
     background-color: var(--color-danger-soft);
     color: var(--color-danger);
+}
+
+/* 搜尋符合的列淡色標示，目前所在那筆明顯標亮（左側加色條） */
+.settings-table tbody tr.is-search-match {
+    background-color: color-mix(in srgb, var(--color-warning-soft) 45%, transparent);
+}
+
+.settings-table tbody tr.is-search-current {
+    background-color: var(--color-warning-soft);
+}
+
+.settings-table tbody tr.is-search-current td:first-child {
+    box-shadow: inset 4px 0 0 0 var(--color-warning);
 }
 
 .settings-table tbody tr.is-dragging {
