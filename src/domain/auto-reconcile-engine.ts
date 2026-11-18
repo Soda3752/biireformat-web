@@ -1941,3 +1941,87 @@ export function writeBack(wbs: Record<number, ExcelJS.Workbook>, latestMonth: nu
         });
     }
 }
+
+// ---------- 手動收款登記（自動催款分頁）
+
+/** 一筆手動登記的收款：寫到某月明細某位客人某一期。 */
+export interface PaymentEntry {
+    /** 明細裡的客人鍵：代號，或 NAME_KEY_PREFIX + 客戶名稱（沒代號的版面）。 */
+    key: string;
+    half: '上' | '下';
+    /** 這次收到的金額（會加到原本的實收金額上）。 */
+    amount: number;
+    /** 收款日 M/D（與對帳 2.0 回填的格式一致）。 */
+    date: string;
+    /** 網站記住的帳單金額；Excel 對不上就不寫（檔案可能改過）。 */
+    expectAmt: number;
+    /** 網站記住的原本實收金額（沒有為 0）。 */
+    expectPaid: number;
+}
+
+export interface PaymentProblem {
+    key: string;
+    half: '上' | '下';
+    reason: string;
+}
+
+/**
+ * 把手動登記的收款寫進一個月的明細 workbook（就地修改）：實收金額＝原本實收＋這次金額、收款日 M/D，
+ * 字級、對齊、綠底照對帳 2.0 回填；有備註欄時，原本的漏付紅字改成「已補付 M/D」、分兩次收的加「2筆」。
+ * 先全部檢查，任何一筆對不上（找不到客人、帳單金額或原本實收跟網站記住的不同）就一筆都不寫，回傳問題清單。
+ */
+export function registerPayments(wb: ExcelJS.Workbook, month: number, entries: ReadonlyArray<PaymentEntry>): PaymentProblem[] {
+    let data: StmtData;
+    try {
+        data = readStmt(wb, month);
+    } catch (err) {
+        return entries.map((e) => ({key: e.key, half: e.half, reason: err instanceof Error ? err.message : String(err)}));
+    }
+    const problems: PaymentProblem[] = [];
+    const targets: Array<[PaymentEntry, PeriodCell]> = [];
+    for (const e of entries) {
+        const info = data[e.key]?.p[`${month}${e.half}`];
+        if (!info) {
+            problems.push({key: e.key, half: e.half, reason: `Excel 的${e.half}期找不到這位客人`});
+            continue;
+        }
+        if (info.amt !== Math.round(e.expectAmt)) {
+            problems.push({key: e.key, half: e.half,
+                reason: `Excel 上的帳單金額是 ${info.amt.toLocaleString()}，網站記住的是 ${Math.round(e.expectAmt).toLocaleString()}（檔案可能改過，請重新放入這個月的檔案）`});
+            continue;
+        }
+        if ((info.paid ?? 0) !== Math.round(e.expectPaid)) {
+            problems.push({key: e.key, half: e.half,
+                reason: `Excel 上這期已經填了實收 ${(info.paid ?? 0).toLocaleString()}，網站記住的是 ${Math.round(e.expectPaid).toLocaleString()}（可能已經登記過，請重新放入這個月的檔案）`});
+            continue;
+        }
+        targets.push([e, info]);
+    }
+    if (problems.length) return problems;
+
+    for (const [e, info] of targets) {
+        const ws = sheetByName(wb, info.sheet)!;
+        const {headerRow} = stmtLayout(ws);
+        const dc = ws.getCell(info.row, info.paidCol);
+        const ec = ws.getCell(info.row, info.dateCol);
+        const amtCell = ws.getCell(info.row, info.amtCol);
+        const size = sizeOf(amtCell);
+        const align = alignOf(amtCell);
+        const big = (c: ExcelJS.Cell): Partial<ExcelJS.Style> => (size.size ? {font: {...c.font, ...size}} : {});
+        const prevVal = cellVal(dc);
+        const prev = typeof prevVal === 'number' ? prevVal : 0;
+        dc.value = prev + Math.round(e.amount);
+        ec.value = e.date;
+        dc.style = {...dc.style, ...big(dc), fill: fill(COLORS.OK), alignment: {...dc.alignment, ...align}};
+        ec.style = {...ec.style, ...big(ec), fill: fill(COLORS.OK), alignment: {...ec.alignment, ...align, shrinkToFit: false}};
+        // 有「備註」欄才寫備註（不在這裡插欄，免得改動版面）
+        if (s(cellVal(ws.getCell(headerRow, info.dateCol + 1))) === MEMO_HEADER) {
+            const mc = ws.getCell(info.row, info.dateCol + 1);
+            // 讀檔時同樣式的格子共用同一個樣式物件；先給這格自己一份，寫備註調對齊時才不會改到別格
+            mc.style = {...mc.style};
+            markMadeUp(mc, e.date);
+            if (prev) writeMemo(mc, [{text: '2筆'}]);
+        }
+    }
+    return [];
+}

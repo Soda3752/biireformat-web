@@ -20,6 +20,7 @@ import {
     addManualDebt,
     clearMessageEdit,
     compute,
+    customerKey,
     type ConflictOption,
     filterCustomers,
     type DebtGroup,
@@ -52,6 +53,7 @@ import {addReasonChip, defaultReasonChips, removeReasonChip} from '@/domain/auto
 import {defaultTemplates, DEFAULT_TEMPLATES, type MessageTemplates, type TemplateKey} from '@/domain/auto-collect/templates';
 import {clearHistory, clearMarks, loadHistory, loadMarks, loadReasonChips, loadTemplates, resetTemplates, saveHistory, saveMarks, saveReasonChips, saveTemplates} from '@/infra/auto-collect-store';
 import {buildMessagesText, buildSummaryXlsx} from '@/writers/auto-collect-writer';
+import {openRegisterDialog} from '@/tabs/auto-collect-register';
 
 const esc = (v: unknown): string =>
     String(v ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
@@ -97,7 +99,8 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
       <header class="card-header ac-row-between">
         <h2 class="card-title">欠款總表</h2>
         <div class="ac-actions">
-          <button type="button" class="btn btn-primary" data-role="dl-xlsx">${icon('download', 14)}<span>下載總表 Excel</span></button>
+          <button type="button" class="btn btn-primary" data-role="register" title="客人付款了：勾選收到的期別，直接寫回各月的 Excel">${icon('check', 14)}<span>收款登記</span></button>
+          <button type="button" class="btn btn-secondary" data-role="dl-xlsx">${icon('download', 14)}<span>下載總表 Excel</span></button>
           <button type="button" class="btn btn-secondary" data-role="dl-txt">${icon('download', 14)}<span>下載全部訊息（文字檔）</span></button>
         </div>
       </header>
@@ -334,6 +337,20 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         saveAs(new Blob([text], {type: 'text/plain;charset=utf-8'}), `催款訊息_${stamp()}.txt`);
     });
 
+    // ---------- 收款登記
+
+    const openRegister = (preselect?: string) => {
+        if (!result.months.length) return showToast({variant: 'warning', message: '還沒有資料，請先放入檔案'});
+        openRegisterDialog({
+            getHistory: () => history,
+            getMarks: () => marks,
+            persist,
+            onChanged: () => render(),
+            preselect,
+        });
+    };
+    $('register').addEventListener('click', () => openRegister());
+
     // ---------- 複製
 
     const copyText = async (text: string) => {
@@ -397,6 +414,11 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
         const undo = t.closest<HTMLButtonElement>('[data-unsettle]');
         if (undo) {
             if (persistMarks(unsettle(marks, undo.dataset.unsettle!))) render();
+            return;
+        }
+        const regBtn = t.closest<HTMLButtonElement>('[data-register]');
+        if (regBtn) {
+            openRegister(regBtn.dataset.register);
             return;
         }
         const addBtn = t.closest<HTMLButtonElement>('[data-adddebt]');
@@ -668,6 +690,7 @@ export function renderAutoCollectPanel(tab: TabDefinition): HTMLElement {
                 <td class="ac-num"><b>${money(c.total)}</b></td>
                 <td>${c.notes.map((n) => `<div class="ac-note">${esc(n)}</div>`).join('')}${infoHtml(c)}</td>
                 <td class="ac-btns">${c.group !== 'one' ? `<button type="button" class="btn btn-secondary btn-xs" data-copy="${esc(custId(c))}">複製訊息</button>` : ''}
+                  <button type="button" class="btn btn-secondary btn-xs" data-register="${esc(customerKey(c))}">收款登記</button>
                   <button type="button" class="btn btn-secondary btn-xs" data-adddebt="${esc(custId(c))}">加一筆欠款</button>
                   ${monthlyBtn(c)}
                   <button type="button" class="btn btn-secondary btn-xs" data-settle="${esc(custId(c))}">已結清</button></td></tr>`;
